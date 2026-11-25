@@ -5,7 +5,7 @@
 //  1. Records every network call made through fetch, XMLHttpRequest, WebSocket, sendBeacon, EventSource and form submission, with
 //     the caller classified as "library" (a frame of wds-<version>.js is on the stack) or "app". Calls reach the Node side at once
 //     through window.__wdsLog (a Playwright binding), so they survive a navigation.
-//  2. Wraps WDS.connect so that set/autosave/exportAll of the store are logged (record name, time, JSON text of the value). The
+//  2. Wraps WDS.connect so that set/autosave/exportAll of the store, and add/set/autosave of its collections, are logged (record name, time, JSON text of the value). The
 //     wrapper is a plain object that forwards every call to the real store (whatever methods the store has). The wrapped stores are kept
 //     in window.__wdsStores, so the sandbox run can call the owner API that deletes its vault at the end, if the library has one.
 export function instrument() {
@@ -96,6 +96,34 @@ export function instrument() {
   function json(v) {
     try { if (v instanceof Blob || v instanceof ArrayBuffer || ArrayBuffer.isView(v)) return '[binary]'; var s = JSON.stringify(v); return s === undefined ? 'null' : s.slice(0, 1 << 20); } catch (e) { return ''; }
   }
+  // The collections of the store: what the app hands to add/set/autosave is what it writes, so it is logged like store.set (op "cwrite";
+  // the collections call the real store inside, not this wrapper). One wrapper per collection object.
+  var colWraps = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+  function wrapCollection(orig) {
+    if (!orig || typeof orig !== 'object') return orig;
+    if (colWraps && colWraps.has(orig)) return colWraps.get(orig);
+    var w = {};
+    Reflect.ownKeys(orig).forEach(function (k) {
+      var d = Object.getOwnPropertyDescriptor(orig, k);
+      if (d && typeof d.value === 'function') {
+        w[k] = function () {
+          var a = Array.prototype.slice.call(arguments);
+          var prefix = typeof orig.prefix === 'string' ? orig.prefix : '';
+          if (k === 'add') log({ kind: 'store', op: 'cwrite', name: prefix + ((a[1] && a[1].id) || '(new)'), value: json(a[0]) });
+          if (k === 'set' && typeof a[0] === 'string') log({ kind: 'store', op: 'cwrite', name: prefix + a[0], value: json(a[1]) });
+          if (k === 'autosave' && typeof a[0] === 'string' && typeof a[1] === 'function') {
+            var name = prefix + a[0], getter = a[1];
+            a[1] = function () { var v = getter.apply(this, arguments); log({ kind: 'store', op: 'cwrite', name: name, value: json(v) }); return v; };
+          }
+          return d.value.apply(orig, a);
+        };
+      } else {
+        Object.defineProperty(w, k, { enumerable: true, configurable: true, get: function () { return orig[k]; } });
+      }
+    });
+    if (colWraps) colWraps.set(orig, w);
+    return w;
+  }
   function wrapStore(orig) {
     if (!orig || typeof orig !== 'object') return orig;
     var w = {};
@@ -109,6 +137,7 @@ export function instrument() {
             var name = a[0], getter = a[1];
             a[1] = function () { var v = getter.apply(this, arguments); log({ kind: 'store', op: 'autosave', name: name, value: json(v) }); return v; };
           }
+          if (k === 'collection') return wrapCollection(d.value.apply(orig, a));
           if (k === 'exportAll') {
             var s0 = Date.now(), done = function () { log({ kind: 'export', start: s0, end: Date.now() }); };
             var r = d.value.apply(orig, a);

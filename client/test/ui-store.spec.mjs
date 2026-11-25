@@ -657,3 +657,37 @@ test('collection: add({ created }) orders the list; flush() resolves when queued
   await b.evaluate(() => notes.refresh());
   expect(await idsOf(b)).toEqual(['early', 'late', 'q']);
 });
+
+test('collection.set is an upsert: a new id gets its index entry (created from the option or now), an existing entry keeps its date, and a record this page has not read is a conflict, not a silent overwrite', async ({ browser }) => {
+  const { a, b } = await twoDevices(browser);
+  const before = Date.now();
+  await a.evaluate(() => notes.set('n1', { t: 'one' }, { created: 1000 }));
+  await a.evaluate(() => notes.set('n2', { t: 'two' }));
+  const mine = await a.evaluate(() => notes.items().map((i) => [i.id, i.created, i.meta.t]));
+  expect(mine[0]).toEqual(['n1', 1000, 'one']);
+  expect(mine[1][0]).toBe('n2'); expect(mine[1][1]).toBeGreaterThanOrEqual(before); expect(mine[1][2]).toBe('two');
+  // the index entry is on the server: another device sees both after a refresh, without reading the items
+  await b.evaluate(() => notes.refresh());
+  expect(await idsOf(b)).toEqual(['n1', 'n2']);
+  // set on an existing entry: meta follows, the creation date stays
+  await a.evaluate(() => notes.set('n1', { t: 'one!' }, { created: 5 }));
+  expect(await a.evaluate(() => notes.items().filter((i) => i.id === 'n1').map((i) => [i.created, i.meta.t]))).toEqual([[1000, 'one!']]);
+  // a bad created is refused before anything is written
+  expect(await a.evaluate(() => notes.set('n3', { t: 'x' }, { created: 'yesterday' }).then(() => 'ok', (e) => e.name))).toBe('UsageError');
+  expect(await a.evaluate(() => notes.get('n3'))).toBeUndefined();
+  expect(await idsOf(a)).toEqual(['n1', 'n2']);
+  // b lists n1 but has never read it: its set() meets the stored version, and the conflict rules decide (here: the handler keeps b's value)
+  await b.evaluate(() => { window.calls = []; store.onConflict('notes/', (c) => { calls.push(c.name + ':' + c.op); c.keepMine(); }); });
+  const r1 = await b.evaluate(() => notes.set('n1', { t: 'from b' }));
+  expect(r1.resolution).toBe('mine');
+  expect(await b.evaluate(() => calls)).toEqual(['notes/n1:set']);
+  await a.evaluate(() => notes.refresh());
+  expect(await a.evaluate(() => notes.items().filter((i) => i.id === 'n1').map((i) => [i.created, i.meta.t]))).toEqual([[1000, 'from b']]);
+  expect(await a.evaluate(() => notes.get('n1'))).toEqual({ t: 'from b' });
+  // keeping the stored version instead: the value is not overwritten and the index shows its meta
+  await b.evaluate(() => { store.onConflict('notes/', (c) => c.keepTheirs()); });
+  await a.evaluate(() => notes.set('n2', { t: 'two, edited by a' }));
+  const r2 = await b.evaluate(() => notes.set('n2', { t: 'from b' }));
+  expect([r2.resolution, r2.value]).toEqual(['theirs', { t: 'two, edited by a' }]);
+  expect(await b.evaluate(() => notes.items().filter((i) => i.id === 'n2').map((i) => i.meta.t))).toEqual(['two, edited by a']);
+});

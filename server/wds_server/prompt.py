@@ -11,14 +11,20 @@ from __future__ import annotations
 
 HIBP = "https://api.pwnedpasswords.com"
 
+# The official privacy sentence, in both languages. docs/site/integration.md, llms.txt and users.*.md carry the same words (server/tests/test_docs.py checks).
+PRIVACY_EN = "Data is end-to-end encrypted; the faculty holds a recovery key for emergencies."
+PRIVACY_DE = "Die Daten sind Ende-zu-Ende-verschlüsselt; die Fakultät verwahrt für Notfälle einen Wiederherstellungsschlüssel."
 
-def claude_md(*, sid: str, base: str, repo_url: str, sandbox_id: str | None) -> str:
+
+def claude_md(*, sid: str, base: str, repo_url: str, sandbox_id: str | None, enrollment: str = "join_code") -> str:
     lines = [
         "## Data storage: WIAI Datastore",
         "",
-        f"This app keeps all user data in the WIAI Datastore (University of Bamberg), scope {sid}. Data is end-to-end encrypted; "
-        "the faculty holds a recovery key for emergencies. Privacy texts of this app must say so.",
+        f"This app keeps all user data in the WIAI Datastore (University of Bamberg), scope {sid}.",
         "",
+        "- Privacy texts of this app (README, start page, dialogs) say, word for word and in the language of the text; a longer text may follow:",
+        f'  en: "{PRIVACY_EN}"',
+        f'  de: "{PRIVACY_DE}"',
         "- Before changing storage, the data model, the library script tag or the Content-Security-Policy, read "
         f"{base}/llms.txt and follow it.",
         "- Keep the library script tag as it is; to update the library, take the new tag from llms.txt.",
@@ -27,16 +33,28 @@ def claude_md(*, sid: str, base: str, repo_url: str, sandbox_id: str | None) -> 
     ]
     if sandbox_id:
         lines.append(f"- Never write the sandbox scope ID {sandbox_id} into this app; test with wds-verify --target sandbox.")
-    lines += [
-        "- Current scope settings (enrollment, breach check, limits): run wds-verify, it prints them.",
-        f"- After every change run wds-verify ({repo_url}) and update the report in README.md.",
-    ]
+    lines.append("- Current scope settings (enrollment, breach check, limits): run wds-verify, it prints them.")
+    if enrollment == "join_code":  # an open or a closed scope has no code to protect
+        lines.append("- The join code of this scope is a secret of the staff. Never write it into the app, the README, tests, scripts, CLAUDE.md or AGENTS.md. "
+                     "To test against a test vault in the real scope (the deletion path of a migration), ask the person for it, say what it is for, and pass it "
+                     "only through the environment variable WDS_JOIN_CODE of the shell that runs the test (integration.md, section 16, Step 6).")
+    lines.append(f"- After every change run wds-verify ({repo_url}) and update the report in README.md.")
     return "\n".join(lines)
 
 
 def prompt(lang: str, *, sid: str, date: str, base: str, tag: str, repo_url: str, sandbox_id: str | None, enrollment: str,
            hibp: bool, max_vaults: int, max_value: str, vault_bytes: str, history_versions: int, snippet: str) -> str:
     if lang == "en":
+        why = "the deletion path of a migration" + (": the sandbox never deletes old data" if sandbox_id else "")
+        late = ": the sandbox never deletes old data" if sandbox_id else ""
+        test_vault = {
+            "join_code": f"To test against a test vault in this scope ({why}), ask me for the join code of this scope "
+                         "when you reach that step, and say what it is for. Pass it only through the environment variable WDS_JOIN_CODE of the shell that runs the test "
+                         "(tools/lib/drive-library.mjs reads it; integration.md, section 16, Step 6). Never write it into the app, "
+                         "the README, a test script, a command line, CLAUDE.md or AGENTS.md. You cannot delete the test vault yourself: tell me when you ran the test, so that I can delete that vault afterwards.",
+            "open": f"To test against a test vault in this scope ({why}), create one yourself: this scope needs no join code. Tell me when you ran the test, so that I can delete that vault afterwards.",
+            "closed": f"This scope accepts no new vaults, so no test vault can be created in it. Tell me before you test the deletion path of a migration{late}.",
+        }[enrollment]
         enroll = {
             "join_code": "join code: users type a join code when they create their vault; never put it into the app",
             "open": f"open: anybody with the app can create a vault (limit {max_vaults})",
@@ -45,8 +63,9 @@ def prompt(lang: str, *, sid: str, date: str, base: str, tag: str, repo_url: str
         breach = (f"on (keep {HIBP} in connect-src)" if hibp else f"off (remove {HIBP} from connect-src)")
         out = [
             "I am building or porting a single-file web app that stores its data in the WIAI Datastore of the University of Bamberg.",
-            "Data is end-to-end encrypted; the faculty holds a recovery key for emergencies. Say exactly this wherever the app "
-            "describes its privacy.",
+            "Wherever the app describes its privacy, say exactly this sentence, in the language of the text (a longer text may follow it):",
+            f"- English: {PRIVACY_EN}",
+            f"- German: {PRIVACY_DE}",
             "",
             f"Scope settings (as of {date}; wds-verify prints the current ones):",
             f"- Scope ID: {sid}",
@@ -61,6 +80,7 @@ def prompt(lang: str, *, sid: str, date: str, base: str, tag: str, repo_url: str
             f'Connect with WDS.connect({{ scope: "{sid}" }}). No own cryptography, no own fetch to the datastore, no user data in '
             "localStorage, sessionStorage, IndexedDB or cookies, no scripts from CDNs.",
             'If the app already exists, follow the section "Porting an existing app" of integration.md.',
+            test_vault,
         ]
         if sandbox_id:
             out += ["For end-to-end test runs use wds-verify --target sandbox (or --sandbox-copy). Never write the sandbox scope ID "
@@ -72,6 +92,16 @@ def prompt(lang: str, *, sid: str, date: str, base: str, tag: str, repo_url: str
             snippet,
         ]
         return "\n".join(out)
+    why = "der Löschweg einer Migration" + (": die Testumgebung löscht alte Daten nie" if sandbox_id else "")
+    late = ": Die Testumgebung löscht alte Daten nie" if sandbox_id else ""
+    test_vault = {
+        "join_code": f"Für einen Test mit einem Test-Tresor in diesem Scope ({why}) frag mich bei diesem Schritt nach dem Beitrittscode "
+                     "dieses Scopes und sag, wofür du ihn brauchst. Gib ihn nur über die Umgebungsvariable WDS_JOIN_CODE der Shell weiter, in der der Test läuft "
+                     "(tools/lib/drive-library.mjs liest sie; integration.md, Abschnitt 16, Step 6). Schreibe ihn nie in die App, "
+                     "die README, ein Testskript, eine Kommandozeile, CLAUDE.md oder AGENTS.md. Den Test-Tresor kannst du nicht selbst löschen: Sag mir, wann du den Test gemacht hast, dann lösche ich diesen Tresor danach.",
+        "open": f"Für einen Test mit einem Test-Tresor in diesem Scope ({why}) leg selbst einen an: Dieser Scope braucht keinen Beitrittscode. Sag mir, wann du den Test gemacht hast, dann lösche ich diesen Tresor danach.",
+        "closed": f"In diesem Scope können keine neuen Tresore angelegt werden, also gibt es keinen Test-Tresor. Sag mir Bescheid, bevor du den Löschweg einer Migration testest{late}.",
+    }[enrollment]
     enroll = {
         "join_code": "Beitrittscode: Nutzende geben beim Anlegen ihres Tresors einen Beitrittscode ein; trage ihn nie in die App ein",
         "open": f"offen: jede Person mit der App kann einen Tresor anlegen (Höchstzahl {max_vaults})",
@@ -80,8 +110,9 @@ def prompt(lang: str, *, sid: str, date: str, base: str, tag: str, repo_url: str
     breach = (f"an ({HIBP} bleibt in connect-src)" if hibp else f"aus ({HIBP} aus connect-src entfernen)")
     out = [
         "Ich baue oder portiere eine Web-App in einer einzigen HTML-Datei, die ihre Daten im WIAI Datastore der Universität Bamberg speichert.",
-        "Die Daten sind Ende-zu-Ende-verschlüsselt; die Fakultät hält für Notfälle einen Wiederherstellungsschlüssel. Sag genau das überall, "
-        "wo die App ihren Datenschutz beschreibt.",
+        "Überall, wo die App ihren Datenschutz beschreibt, sag genau diesen Satz, in der Sprache des Textes (ein längerer Text darf folgen):",
+        f"- Deutsch: {PRIVACY_DE}",
+        f"- Englisch: {PRIVACY_EN}",
         "",
         f"Einstellungen des Scopes (Stand {date}; wds-verify gibt die aktuellen aus):",
         f"- Scope-ID: {sid}",
@@ -96,6 +127,7 @@ def prompt(lang: str, *, sid: str, date: str, base: str, tag: str, repo_url: str
         f'Verbinde mit WDS.connect({{ scope: "{sid}" }}). Keine eigene Kryptografie, kein eigenes fetch an den Datastore, keine Nutzerdaten in '
         "localStorage, sessionStorage, IndexedDB oder Cookies, keine Skripte von CDNs.",
         'Wenn die App schon existiert, folge dem Abschnitt "Porting an existing app" in integration.md.',
+        test_vault,
     ]
     if sandbox_id:
         out += ["Für Testläufe von Anfang bis Ende nimm wds-verify --target sandbox (oder --sandbox-copy). Schreibe die Scope-ID der Testumgebung "

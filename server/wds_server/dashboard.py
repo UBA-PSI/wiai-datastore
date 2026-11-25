@@ -478,7 +478,7 @@ class Dashboard:
         limits = self.svc.scope_limits(row)
         sb = self.cfg.sandbox
         sandbox_id = sb.scope_id if sb else None
-        snippet = prompt_mod.claude_md(sid=sid, base=base, repo_url=REPO_URL, sandbox_id=sandbox_id)
+        snippet = prompt_mod.claude_md(sid=sid, base=base, repo_url=REPO_URL, sandbox_id=sandbox_id, enrollment=row["enrollment"])
         text = prompt_mod.prompt(
             ctx.lang, sid=sid, date=ctx.date(self.svc.now()), base=base, repo_url=REPO_URL, sandbox_id=sandbox_id,
             tag=tag or ctx.pick("(Das Skript-Tag steht in llms.txt.)", "(The script tag is in llms.txt.)"),

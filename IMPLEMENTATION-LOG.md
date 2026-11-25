@@ -463,3 +463,122 @@ Remaining issues (all minor, not fixed in this round):
   created, no canary in requests or storage). The first run had failed with "service unreachable". It had started about four
   seconds after the configuration-management restart of the service, so it was a transient failure. The served
   `/client/hashes.json` equals `client/dist/hashes.json`.
+
+## Round E: clean-room feedback
+
+### Input
+
+A Claude ported a local-only app ("Zeit & Notizen") in a clean-room container, with only the public documents (llms.txt,
+integration.md) and the public repository. The ported app passed `wds-verify --target sandbox` against the public sandbox of the
+production service: 26 checks passed, 0 failed, 2 warnings ("Library version released", "Data after reload" with 4 of 10 values,
+because the tool looked only after the last `afterReload` step of a four-tab app). Its feedback, point by point:
+
+| # | Feedback | Decision |
+|---|---|---|
+| 1 | The recipe assumes files as `ArrayBuffer`; the old app had `Blob`/`File`. `fingerprint()` took only size and type of a Blob, so a replaced attachment of the same size counted as unchanged; the backup replacer turned a Blob into `{}` | Recipe handles Blobs; the bytes of every Blob are part of the fingerprint; the backup handles Blobs |
+| 2 | Settings in an IndexedDB key-value store: "read once" was not defined | `migratedSettings()`, `settingsDone()`, `fillGaps`; "applied" is state in the vault |
+| 3 | Tagged ids contain `-`; the example's `labelOf` cut ids at `-` | Docs name `-` and `%` (selectors, attributes, hash routes, arithmetic); `labelOf` of the example takes the whole id |
+| 4 | Is the tag needed for long random old ids? Duplicates vs. conflicts | Decision table in the recipe; `tagged: false` drops the tag from item ids only |
+| 5 | Exact privacy sentence vs. the longer text of section 13; no German wording | One official sentence in English and German, word for word in prompt, CLAUDE.md section, llms.txt, integration.md, users.*.md and the example app |
+| 6 | Testing the deletion path: may Claude ask for the join code? A test switch for the sandbox? | Prompt and Step 6 say: ask, pass it only through `WDS_JOIN_CODE`; `wds-verify --migration-delete` sets a test global that the recipe honours |
+| W1 | wds-verify cannot test a migration | `seed` block in wds-verify.json |
+| W2 | "Data after reload" sees only the last `afterReload` step | Union over the unlock view and every step |
+| W3 | "Library version released" warns in every report | Now info |
+| W4 | `collection.set`: upsert and `created` undocumented | Documented; `set` now takes `created` (library change) |
+| – | The `data-wds` names had to be read from the source; Playwright from `tools/` reused | Table of views and controls in integration.md (a test compares it with wds-ui.js); `tools/lib/drive-library.mjs`; the Playwright of the clone may be used |
+| – | The trial is not representative: the old app was the predecessor of the example, which the Claude copied | Open point in PLAN.md section 16: a trial with an app that does not derive from the example |
+
+### Changes
+
+- **wds-verify:** the `seed` block (`{ page, steps, keep? }`: an old local-only page whose data the migration must carry over) with the
+  findings "Seed: the old app", "Seed: files of the old app", "Migration: old data visible", "Migration: old data only encrypted" and
+  "Migration: old data deleted / kept in the sandbox"; `--migration-delete` sets `window.__WDS_MIGRATION_TEST__` (and `navigator.webdriver`)
+  so that the deletion path runs in the sandbox; "Data after reload" looks after every `afterReload` step and takes the union; "Library
+  version released" is information; a sandbox run no longer says "mock"; an info check "Privacy sentence" (page or README); `{canary}` in
+  fill texts. `tools/lib/drive-library.mjs` drives the library's dialogs in other Playwright tests.
+- **Library:** `collection.set(id, value, { meta, mime, created })`; `created` counts only for an entry the index does not have yet. Bundle
+  rebuilt (not frozen), SRI `sha384-0chMIOOURpY8WD83X6US8o2hr2LtE5f9IAqz9OtBfXG3bDMeJa4dvx++OyqoEu0F`; the hash in
+  examples/zeit-notizen/index.html and tools/test-apps follows it. Earlier entries of this log name earlier hashes.
+- **Documents:** set versus add and `created`, set for a record the page has not read, the table of the library's dialogs, the migration
+  recipe (Blobs, key-value stores, settings, tag decision table), the join code for a test vault, the `seed` block in "Writing
+  wds-verify.json", the official privacy sentence in both languages (and for third languages: the English one). The recipe's
+  `removeOldData(rows, st)` honours the test global.
+- **Dashboard prompt:** the privacy sentence in both languages; a paragraph per enrollment mode on a test vault in the real scope
+  (join code: ask, only through `WDS_JOIN_CODE`, never in a file or on a command line, tell the person when the test ran so that they delete
+  the vault; open: create one; closed: none possible). The CLAUDE.md / AGENTS.md section carries the join-code bullet only for scopes with
+  the enrollment "join code". The hint texts next to the prompt and the join code tell the staff member that Claude may ask for it.
+- **Example app:** zeit-notizen is a new app, not a port, so it has no migration and no `seed` block. It uses the official privacy
+  sentence, `labelOf` keeps whole ids, and its wds-verify.json has an `afterReload` step per tab. The migration chain (old app as `seed`,
+  recipe, mock keeps nothing, sandbox keeps, `--migration-delete` deletes) is tested in examples/docs-recipes.spec.mjs with a small old
+  app written by the test.
+
+### Review of these changes and what was fixed
+
+Reviewers went through the changes above. The library (client/src) did not change in this pass, so no rebuild: `node client/build.mjs`
+gave a byte-identical dist and hashes.
+
+- **Data after reload, autosaved values (major):** a value counts as expected back when the app showed it as text or **wrote it to the
+  store** (the page instrumentation logs `set`, `autosave` and the collections' `add`, `set`, `autosave`). Before, a value that only sat in
+  an autosaved field was dropped, so an editor that was never read back passed; a test with an autosaved textarea and a collection write
+  that are never read back now gives warn, not pass.
+- **afterReload fill that repeats a typed text (minor):** the step fails (the tool reads field values and would find its own text).
+- **"Old data visible" (major):** only screens after the reload and unlock count; a prompt that names the old titles proved nothing. No
+  record written: fail.
+- **"Old data deleted" (major):** it only warned and only looked at places that held a canary. Now the whole old storage is snapshotted
+  after the seed (every key, every store with rows); leftovers fail when the migration visibly ran and warn when it did not; `seed.keep` is
+  the opt-out. A seed page with a file input and no `upload` step gets a warning.
+- **Leak exemptions (minor):** seed values are exempt only in a JSON download and only in an old place that did not grow. Tests cover a
+  text download (a leak) and the JSON backup (fine).
+- **Test global (major/minor):** the recipe asks for `window.__WDS_MIGRATION_TEST__ === true && navigator.webdriver === true` (named access
+  by an element id no longer counts, a person's browser never matches). Static fail when the app assigns it, dynamic fail when the page
+  has it set although the run did not; wds-verify sets `navigator.webdriver` itself; the report names `--migration-delete` in a line at the
+  top, and on the mock an info finding says that the flag has no effect.
+- **Settings records on a rerun (critical):** they are snapshots that a rerun overwrites, outside the "differs means failed" rule.
+- **Settings applied exactly once (critical):** the state is in the vault: the marker field `settings` is `pending`, `applied` or `none`;
+  `migratedSettings()` takes no argument, `settingsDone(old)` is new. This closes the crash before the save and the stopped timer that came
+  back. `fillGaps` must run before the app writes defaults, and `null` counts as a gap; both are documented.
+- **`tagged: false` (major):** the tag is per browser in both modes and names the marker and the settings records; `tagged: false` only
+  drops it from item ids. The tag stays in the old storage after the delete.
+- **Blob fingerprint and the "again" shortcut (critical):** the bytes of every Blob are hashed before the transaction, a second reading is
+  compared, and a cheap check runs inside the transaction. A start with a marker reads the copy back from the vault and compares it before
+  it deletes. Tests cover a File and a plain Blob replaced with identical metadata but other bytes, and a copy that is gone from the vault.
+- **`toNewRecords` silent traps (major):** it throws for rows with no Blob and no bytes and for Blob/Map/Set inside a value; a `Date` or an
+  ISO string works for `created`, a Blob row value works, localStorage values stay strings. "Adapting toNewRecords" added to the docs.
+- **`set` and `created` in the docs (major, twice):** the guide says `set(id, value, { meta, mime, created })`, applied only for a new index
+  entry; test_docs.py checks it. Step 3 has a second import that keeps ids and rewrites references, tested including a second import.
+- **Minor:** ids with `%` and `-`, the same-origin condition, the privacy sentence for third languages, `confirmSheet` throws a
+  `DriveError` with the dialog text.
+- **Join code (major):** one channel, the environment variable `WDS_JOIN_CODE`, read by drive-library, never printed, never in an error
+  message. How the test vault is deleted is documented (the staff delete it in the dashboard; deleted vaults do not count against the vault
+  limit). The prompt says the same in both languages without naming the dashboard.
+
+### Rejected or only partly done
+
+- **`--target scope` in wds-verify** (runs against a real scope with a join code): not done. An automated tool that writes canary data into
+  a production scope with a real secret is what wds-verify avoids by design (mock and sandbox only). The environment variable and
+  drive-library let the developer's own script make the test vault of Step 6.
+- **Proof in the sandbox run that the visible values came from the vault:** not possible. The old data stays there, so a prompt that names
+  the old titles, or a screen that lists the old storage, cannot be told from the copy. The pass text and the docs say so; the mock or
+  `--migration-delete` run is the proof, and there a failed copy fails on "old data deleted".
+- **A library call that deletes a vault:** the library has none; the docs name the dashboard instead of adding API.
+- **A `migrationTest` option of `WDS.connect`** (the trial's suggestion): not done; the library does not know about migrations. The test
+  global is set only by wds-verify, honoured only by the recipe, and only in an automated browser.
+- **"Data after reload" when only some rounds come back:** stays a warning, not a failure (the existing semantics).
+
+### Other changes the user may not expect
+
+- The tag key stays in the old storage after the delete (it names the browser in the vault). Docs and tests say so.
+- The wds-verify report in examples/zeit-notizen/README.md follows the new wording. Its run passes with 26 checks, 0 failed, 0 warnings
+  (before round E: 25 passed, 2 warnings; the reload warning went with the `afterReload` step per tab, the version warning became information).
+
+### Test counts (final sequential run)
+
+| Suite | Result |
+|---|---|
+| `scripts/test-server.sh` | 453 tests OK |
+| `scripts/test-client.sh` | 119 node tests passed; 66 Playwright tests passed (Chromium) |
+| `scripts/test-tools.sh` | 86 passed |
+| `scripts/test-integration.sh` | 92 passed, 4 skipped, in Chromium, Firefox, WebKit |
+| `scripts/test-examples.sh` | 36 passed (Chromium) |
+
+Nothing committed.

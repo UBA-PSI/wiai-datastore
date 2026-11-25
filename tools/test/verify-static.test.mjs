@@ -1,7 +1,7 @@
 // wds-verify: static checks, CSP comparison, canary encodings, step parsing, command line. No browser needed.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { staticChecks, cspBroaderThan, parseCsp, CSP_TEMPLATE, scanHtml, stripJsComments } from '../lib/static-checks.mjs';
+import { staticChecks, cspBroaderThan, parseCsp, CSP_TEMPLATE, scanHtml, stripJsComments, setsTestGlobal } from '../lib/static-checks.mjs';
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -188,7 +188,7 @@ test('wds-verify.json: an object with locale, steps and afterReload; steps are v
   assert.equal(c.locale, 'de-DE');
   assert.equal(c.steps.length, 8);
   assert.equal(c.afterReload.length, 1);
-  assert.deepEqual(parseConfig('{}'), { locale: null, steps: [], afterReload: [] });
+  assert.deepEqual(parseConfig('{}'), { locale: null, steps: [], afterReload: [], seed: null });
   assert.equal(parseConfig('{"steps":[{"wait":1}]}').steps.length, 1);
   assert.equal(parseConfig('{"locale":"de"}').locale, 'de');
   // a bare array is no longer accepted and the message shows the object form
@@ -207,8 +207,10 @@ test('command line: static-only report, exit codes, script tag, usage', async ()
   assert.equal(ok.code, 0, ok.stdout + ok.stderr);
   assert.match(ok.stdout, /^# wds-verify report: index\.html/);
   assert.match(ok.stdout, /\*\*Result: passed\*\*/);
-  const strict = await run('wds-verify.mjs', [writeApp(good()), '--static-only', '--strict']); // the library version is not frozen yet: a warning
-  assert.equal(strict.code, HASHES[VERSION].frozen ? 0 : 1);
+  const strict = await run('wds-verify.mjs', [writeApp(good()), '--static-only', '--strict']); // "library version released" is about the library, not the app: info, even with --strict
+  assert.equal(strict.code, 0, strict.stdout);
+  assert.doesNotMatch(strict.stdout, /## Warnings/);
+  if (!HASHES[VERSION].frozen) assert.match(strict.stdout, /\| Library version released \| info \|/);
   const bad = await run('wds-verify.mjs', [writeApp(variant(good(), SRI, 'sha384-AAAA')), '--static-only', '--json']);
   assert.equal(bad.code, 1);
   assert.equal(JSON.parse(bad.stdout).failed, true);
@@ -230,15 +232,15 @@ test('without a usable Python the dynamic checks fail with a clear message (exit
 });
 
 test('--strict: a promoted warning is listed under Failures and counted as failed, never under Warnings', () => {
-  const findings = [{ id: 'a', level: 'pass', title: 'Fine', detail: '' }, { id: 'library-frozen', level: 'warn', title: 'Library version released', detail: 'not frozen' }];
+  const findings = [{ id: 'a', level: 'pass', title: 'Fine', detail: '' }, { id: 'some-warning', level: 'warn', title: 'Some warning', detail: 'not good' }];
   const normal = renderReport({ appPath: '/x/app.html', findings, info: {}, strict: false });
   assert.match(normal, /Result: passed\*\* \(1 checks passed, 0 failed, 1 warning\)/);
-  assert.match(normal, /## Warnings\n\n- \*\*Library version released\*\* \(warn\)/);
+  assert.match(normal, /## Warnings\n\n- \*\*Some warning\*\* \(warn\)/);
   const strict = renderReport({ appPath: '/x/app.html', findings, info: {}, strict: true });
   assert.match(strict, /Result: FAILED\*\* \(1 checks passed, 1 failed, 0 warnings\)/);
-  assert.match(strict, /## Failures\n\n- \*\*Library version released\*\* \(\*\*FAIL\*\* \(warn, fails with --strict\)\)/);
+  assert.match(strict, /## Failures\n\n- \*\*Some warning\*\* \(\*\*FAIL\*\* \(warn, fails with --strict\)\)/);
   assert.doesNotMatch(strict, /## Warnings/);
-  assert.match(strict, /\| Library version released \| \*\*FAIL\*\* \(warn, fails with --strict\) \|/);
+  assert.match(strict, /\| Some warning \| \*\*FAIL\*\* \(warn, fails with --strict\) \|/);
 });
 
 // ---- round D: sandbox checks, local deletion, scope check, hashes, targets, report ----
@@ -292,6 +294,28 @@ test('static: deleting local data (one-time migration) warns unless the same fun
   assert.deepEqual(found.unguarded.sort(), ['indexedDB.deleteDatabase', 'localStorage.removeItem']);
   assert.equal(found.clears, 1);
   assert.equal(level(check(good()), 'local-delete'), undefined);
+});
+
+test('static: the migration test global is only read, never written; the official privacy sentence is looked for (information)', () => {
+  const reads = ['if (st.sandbox && !(window.__WDS_MIGRATION_TEST__ === true && navigator.webdriver)) return "kept";', 'var on = window.__WDS_MIGRATION_TEST__ == true;', 'x.__WDS_MIGRATION_TEST__ !== undefined'];
+  for (const code of reads) assert.equal(setsTestGlobal(code), false, code);
+  const writes = ['window.__WDS_MIGRATION_TEST__ = true;', 'window["__WDS_MIGRATION_TEST__"]=1', "globalThis['__WDS_MIGRATION_TEST__'] = true", 'Object.defineProperty(window, "__WDS_MIGRATION_TEST__", { value: true })',
+    'Object.assign(window, { __WDS_MIGRATION_TEST__: true })', 'window.__WDS_MIGRATION_TEST__ ||= true'];
+  for (const code of writes) assert.equal(setsTestGlobal(code), true, code);
+  assert.equal(level(check(withScript('window.__WDS_MIGRATION_TEST__ = true;')), 'migration-test-global'), 'fail');
+  assert.equal(level(check(withScript('var k = window.__WDS_MIGRATION_TEST__ === true;')), 'migration-test-global'), undefined);
+  assert.equal(level(check(good()), 'migration-test-global'), undefined);
+  // the privacy sentence: information only; found in the page (entities and line breaks allowed) or in the README
+  const en = 'Data is end-to-end encrypted; the faculty holds a recovery key for emergencies.';
+  const de = 'Die Daten sind Ende-zu-Ende-verschlüsselt; die Fakultät verwahrt für Notfälle einen Wiederherstellungsschlüssel.';
+  assert.equal(level(check(good()), 'privacy-sentence'), 'info');
+  assert.equal(level(check(variant(good(), '<body>', '<body><p>' + en.replace(' the faculty', '\n   the faculty') + '</p>')), 'privacy-sentence'), undefined);
+  assert.equal(level(check(variant(good(), '<body>', '<body><p>' + de.replace('ü', '&uuml;') + '</p>')), 'privacy-sentence'), undefined);
+  assert.equal(level(staticChecks(good(), HASHES, { readme: '# App\n\n' + de + '\n' }), 'privacy-sentence'), undefined);
+  assert.equal(level(check(variant(good(), '<body>', '<body><p>Data is end-to-end encrypted.</p>')), 'privacy-sentence'), 'info');
+  // the sentences are the ones of the guide the service serves
+  const llms = readFileSync(join(ROOT, 'docs', 'site', 'llms.txt'), 'utf8');
+  assert.ok(llms.includes(en) && llms.includes(de));
 });
 
 test('rewriteScopes: only the scope that WDS.connect uses is replaced; ordinary strings of the same shape stay', () => {

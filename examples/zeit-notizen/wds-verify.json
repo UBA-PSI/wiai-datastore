@@ -24,5 +24,9 @@
     {"click": "#tab-week"},
     {"download": "#csv-all"}
   ],
-  "afterReload": [ {"click": "#tab-notes"} ]
+  "afterReload": [
+    {"click": "#tab-projects"},
+    {"click": "#tab-time"},
+    {"click": "#tab-notes"}
+  ]
 }

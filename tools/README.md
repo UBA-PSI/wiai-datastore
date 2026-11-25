@@ -85,7 +85,7 @@ integration.md; additions of `font-src data:`, `media-src blob: data:` and `img-
 action to the datastore host outside the library. New: the sandbox scope ID anywhere in the app fails; CSS that sets `display`, `visibility` or `opacity` on
 `.wds-` classes or `[data-wds...]` elements fails (it would hide the library's dialogs or the sandbox label); `indexedDB.deleteDatabase` and
 `localStorage.removeItem` / `.clear` in a function that never mentions "sandbox" warn (a one-time migration must not delete the old local data in the
-sandbox), `localStorage.clear()` always warns.
+sandbox), `localStorage.clear()` always warns. Code that assigns `window.__WDS_MIGRATION_TEST__` fails (section "Testing a migration"). An info finding **Privacy sentence** says when neither the page nor the `README.md` next to it contains the official sentence of the service (English or German; use the English one for other languages).
 
 Scope check (every target that has network): the public scope document of the app's own scope ID is fetched. Unknown scope: fail. The breach check
 (`hibp`) on while `connect-src` lacks `https://api.pwnedpasswords.com`: fail (vault creation would show an error); off while the host is still allowed: warn.
@@ -102,8 +102,13 @@ in the mock, the server's database: raw, URL-encoded, base64 (three alignments),
 second without a button press in between (use `store.autosave`) and about one record that holds the data of several items or the whole app state. It fails
 when nothing was stored at all, because then it proved nothing.
 
-**Data after reload.** Pass: at least one typed value of every round (the tool's first and second round, the steps) is visible again. Fail: records were written, no
-typed value is visible and the file has no `afterReload` steps. Warn: otherwise ("x of y values visible after reload; an app with tabs needs afterReload steps").
+**Data after reload.** After the reload the tool looks at what a person can read (the page text and the values of the inputs on screen) once right after the unlock and once after **every**
+`afterReload` step, and takes all of them together: an app with tabs passes when one `afterReload` step per tab opens each view. Pass: at least one typed value of every round
+(the tool's first and second round, the steps) is visible in some of those views. Only values that the app showed as text before the reload (the tool looks at the page text after its first round and after every step) or wrote to the store (the page instrumentation sees what `set`, `autosave` and the collections' `add`, `set` and `autosave` are given) are expected back: input that the app rejected, such as a duration it cannot parse or an entry without a project, is neither and is left out, and the detail says how many values that were. A value that only ever sat in an autosaved field counts as written, so an editor that is not read back is reported. If there is no such value at all, every value counts. Fail: records were written, no typed value is visible and the file has no `afterReload` steps.
+An `afterReload` fill step whose text contains a value typed before the reload fails (the tool reads field values too and would "find" the text it typed itself): use another text or `{canary}`.
+Warn: otherwise ("x of y values visible after the reload; the others are in views the tool does not open"; add `afterReload` steps for those views).
+
+**Library version released** (info) says that the published hash of the library version your page uses is not frozen yet. It is about the library, not about your app, and never fails `--strict`.
 
 The report ends with **Not tested**: what a run cannot see (a second device and conflicts, read-only members, lock and unlock again in one page, buttons the tool does not
 press, file inputs without an upload step, fields in views no step opens, dialogs of the app itself). Test those by hand.
@@ -124,7 +129,11 @@ Put it next to the app. An object; a bare array is an error. Everything is optio
     {"download": "#csv"},
     {"wait": 500}
   ],
-  "afterReload": [ {"click": "#tab-notes"} ]
+  "afterReload": [ {"click": "#tab-notes"}, {"click": "#tab-files"} ],
+  "seed": {
+    "page": "old-app.html",
+    "steps": [ {"fill": ["#title", "old note {canary}"]}, {"click": "#save"} ]
+  }
 }
 ```
 
@@ -132,20 +141,84 @@ Put it next to the app. An object; a bare array is an error. Everything is optio
 |---|---|
 | `locale` | Language of the browser (BCP 47), default `en-US`; `--locale` overrides. The library's dialogs follow it unless the app sets one. |
 | `steps` | Run after the tool pressed the buttons it recognised. |
-| `afterReload` | Run after the reload and the unlock, before the tool looks for the typed values: open the tab, the list, the dialog that shows the data. |
+| `afterReload` | Run after the reload and the unlock: open the tab, the list, the dialog that shows the data. The tool looks for the typed values after the unlock and after every step, and takes the union. |
+| `seed` | Tests the migration of old local data (below): `{ "page": "<old local-only app, relative to this file>", "steps": [ ... ] }`. |
 
 Steps: `click` selector; `fill` [selector, text] (the text is searched for like a canary); `select` [selector, value]; `press` [selector, key], for example `Enter`;
 `upload` [selector] (a generated PNG whose name and bytes are searched for like canaries) or [selector, path] (your own file, relative to `wds-verify.json`; its name is searched for);
+A fill text may contain `{canary}`, which becomes a unique generated token (letters and digits, so every field takes it) that the tool searches for like its own canaries.
 `download` selector (clicks and expects a download; reported as "user-requested download" with "contains canaries: yes/no", never as a leak, while a download at any other
 time stays a failure); `wait` milliseconds. An invalid file is a usage error that names the step and the allowed forms.
 
-Options: `--target`, `--locale`, `--sandbox-copy`, `--static-only`, `--hashes <file>`, `--out <file>`, `--strict` (warnings fail), `--headed`, `--wait-ms <n>` (time for debounced
+### Testing a migration (the `seed` block)
+
+An app ported from a local-only version has to carry the old data over (integration.md, section 16). The `seed` block makes the tool play that story: it opens the **old** app in the same
+browser context as the new one (`file://` pages share localStorage and IndexedDB, so the new app finds the old data like a returning user's browser would), runs the seed
+`steps` there (the same step forms; `{canary}` in a fill text gives a value the tool can search for), opens the new app, creates a vault, and then runs the app's normal
+`steps`. In a run with a seed the `steps` come first (right after the vault exists), so their first steps answer the migration prompt of the app, for example
+`{"click": "#migrate-yes"}`; the tool types its own canaries only into fields that are still empty. Requests, console output and downloads of the old page are not counted.
+
+```json
+{
+  "seed":  { "page": "old/index.html", "steps": [ {"fill": ["#title", "old note {canary}"]}, {"click": "#save"} ] },
+  "steps": [ {"click": "#migrate-yes"} ],
+  "afterReload": [ {"click": "#tab-notes"} ]
+}
+```
+
+What the report says (ids `seed`, `migration-visible`, `migration-encrypted`, `migration-old-data`):
+
+- **Seed: the old app**: after the seed steps the typed values must be in the old app's storage (localStorage, IndexedDB; Blobs and Files are read). Otherwise the migration has nothing to migrate: fail.
+- **Migration: old data visible**: the seeded values are visible text in the app **after reloading the page and unlocking the vault** (the start view and every view an `afterReload` step opens, together), so they came out of the vault: a prompt that lists the old titles, or a screen that shows the old storage directly, before the reload does not count. None: fail (also when the app wrote no record at all); some: warn. In the sandbox the old data stays, so a prompt or a screen that lists it cannot be told from the copy there: the deletion run (mock, or `--migration-delete`) is the proof.
+- **Migration: old data only encrypted**: no seeded value appears in a request (URL, header, body), WebSocket frame, console line, Cache Storage, cookie or (mock) the server's database. The old app's own storage keeps them by design;
+  a seeded value in any **new** place (another localStorage key, another IndexedDB store, an old place that **grew**) is a leak like any other canary. A backup download of the old data that the app offers is not a leak **when it is a JSON file**; any other download of the old data is.
+- **Migration: old data deleted / kept in the sandbox**: with the **mock** target the migration runs as in production (`store.status().sandbox` is false) and **everything** that the old app stored must be gone afterwards: the tool takes the whole old storage after the seed steps (every localStorage key, every IndexedDB store with rows, not only the places that hold a typed value) and lists what is left by name. Fail when the migration visibly ran (a store that the recipe adaptation forgot in `OLD.stores`, a settings key); warn when it did not (see "old data visible"). `"seed": { ..., "keep": ["some-key", "db/store"] }` names what may stay on purpose (the migration's own tag key is not in the old storage after the seed, so it needs no entry).
+  A seed page with a file input and no `upload` step is pointed out (**Seed: files of the old app**, warn): the Blob stores are then not exercised.
+  With the **sandbox** target the recipe keeps the old data, and the tool checks that it is **still there** (fail if the app deletes in the sandbox). To exercise the deletion path in the sandbox as well, run again with
+  **`--migration-delete`**: the tool then sets the global **`window.__WDS_MIGRATION_TEST__ = true`** (and makes `navigator.webdriver` true) in the page before any script of the app runs, and expects the old storage to be empty afterwards. The migration of
+  the docs honours the global only together with an automated browser (`keepInSandbox`: `st.sandbox && !(window.__WDS_MIGRATION_TEST__ === true && navigator.webdriver === true)`); nothing else reads it, and the library does not know it. The report starts with a line that names the flag; on the mock target the flag has no effect (an info finding says so).
+  The app must never set the global itself: the static check **The app sets the migration test global** fails a file that assigns it, and the dynamic run fails a page that has it set although this run did not set it. In a person's browser such an assignment would delete the old data of a sandbox vault that is wiped tonight.
+
+`--migration-delete` without a `seed` is a usage error, and so is a `seed.page` that is not a file. The "Not tested" list names what stays open: real-size data, and the case that the old app is used while the migration runs.
+
+### Options
+
+Options: `--target`, `--locale`, `--sandbox-copy`, `--migration-delete`, `--static-only`, `--hashes <file>`, `--out <file>`, `--strict` (warnings fail), `--headed`, `--wait-ms <n>` (time for debounced
 saves, default 2800), `--script-tag [version]`, `--json`. Exit codes: 0 passed, 1 a check failed, 2 the tool could not run (no Python venv for `--target mock`, no Playwright, bad arguments),
 3 the sandbox is unavailable (rate limited, full, switched off): not an app finding, try again later. The result is a smoke test, not a proof.
 
 Environment (for tests and for pointing the tool at another service; not needed otherwise): `WDS_PYTHON` (the Python of the mock), `WDS_VERIFY_SERVICE` (base URL of the service,
 default the production one), `WDS_VERIFY_HASHES_URL` (or `off`), `WDS_VERIFY_OFFLINE=1` (no optional online lookups: hashes and scope check), `WDS_VERIFY_LIBRARY` (a library file that the sandbox target serves instead of
 the production one, for a local mock with a `[sandbox]` section).
+
+## drive-library.mjs: the library's dialogs in your own Playwright tests
+
+`tools/lib/drive-library.mjs` is what wds-verify uses to create a vault and to unlock it. It drives the dialogs of the library by their stable attributes (`data-wds-view` on the
+dialog, `data-wds` on every control; the list is in `client/README.md`), so it works in every language. Import it from a clone; Playwright is the copy in `tools/node_modules`
+(`npm install` in `tools/`) or your own. The app (a copy that talks to the sandbox or a local mock, see `--sandbox-copy`) calls `store.unlock()` as usual; the helper answers the dialogs.
+
+```js
+import { chromium } from 'playwright';
+import { createVault, unlock } from '/path/to/wiai-datastore/tools/lib/drive-library.mjs';
+
+const page = await (await chromium.launch()).newPage();
+await page.goto('file:///path/to/app-sandbox.html');
+const { accessId, passphrase } = await createVault(page);   // the app has called store.unlock() at start: answer the dialogs
+// ... the test uses the app ...
+await page.reload();
+await unlock(page, { accessId, passphrase });         // the unlock dialog of the second visit
+```
+
+| Export | |
+|---|---|
+| `createVault(page, { passphrase?, joinCode?, confirm = true, timeout })` | The unlock dialog is open: create a new vault (unlock, create, access sheet, confirmed). Resolves `{ accessId, passphrase }`; the passphrase is generated unless you give one. `confirm: false` stops at the access sheet. For a scope with the enrollment "join code" the code is `joinCode` or, by default, the environment variable **`WDS_JOIN_CODE`** (set it in the shell that runs the test, never in a file; it is never printed and no error contains it); without a code the call throws a `DriveError` that names the variable. |
+| `unlock(page, { accessId?, passphrase, timeout })` | The unlock dialog is open: unlock an existing vault. Resolves when the dialog is gone (or shows a notice or sheet the caller answers); `accessId` is needed unless the library remembers it. |
+| `confirmSheet(page)` | The access sheet is open: read the access ID, tick "I have saved it", continue. Resolves the access ID. |
+| `dialog(page)`, `viewOf(page)`, `waitForView(page, view \| [views] \| null, { timeout })` | The topmost dialog (a locator), its `data-wds-view` (`null` when none), and waiting for a view (`null`: for no dialog). |
+| `formError(d)`, `chooseCreate(d)`, `submitCreate(d, { passphrase, joinCode? })`, `submitUnlock(d, { accessId?, passphrase })` | The single steps (`d` is the dialog locator) that wds-verify calls one by one, because it also reacts to other dialogs in between. |
+| `newPassphrase()`, `DriveError` | A passphrase that passes the library's rules; the error that every function throws, with the text of the dialog (`unlocking failed: ...`, `the access sheet could not be confirmed: ...`). |
+
+Do not `await store.unlock()` before calling the helper: that promise settles only after the dialogs are answered. Start it (`page.evaluate(() => { window.p = store.unlock(); })`), drive, then await it.
 
 ## Test apps and tests
 

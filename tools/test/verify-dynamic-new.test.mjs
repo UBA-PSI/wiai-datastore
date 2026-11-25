@@ -98,6 +98,23 @@ test('reload check: data in a tab that is closed after the reload needs afterRel
   assert.ok(neverOpened.titles('warn').includes('Data after reload'));
 });
 
+test('reload check: values that the app rejected (and never showed) are not expected back; values it showed and lost still fail', { timeout: 240000 }, async () => {
+  const body = '<label>Qty <input id="qty" type="text"></label><label>Name <input id="nm" type="text"></label><button id="add" type="button">Add</button><ul id="list"></ul>';
+  const script = (keep) => "  var items = [];\n  function draw() { $('list').textContent = items.map(function (i) { return i.nm + ' x' + i.qty; }).join(' | '); }\n"
+    + "  $('add').addEventListener('click', function () { if (!/^[0-9]+$/.test($('qty').value)) return; items.push({ qty: $('qty').value, nm: $('nm').value }); draw(); store.set('items', items); });\n"
+    + (keep ? "  store.unlock().then(function () { return store.get('items'); }).then(function (v) { if (v) { items = v; draw(); } });" : "  store.unlock();");
+  // the tool's first round types text into the number field: the app rejects it. The steps type a valid entry; it comes back.
+  const steps = [{ fill: ['#qty', '12345678'] }, { fill: ['#nm', 'accepted entry 5551234'] }, { click: '#add' }];
+  const ok = await verify(writeApp(miniApp({ body, script: script(true) }), steps));
+  assert.equal(ok.code, 0, JSON.stringify(ok.failures));
+  assert.equal(ok.find('reload').level, 'pass', ok.find('reload').detail);
+  assert.match(ok.find('reload').detail, /neither shown as text nor written/);
+  // the app shows the entry but does not read it back after a reload: still a failure
+  const lost = await verify(writeApp(miniApp({ body, script: script(false) }), steps));
+  assert.equal(lost.code, 1);
+  assert.ok(lost.titles('fail').includes('Data after reload'), lost.titles('fail').join('|'));
+});
+
 test('reload check: warning when some typed values come back and others do not', { timeout: 180000 }, async () => {
   const body = '<label>A <input id="a" type="text"></label><label>B <input id="b" type="text"></label><button id="save" type="button">Save</button>';
   // the field typed by the tool comes back, the one filled by a step (a second group) does not
@@ -110,3 +127,30 @@ test('reload check: warning when some typed values come back and others do not',
   assert.equal((await verify(writeApp(app, [{ fill: ['#b', 'filled by a step 99887766'] }, { click: '#save' }]), ['--strict'])).code, 1);
 });
 
+
+// ---- the reload check expects back what the app wrote, not only what it showed as text ----
+const NOTE_BODY = '<label>Title <input id="title" type="text"></label><button id="add" type="button">Add</button><ul id="list"></ul><label>Note <textarea id="note"></textarea></label>';
+const noteScript = (variant) => "  var items = [], saver = null;\n  function draw() { $('list').textContent = items.join(' | '); }\n"
+  + "  $('add').addEventListener('click', function () { items.push($('title').value); draw(); store.set('items', items); " + (variant === 'collection' ? "store.collection('extra/').set('n1', { t: $('note').value });" : '') + " });\n"
+  + (variant === 'autosave' ? "  $('note').addEventListener('input', function () { if (!saver) saver = store.autosave('note', function () { return { t: $('note').value }; }); saver.changed(); });\n" : '')
+  + "  store.unlock().then(function () { return store.get('items'); }).then(function (v) { if (v) { items = v; draw(); } });";   // the list comes back, the note never does
+
+test('reload check: a value that only ever sat in an autosaved field (or in a collection) and is never read back is not dropped; it was written, so it must come back', { timeout: 300000 }, async () => {
+  const steps = [{ fill: ['#note', 'a note that is autosaved {canary}'] }, { wait: 3500 }];
+  for (const kind of ['autosave', 'collection']) {
+    const s = kind === 'collection' ? [{ fill: ['#note', 'a note in a collection {canary}'] }, { click: '#add' }] : steps;
+    const r = await verify(writeApp(miniApp({ body: NOTE_BODY, script: noteScript(kind) }), s));
+    assert.notEqual(r.find('reload').level, 'pass', kind + ': ' + r.find('reload').detail);
+    assert.equal(r.find('reload').level, 'warn', kind);
+    assert.match(r.find('reload').detail, /afterReload/);
+  }
+  // the same app that does read the note back passes (the instrumentation does not make everything a failure)
+  const reads = noteScript('autosave').replace("if (v) { items = v; draw(); } });", "if (v) { items = v; draw(); } return store.get('note'); }).then(function (n) { if (n) $('note').value = n.t; });");
+  const ok = await verify(writeApp(miniApp({ body: NOTE_BODY, script: reads }), steps));
+  assert.equal(ok.find('reload').level, 'pass', ok.find('reload').detail);
+  // an afterReload fill that types a text of the steps again would make that value "visible" without the app reading anything: the step fails
+  const clash = await verify(writeApp(miniApp({ body: NOTE_BODY, script: noteScript('autosave') }), { steps: [{ fill: ['#note', 'the same literal text 12345'] }, { wait: 3500 }], afterReload: [{ fill: ['#note', 'the same literal text 12345'] }] }));
+  assert.ok(clash.titles('fail').includes('wds-verify.json afterReload step 1'), clash.titles('fail').join('|'));
+  assert.match(clash.find('afterReload-step-1').detail, /typed before the reload/);
+  assert.notEqual(clash.find('reload').level, 'pass');
+});

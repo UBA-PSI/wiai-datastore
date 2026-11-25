@@ -95,7 +95,7 @@ One collection object exists per prefix; a later call with the same prefix repla
 | `notes.items()`, `notes.has(id)` | synchronous; a `UsageError` until `load()` ran (and again after a lock) |
 | `await notes.get(id)`, `await notes.getAll({concurrency, fresh})` | the value(s); records that are gone are skipped |
 | `await notes.add(value, {id?, meta?, mime?, created?})` | `{id, name, version, resolution}`; ids are 10 characters `[0-9a-z]`, or yours (1 to 200 characters, no `/`); `created` (ms) only orders the list |
-| `await notes.set(id, value, {meta?, mime?})`, `await notes.remove(id)` | the `set`/`remove` result |
+| `await notes.set(id, value, {meta?, mime?, created?})`, `await notes.remove(id)` | the `set`/`remove` result. `set` is an upsert: a new id gets its index entry (`created`, or now), an existing entry keeps its date and gets the new meta. Like `store.set` it writes on top of the version this page has read or written: a record that exists but that this page has not read (listed in the index only) is a conflict, decided by `onConflict` or the dialog, never overwritten silently |
 | `notes.autosave(id, getState, opts)` | an autosave handle that also keeps the index meta current (index writes at most every 10 s) |
 | `await notes.flush()` | resolves when every queued list change is on the server, rejects while it cannot be written |
 | `await notes.rebuild()` | explicit repair: lists the prefix, downloads every item for its meta (one request per item) and rewrites the index |

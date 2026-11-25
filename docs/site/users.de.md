@@ -51,6 +51,8 @@ andere im Verlauf und lässt sich wiederherstellen. Viele Apps zeigen einen Verl
 
 ## Was die Fakultät sehen kann
 
+Kurz gesagt: **Die Daten sind Ende-zu-Ende-verschlüsselt; die Fakultät verwahrt für Notfälle einen Wiederherstellungsschlüssel.** Die Einzelheiten:
+
 - Der Server speichert nur verschlüsselte Daten. Er sieht, welche App Sie nutzen, wie viele Einträge Sie haben, wie groß sie sind, wann sie
   sich geändert haben und wie viele Personen Zugang haben (als anonyme Einträge). Namen, Texte und Dateien sieht er nicht.
 - Die Zugriffsprotokolle des Webservers sind für diesen Dienst abgeschaltet. IP-Adressen dienen nur der Begrenzung von Anfragen und werden nur im

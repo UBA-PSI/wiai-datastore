@@ -219,6 +219,30 @@ export function localDeletes(code) {
   return { unguarded: [...unguarded], clears };
 }
 
+// ---- the test global of the migration ----
+// window.__WDS_MIGRATION_TEST__ is set by wds-verify --migration-delete in a throw-away browser (and by nobody else): the recipe keeps old data in the sandbox unless it is true. An app that writes it
+// itself would delete old data in the sandbox in any browser, and the copy of that data is gone with the sandbox vault tonight. True when the code assigns it, defines it or puts it into an object literal.
+export function setsTestGlobal(code, name = '__WDS_MIGRATION_TEST__') {
+  let from = 0;
+  for (;;) {
+    const at = code.indexOf(name, from);
+    if (at < 0) return false;
+    from = at + name.length;
+    const after = code.slice(from, from + 24), before = code.slice(Math.max(0, at - 80), at);
+    if (/^["'\]\s]*(?:=(?!=)|\+\+|--|\|\|=|&&=|\?\?=)/.test(after)) return true;                // x.NAME = ..., x["NAME"] = ...
+    if (/defineProperty\s*\(\s*[\w$.]+\s*,\s*["'`]$/.test(before)) return true;                    // Object.defineProperty(window, "NAME", ...)
+    if (/[{,]\s*["']?$/.test(before) && /^["']?\s*:/.test(after)) return true;                       // Object.assign(window, { NAME: true })
+  }
+}
+
+// ---- the official privacy sentence ----
+const PRIVACY = [
+  'Data is end-to-end encrypted; the faculty holds a recovery key for emergencies.',
+  'Die Daten sind Ende-zu-Ende-verschlüsselt; die Fakultät verwahrt für Notfälle einen Wiederherstellungsschlüssel.',
+];
+const ENTITIES = { auml: 'ä', ouml: 'ö', uuml: 'ü', Auml: 'Ä', Ouml: 'Ö', Uuml: 'Ü', szlig: 'ß', nbsp: ' ' };
+const flat = (s) => unentity(String(s)).replace(/&([A-Za-z]+);/g, (m, n) => ENTITIES[n] || m).replace(/&#(\d+);/g, (m, n) => String.fromCodePoint(Number(n))).replace(/\s+/g, ' ');
+
 // ---- the checks ----
 const NET_APIS = [
   ['fetch', /\bfetch\s*\(/], ['XMLHttpRequest', /\bXMLHttpRequest\b/], ['WebSocket', /\bWebSocket\b/],
@@ -226,8 +250,8 @@ const NET_APIS = [
 ];
 const DATASTORE_REF = /wiai\.uni-bamberg\.de|\/datastore\/|api\/v1/i;
 
-// `known`: parsed client/dist/hashes.json. Returns {findings, library, csp, scope}.
-export function staticChecks(html, known) {
+// `known`: parsed client/dist/hashes.json; readme: the text of the README next to the app (optional). Returns {findings, library, csp, scope}.
+export function staticChecks(html, known, { readme = '' } = {}) {
   const findings = [];
   const add = (id, level, title, detail) => findings.push({ id, level, title, detail: detail || '' });
   const { tags, scripts } = scanHtml(html);
@@ -248,7 +272,7 @@ export function staticChecks(html, known) {
       if (!entry) add('library-version', 'fail', 'Library version', 'Version ' + m[1] + ' is not a published version. Known: ' + (known ? Object.keys(known).join(', ') : 'none') + '.');
       else {
         add('library-version', 'pass', 'Library version', m[1] + ' is a published version.');
-        if (!entry.frozen) add('library-frozen', 'warn', 'Library version released', 'Version ' + m[1] + ' is not marked as released (frozen) in hashes.json; its hash may still change.');
+        if (!entry.frozen) add('library-frozen', 'info', 'Library version released', 'Version ' + m[1] + ' is not marked as released (frozen) in hashes.json; its hash may still change. This is about the library, not about your app.');
         const sri = (tag.attrs.integrity || '').trim();
         if (!sri) add('library-integrity', 'fail', 'Subresource integrity', 'The script tag has no integrity attribute. Expected: integrity="' + entry.sri + '"');
         else if (sri !== entry.sri) add('library-integrity', 'fail', 'Subresource integrity', 'integrity="' + sri + '" does not match the published hash. Expected: integrity="' + entry.sri + '"');
@@ -329,6 +353,8 @@ export function staticChecks(html, known) {
   if (hiding.length) add('sandbox-label-css', 'fail', 'CSS hides the library\'s dialogs', 'The style sheet changes display, visibility or opacity of the library\'s own markup (' + hiding.slice(0, 4).join('; ') + '). That includes the sandbox label, which must stay visible, and the dialogs people need to unlock their data. Remove these rules.');
   const del = localDeletes(code);
   if (del.unguarded.length) add('local-delete', 'warn', 'Deleting local data', 'The code calls ' + del.unguarded.join(', ') + ' in a function that never mentions the sandbox. A one-time migration must not delete the old local data when the app runs against the sandbox (the sandbox is wiped every night, the old data would be gone for good); see "Porting an existing app" in integration.md.');
+  if (setsTestGlobal(code)) add('migration-test-global', 'fail', 'The app sets the migration test global', 'The code assigns window.__WDS_MIGRATION_TEST__. Only wds-verify --migration-delete sets it, in a throw-away browser; the migration recipe reads it (=== true) to delete the old data in the sandbox as well. In a real browser that deletes data whose only copy is in a sandbox vault that is wiped tonight. Remove the assignment; to see the deletion, run wds-verify --target sandbox --migration-delete.');
+  if (!PRIVACY.some((s) => flat(html).includes(s) || flat(readme).includes(s))) add('privacy-sentence', 'info', 'Privacy sentence', 'Neither the page nor README.md contains the official sentence. Wherever the app describes its privacy, use it word for word: "' + PRIVACY[0] + '" (German: "' + PRIVACY[1] + '"). For a text in another language use the English sentence.');
   if (del.clears) add('local-clear', 'warn', 'localStorage.clear()', 'localStorage.clear() deletes everything the page origin stored, including data of other parts of the app and of the library itself (the remembered access ID). Remove the named keys instead; and never in the sandbox.');
   return { findings, library, csp, scope: scopeMatch ? scopeMatch[2] : siteScope ? siteScope.id : null, baseUrl: baseMatch ? baseMatch[2] : null };
 }

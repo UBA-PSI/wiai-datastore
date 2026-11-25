@@ -24,6 +24,10 @@
 //   --static-only       skip the dynamic checks (no Python, no browser needed)
 //   --hashes <file>     published library hashes (default: <service>/client/hashes.json, then client/dist/hashes.json of the clone)
 //   --out <file>        also write the report to a file
+//   --migration-delete  with a "seed" in wds-verify.json (a test of the migration of old local data), sandbox target: set window.__WDS_MIGRATION_TEST__ = true
+//                       (and navigator.webdriver) in the app's page, so that a migration that keeps the old data in the sandbox deletes it (as in production) and
+//                       the tool checks that the old storage is empty afterwards. Without the flag the sandbox run checks that it was kept. No effect on the mock
+//                       target (it deletes anyway); the report names the flag.
 //   --strict            warnings fail too
 //   --headed            show the browser
 //   --wait-ms <n>       time to wait for debounced saves at the end (default 2800)
@@ -35,7 +39,7 @@ import { readFileSync, writeFileSync, existsSync, statSync, readdirSync, realpat
 import { dirname, join, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { staticChecks, scanHtml, CSP_TEMPLATE } from './lib/static-checks.mjs';
-import { parseConfig } from './lib/config.mjs';
+import { parseConfig, MIGRATION_TEST_GLOBAL } from './lib/config.mjs';
 import { scopeCheck } from './lib/scope-check.mjs';
 import { UsageError, TargetUnavailable, REPO_URL, loadKnownHashes, sandboxInfo, serviceBase, offline, rewriteScopes } from './lib/targets.mjs';
 
@@ -128,6 +132,11 @@ export function notTested({ info = {}, config = {}, html = '', target = {} }) {
   out.push('Buttons the tool does not press: delete, export, download, import, lock, and everything that the save word list, data-wds-verify="save" or a click step does not match. Press each by hand.' + unpressed);
   if (info.fileInputs && !(info.stepCount && info.stepCount.upload)) out.push('File inputs (' + info.fileInputs + ') without an upload step were not used: add {"upload": [selector]} steps, or try the upload by hand.');
   if (!info.stepCount || info.hiddenFields) out.push('Fields in views no step opens (tabs, panels, dialogs of the app)' + (info.hiddenFields ? ': ' + info.hiddenFields + ' hidden field(s) were seen but not filled' : '') + '. Fill them by hand, or add steps (click the tab, fill the field, click save) and afterReload steps.');
+  if (config.seed) {
+    if (target.name === 'sandbox' && !info.migrationDelete) out.push('The deletion of the old data was not exercised: the sandbox keeps it by design. Run again with --migration-delete (the migration must then honour window.__WDS_MIGRATION_TEST__ === true, docs section 16), and test the deletion with real-size data against a test vault in the app\'s own scope.');
+    else out.push('The migration with real-size old data (attachments, many items) and the "old app was used meanwhile" case (nothing is deleted, the result is "changed"): try both by hand against a test vault in the app\'s own scope.');
+    out.push('The old data is found only when the new app is opened from the same origin as the old one (Chromium: any file:// page shares storage with any other; Firefox: only the same file; a web server: the same scheme, host and port). The tool opens both in one Chromium and cannot show this: replace the old file in place and tell the users to open the new one the same way.');
+  } else if (/migrat|oldData|old data/i.test(html)) out.push('The migration of old local data was not tested: the page mentions a migration, but wds-verify.json has no "seed". Add {"seed": {"page": "old-app.html", "steps": [...]}} (the old local-only app and the steps that fill it), see tools/README.md.');
   if ((info.appDialogs || /<dialog\b|role\s*=\s*["']dialog|aria-modal/i.test(html)) && !(config.steps && config.steps.length)) out.push('The app has dialogs of its own and wds-verify.json has no steps for them: the tool finds no stable selectors in them. Add steps that open them and fill their fields, or test them by hand.');
   return out;
 }
@@ -143,6 +152,7 @@ export function renderReport({ appPath, findings, info, strict, target, notTeste
   const unavailable = info && info.unavailable;
   out.push('**Result: ' + (unavailable ? 'NOT RUN, sandbox unavailable' : failed.length ? 'FAILED' : 'passed') + '** (' + findings.filter((f) => f.level === 'pass').length + ' checks passed, ' + failed.length + ' failed, '
     + warned.length + ' warning' + (warned.length === 1 ? '' : 's') + ')', '');
+  if (info && info.migrationDelete) out.push('Run with --migration-delete: ' + (target && target.name === 'sandbox' ? 'the run set window.' + MIGRATION_TEST_GLOBAL + ' in a throw-away browser, so the migration deleted the old data in the sandbox as it does in production. The data is not in your everyday browser.' : 'no effect on this target (the mock is no sandbox: the migration deletes the old data anyway).'), '');
   out.push('This is a smoke test, not a proof. It catches the usual mistakes (plaintext in storage or requests, wrong script tag, wide CSP); it cannot see what it did not trigger.', '');
   const section = (title, items) => {
     if (!items.length) return;
@@ -171,16 +181,22 @@ export async function verify(target, flags = {}) {
   const hashes = await loadKnownHashes(flags);
   const appPath = findApp(target);
   const html = readFileSync(appPath, 'utf8');
-  let config = { locale: null, steps: [], afterReload: [] };
+  let config = { locale: null, steps: [], afterReload: [], seed: null };
   const cfgFile = join(dirname(appPath), 'wds-verify.json');
   if (existsSync(cfgFile)) { try { config = parseConfig(readFileSync(cfgFile, 'utf8')); } catch (e) { throw new UsageError(e.message); } }
+  if (config.seed) {
+    const old = resolve(dirname(appPath), config.seed.page);
+    if (!existsSync(old) || !statSync(old).isFile()) throw new UsageError('wds-verify.json "seed.page" names ' + config.seed.page + ', which is not a file (the path is relative to wds-verify.json: ' + old + ')');
+  }
+  if (flags['migration-delete'] && !config.seed) throw new UsageError('--migration-delete needs a "seed" in wds-verify.json (the old app whose data the migration copies and then deletes)');
   if (flags.locale !== undefined) {
     let ok = null;
     try { ok = typeof flags.locale === 'string' ? Intl.getCanonicalLocales(flags.locale)[0] : null; } catch (e) { ok = null; }
     if (!ok) throw new UsageError('--locale needs a BCP 47 language tag such as de-DE or en-US');
     flags = { ...flags, locale: ok };
   }
-  const st = staticChecks(html, hashes.known);
+  const readmeFile = ['README.md', 'readme.md', 'README.txt', 'README'].map((f) => join(dirname(appPath), f)).find((f) => existsSync(f));
+  const st = staticChecks(html, hashes.known, { readme: readmeFile ? readFileSync(readmeFile, 'utf8') : '' });
   const tg = await resolveTarget(flags);
   const add = (id, level, title, detail) => ({ id, level, title, detail: detail || '' });
   let findings = [add('hashes', hashes.differs ? 'warn' : 'info', 'Library hashes', 'Published hashes from ' + hashes.source + '.' + (hashes.note ? ' ' + hashes.note : ''))].concat(st.findings);
@@ -191,7 +207,7 @@ export async function verify(target, flags = {}) {
     const { dynamicChecks, PlaywrightMissing } = await import('./lib/dynamic-checks.mjs');
     const { MockUnavailable } = await import('./lib/python.mjs');
     try {
-      const dyn = await dynamicChecks({ appPath, html, config, library: st.library, target: tg, opts: { headed: !!flags.headed, waitMs: flags['wait-ms'] !== undefined ? Number(flags['wait-ms']) : undefined, locale: flags.locale } });
+      const dyn = await dynamicChecks({ appPath, html, config, library: st.library, target: tg, opts: { headed: !!flags.headed, migrationDelete: !!flags['migration-delete'], waitMs: flags['wait-ms'] !== undefined ? Number(flags['wait-ms']) : undefined, locale: flags.locale } });
       findings = findings.concat(dyn.findings); info = dyn.info;
     } catch (e) {
       if (e instanceof MockUnavailable || e instanceof PlaywrightMissing) throw new UsageError(e.message);

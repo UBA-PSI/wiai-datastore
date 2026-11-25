@@ -63,7 +63,7 @@ attachments (image preview, PDF download, a file over the limit), the history di
 the conflict dialog (which version is not saved yet, which lines differ), the pickup of new items on focus and at "Neu laden", two people adding entries at the same time (nothing is lost), a revoked member after "Neu laden", "Listen reparieren" after a list was deleted behind the app's back,
 the weekly overview at 1280, 1024, 800 and 380 px (totals in view, cards on a narrow screen), and the layout at 380 px in light and dark. `ZN_SHOTS=<directory>` also saves screenshots.
 
-`docs-recipes.spec.mjs` (in `examples/`) runs the code recipes of `docs/site/integration.md` (collections, conflicts in code, lock and unlock again, the import of an old export and the one-time migration, including the sandbox case) in the three browser engines, and runs wds-verify on the example app of the guide.
+`docs-recipes.spec.mjs` (in `examples/`) runs the code recipes of `docs/site/integration.md` (collections, conflicts in code, lock and unlock again, the import of an old export and the one-time migration, including the sandbox case) in the three browser engines, and runs wds-verify on the example app of the guide, and on a small app with the migration recipe and an old local-only app as `seed` (mock and sandbox target, with `--migration-delete`).
 
 ## Verification
 
@@ -78,18 +78,12 @@ WDS_VERIFY_OFFLINE=1 node tools/wds-verify.mjs examples/zeit-notizen/index.html
 `WDS_VERIFY_OFFLINE=1` switches off the two online lookups (the published hashes and the scope check): the demo scope `zeitnotizen-demo-xn8kp9` is not registered at the production service, and the tool fails an unknown scope. For an app with a registered scope, leave the variable out.
 Python 3.13 with the server packages (`.venv`) makes the target "mock"; without it use `--target sandbox` (the tool then runs against the public sandbox with a copy of the page).
 
-The warning about the release state of version 1.0.0 is not about the app: the library version is not marked as frozen yet, so its hash may still change (then the tag in this file has to be replaced).
-The warning "Data after reload" is a false positive of this app: after the reload the tool opens the notes tab, which shows the values of the note (4 of the 10 typed values); the project names, the time entry and the values the tool typed in its first round
-(before a project existed, so the app rightly rejected them) are on other tabs, and the tool reads one screen. The app reads its data back at start; `app.spec.mjs` checks every view after a reload.
+The line "Library version released" is information, not a finding about the app: the library version is not marked as frozen yet, so its hash may still change (then the tag in this file has to be replaced).
+The tool types into the fields it finds before a project exists; the app rightly rejects those entries, so they never appear on screen. The tool does not expect values back that the app neither showed nor wrote to the store, and looks at every tab after the reload (one `afterReload` click per tab), so "Data after reload" passes. The app reads its data back at start; `app.spec.mjs` checks every view after a reload.
 
-**Result: passed** (25 checks passed, 0 failed, 2 warnings)
+**Result: passed** (26 checks passed, 0 failed, 0 warnings)
 
 This is a smoke test, not a proof. It catches the usual mistakes (plaintext in storage or requests, wrong script tag, wide CSP); it cannot see what it did not trigger.
-
-### Warnings
-
-- **Library version released** (warn): Version 1.0.0 is not marked as released (frozen) in hashes.json; its hash may still change.
-- **Data after reload** (warn): 4 of 10 typed values are visible after reload; an app with tabs needs afterReload steps in wds-verify.json (they open the views that show the data).
 
 ### All checks
 
@@ -97,7 +91,7 @@ This is a smoke test, not a proof. It catches the usual mistakes (plaintext in s
 |---|---|---|
 | Library hashes | info | Published hashes from the local clone (client/dist/hashes.json); https://wiai.uni-bamberg.de/datastore/client/hashes.json online lookup switched off (WDS_VERIFY_OFFLINE). |
 | Library version | pass | 1.0.0 is a published version. |
-| Library version released | warn | Version 1.0.0 is not marked as released (frozen) in hashes.json; its hash may still change. |
+| Library version released | info | Version 1.0.0 is not marked as released (frozen) in hashes.json; its hash may still change. This is about the library, not about your app. |
 | Subresource integrity | pass | The integrity attribute matches the published hash of 1.0.0. |
 | crossorigin attribute | pass | crossorigin="anonymous" is set. |
 | Content Security Policy | pass | A meta policy is present and not broader than the recommended one. |
@@ -124,12 +118,12 @@ This is a smoke test, not a proof. It catches the usual mistakes (plaintext in s
 | Vault created | pass | The library dialog created a vault in the mock (open enrollment, passphrase checked by the library). |
 | Data was saved | pass | 13 encrypted record write(s) reached the mock; the canaries were searched for in all of them. |
 | Input fields | info | 10 field(s) filled with canaries (3 found by the tool, 7 by wds-verify.json steps); buttons pressed by the tool: "Eintrag hinzufügen". |
-| wds-verify.json steps | info | 22 step(s) run (7 fill, 8 click, 1 upload, 5 wait, 1 press, 1 download). |
+| wds-verify.json steps | info | 22 step(s) run (7 fill, 10 click, 1 upload, 5 wait, 1 press, 1 download). |
 | Browser language | info | The browser ran with the locale de-DE (the library dialogs follow it unless the app sets one). |
-| Data after reload | warn | 4 of 10 typed values are visible after reload; an app with tabs needs afterReload steps in wds-verify.json (they open the views that show the data). |
+| Data after reload | pass | 5 of 5 typed value(s) are visible again after reloading and unlocking (the start view and every afterReload step looked at, together) (at least one of every round). 5 other typed value(s) were neither shown as text nor written to the store before the reload (the app rejected them or keeps them nowhere) and are not counted. |
 | Write frequency | pass | No record was written three or more times within a second. |
 
-Dynamic run: 24.6 s, 3 canary field(s), 13 record write(s).
+Dynamic run: 27.1 s, 3 canary field(s), 13 record write(s).
 
 ### Not tested
 
@@ -144,17 +138,17 @@ This run cannot see the following. Test each by hand before you hand the app ove
 ## What to tell users
 
 ```text
-Your data is stored end-to-end encrypted on a faculty server. You need:
+Data is end-to-end encrypted; the faculty holds a recovery key for emergencies.
+Your data is stored on a faculty server. You need:
 1. The join code from the person who runs this app (only for creating a vault).
 2. A passphrase of your own, at least 12 characters. It cannot be reset: the server does not know it.
 3. Your access sheet (access ID and recovery code). Print it or save it somewhere apart from this device.
-Exception by design: the faculty keeps a recovery key. With your recovery code the faculty can restore access after a
-documented procedure. Details: https://wiai.uni-bamberg.de/datastore/docs/users.en
+With your recovery code the faculty can restore access after a documented procedure. Details: https://wiai.uni-bamberg.de/datastore/docs/users.en
 
-Ihre Daten werden auf einem Server der Fakultät Ende-zu-Ende-verschlüsselt gespeichert. Sie brauchen:
+Die Daten sind Ende-zu-Ende-verschlüsselt; die Fakultät verwahrt für Notfälle einen Wiederherstellungsschlüssel.
+Ihre Daten liegen auf einem Server der Fakultät. Sie brauchen:
 1. Den Beitrittscode von der Person, die diese App betreibt (nur zum Anlegen Ihres Tresors).
 2. Eine eigene Passphrase mit mindestens 12 Zeichen. Sie lässt sich nicht zurücksetzen: Der Server kennt sie nicht.
 3. Ihr Zugangsblatt (Zugangskennung und Wiederherstellungscode). Drucken oder speichern Sie es getrennt von diesem Gerät.
-Ausnahme mit Absicht: Die Fakultät verwahrt einen Wiederherstellungsschlüssel. Mit Ihrem Wiederherstellungscode kann die
-Fakultät nach einem dokumentierten Verfahren den Zugang wiederherstellen. Details: https://wiai.uni-bamberg.de/datastore/docs/users.de
+Mit Ihrem Wiederherstellungscode kann die Fakultät nach einem dokumentierten Verfahren den Zugang wiederherstellen. Details: https://wiai.uni-bamberg.de/datastore/docs/users.de
 ```

@@ -288,6 +288,34 @@ class RepositoryDocuments(unittest.TestCase):
         for error in ("OfflineError", "ConflictError", "QuotaError", "AuthError", "IntegrityError", "VersionError"):
             self.assertIn(error, text, error)
 
+    def test_the_official_privacy_sentence_is_the_same_everywhere(self):
+        from wds_server.prompt import PRIVACY_DE, PRIVACY_EN
+        self.assertEqual(PRIVACY_EN, "Data is end-to-end encrypted; the faculty holds a recovery key for emergencies.")
+        self.assertEqual(PRIVACY_DE, "Die Daten sind Ende-zu-Ende-verschlüsselt; die Fakultät verwahrt für Notfälle einen Wiederherstellungsschlüssel.")
+        guide = self.c.get("/datastore/docs/integration.md").text
+        self.assertIn(PRIVACY_EN, guide)
+        self.assertIn(PRIVACY_DE, guide)
+        self.assertGreaterEqual(guide.count(PRIVACY_EN), 2)  # the top of the guide and the text for users (section 13)
+        self.assertGreaterEqual(guide.count(PRIVACY_DE), 2)
+        llms = self.c.get("/datastore/llms.txt").text
+        self.assertIn(PRIVACY_EN, llms)
+        self.assertIn(PRIVACY_DE, llms)
+        self.assertIn(PRIVACY_EN, self.c.get("/datastore/docs/users.en.md").text)
+        self.assertIn(PRIVACY_DE, self.c.get("/datastore/docs/users.de.md").text)
+
+    def test_integration_guide_documents_set_created_dialogs_and_the_migration_decisions(self):
+        text = self.c.get("/datastore/docs/integration.md").text
+        for part in ("**`set` and `created`.**", "upsert", "### Driving the library's dialogs in your own end-to-end tests", "tools/lib/drive-library.mjs",
+                     "**Do you need the tag in the item ids? Decide by the old ids.**", "**The new ids contain `-` and `%`**", "migratedSettings", "settingsDone", "fillGaps",
+                     "WDS_JOIN_CODE", "keepInSandbox"):
+            self.assertIn(part, text, part)
+        # `set` takes the option created (for a new entry; an existing entry keeps its date), in the method list and in the paragraph
+        self.assertIn("`set(id, value, { meta, mime, created })`", text)
+        self.assertIn("`col.set(id, value, { meta, mime, created })` is an **upsert**", text)
+        self.assertIn("**for an entry that exists it is ignored**", text)
+        self.assertNotIn("`set` has no `created` option", text)
+        self.assertNotIn("`set(id, value, { meta, mime })`", text)
+
     def test_export_page_is_standalone(self):
         page = self.c.get("/datastore/export/").text
         self.assertIn('src="https://wiai.uni-bamberg.de/datastore/client/wds-1.0.0.js"', page)

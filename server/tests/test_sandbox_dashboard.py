@@ -26,7 +26,9 @@ class PromptWithoutSandbox(DashCase):
         scope = self.make_scope(a, name="Demo")  # join code, breach check on
         text = pre(self.page(a, scope), "prompt")
         self.assertIn("I am building or porting a single-file web app that stores its data in the WIAI Datastore of the University of Bamberg.", text)
-        self.assertIn("the faculty holds a recovery key for emergencies. Say exactly this wherever the app describes its privacy.", text)
+        self.assertIn("Wherever the app describes its privacy, say exactly this sentence, in the language of the text (a longer text may follow it):", text)
+        self.assertIn("- English: Data is end-to-end encrypted; the faculty holds a recovery key for emergencies.", text)
+        self.assertIn("- German: Die Daten sind Ende-zu-Ende-verschlüsselt; die Fakultät verwahrt für Notfälle einen Wiederherstellungsschlüssel.", text)
         self.assertRegex(text, r"Scope settings \(as of \d+ \w+ \d{4}; wds-verify prints the current ones\):")
         self.assertIn(f"- Scope ID: {scope}", text)
         self.assertIn("- Enrollment: join code: users type a join code when they create their vault; never put it into the app", text)
@@ -57,6 +59,34 @@ class PromptWithoutSandbox(DashCase):
         a.post(f"/scopes/{scope}/enrollment", {"enrollment": "closed"})
         self.assertIn("- Enrollment: closed: no new vaults", pre(self.page(a, scope), "prompt"))
 
+    def test_prompt_says_how_to_get_the_join_code_for_a_test_vault(self):
+        a = self.staff(lang_header="en")
+        scope = self.make_scope(a, name="Demo")  # join code
+        text = pre(self.page(a, scope), "prompt")
+        self.assertIn("ask me for the join code of this scope when you reach that step, and say what it is for.", text)
+        self.assertIn("Pass it only through the environment variable WDS_JOIN_CODE of the shell that runs the test", text)
+        self.assertIn("Never write it into the app, the README, a test script, a command line, CLAUDE.md or AGENTS.md.", text)
+        self.assertIn("so that I can delete that vault afterwards.", text)
+        self.assertIn("(the deletion path of a migration)", text)  # no sandbox here: the sandbox is not mentioned
+        de = self.staff(lang_header="de")
+        dscope = self.make_scope(de, name="Demo")
+        dtext = pre(self.page(de, dscope), "prompt")
+        self.assertIn("frag mich bei diesem Schritt nach dem Beitrittscode dieses Scopes und sag, wofür du ihn brauchst.", dtext)
+        self.assertIn("Gib ihn nur über die Umgebungsvariable WDS_JOIN_CODE der Shell weiter, in der der Test läuft", dtext)
+        self.assertIn("Schreibe ihn nie in die App, die README, ein Testskript, eine Kommandozeile, CLAUDE.md oder AGENTS.md.", dtext)
+        self.assertIn("dann lösche ich diesen Tresor danach.", dtext)
+
+    def test_prompt_for_open_enrollment_needs_no_join_code(self):
+        a = self.staff(lang_header="en")
+        scope = self.make_scope(a, name="Demo", enrollment="open")
+        text = pre(self.page(a, scope), "prompt")
+        self.assertIn("create one yourself: this scope needs no join code.", text)
+        self.assertNotIn("ask me for the join code", text)
+        snippet = pre(self.page(a, scope), "claude-md")
+        self.assertNotIn("join code", snippet)  # an open scope has no code to protect: the snippet does not talk about one
+        a.post(f"/scopes/{scope}/enrollment", {"enrollment": "closed"})
+        self.assertNotIn("join code", pre(self.page(a, scope), "claude-md"))
+
     def test_limits_follow_the_scope(self):
         a = self.staff(lang_header="en")
         scope = self.make_scope(a)
@@ -70,7 +100,8 @@ class PromptWithoutSandbox(DashCase):
         scope = self.make_scope(a, name="Demo", enrollment="open", hibp="")
         text = pre(self.page(a, scope), "prompt")
         self.assertIn("Ich baue oder portiere eine Web-App", text)
-        self.assertIn("Wiederherstellungsschlüssel", text)
+        self.assertIn("- Deutsch: Die Daten sind Ende-zu-Ende-verschlüsselt; die Fakultät verwahrt für Notfälle einen Wiederherstellungsschlüssel.", text)
+        self.assertIn("- Englisch: Data is end-to-end encrypted; the faculty holds a recovery key for emergencies.", text)
         self.assertIn(f"- Scope-ID: {scope}", text)
         self.assertIn("- Anlegen von Tresoren: offen: jede Person mit der App kann einen Tresor anlegen (Höchstzahl 50)", text)
         self.assertIn("- Prüfung auf Datenlecks: aus (https://api.pwnedpasswords.com aus connect-src entfernen)", text)
@@ -86,8 +117,11 @@ class PromptWithoutSandbox(DashCase):
             page = self.page(a, scope)
             snippet = pre(page, "claude-md")
             self.assertTrue(snippet.startswith("## Data storage: WIAI Datastore\n"))
-            self.assertIn(f"scope {scope}. Data is end-to-end encrypted;", snippet)
-            self.assertIn("the faculty holds a recovery key for emergencies. Privacy texts of this app must say so.", snippet)
+            self.assertIn(f"scope {scope}.", snippet)
+            self.assertIn('  en: "Data is end-to-end encrypted; the faculty holds a recovery key for emergencies."', snippet)
+            self.assertIn('  de: "Die Daten sind Ende-zu-Ende-verschlüsselt; die Fakultät verwahrt für Notfälle einen Wiederherstellungsschlüssel."', snippet)
+            self.assertIn("- The join code of this scope is a secret of the staff. Never write it into the app, the README, tests, scripts, CLAUDE.md or AGENTS.md.", snippet)
+            self.assertIn("only through the environment variable WDS_JOIN_CODE of the shell that runs the test", snippet)
             self.assertIn("read https://wiai.uni-bamberg.de/datastore/llms.txt and follow it.", snippet)
             self.assertIn("run wds-verify, it prints them.", snippet)
             self.assertIn("(https://github.com/UBA-PSI/wiai-datastore)", snippet)
@@ -135,6 +169,7 @@ class PromptWithSandbox(DashCase):
         text = pre(page, "prompt")
         self.assertIn("For end-to-end test runs use wds-verify --target sandbox (or --sandbox-copy). Never write the sandbox scope ID", text)
         self.assertIn(f"{SID} into the app file: data there is deleted every night.", text)
+        self.assertIn("(the deletion path of a migration: the sandbox never deletes old data)", text)
         snippet = pre(page, "claude-md")
         self.assertIn(f"- Never write the sandbox scope ID {SID} into this app; test with wds-verify --target sandbox.", snippet)
         de = self.browser(lang_header="de")

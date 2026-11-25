@@ -5,12 +5,13 @@ import { tmpdir } from 'node:os';
 import { join, basename, dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
-import { randomBytes } from 'node:crypto';
 import { ROOT, MockUnavailable } from './python.mjs';
 import { Canaries, findIn } from './canary.mjs';
 import { DATASTORE_HOST, scanHtml } from './static-checks.mjs';
 import { instrument } from './page-instrument.mjs';
 import { RE_SCOPE, sriOfFile, rewriteScopes } from './targets.mjs';
+import { CANARY_PLACEHOLDER, MIGRATION_TEST_GLOBAL } from './config.mjs';
+import { dialog, chooseCreate, submitCreate, submitUnlock, confirmSheet, formError, newPassphrase } from './drive-library.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const L = '(?<![\\p{L}\\p{N}])', R_ = '(?![\\p{L}\\p{N}])';
@@ -30,11 +31,16 @@ async function loadPlaywright() {
 
 function hostOf(url) { try { return new URL(url).host; } catch (e) { return ''; } }
 
-// Search every collected place for canaries. sinks: [{sink, where, data}] -> Map(sink -> hits)
-function leakFindings(sinks, canaries) {
+// Search every collected place for canaries. sinks: [{sink, where, data, place?, backup?}] -> Map(sink -> hits). The values of a seed are in the
+// old app's storage by design (seedPlaces: place -> its size in bytes after the seed steps; a place that grew holds something new, so it is
+// searched) and in a backup download of the old data (a JSON file: s.backup); anywhere else (a new key, a request, any other download) they
+// are a finding like every other canary.
+function leakFindings(sinks, canaries, seedPlaces = new Map()) {
   const bySink = new Map();
   for (const s of sinks) {
-    const hit = canaries.scan(s.data);
+    const size = typeof s.data === 'string' ? Buffer.byteLength(s.data) : s.data.length;
+    const only = (c) => !(c.seed && ((s.sink === 'download' && s.backup) || (s.place && seedPlaces.has(s.place) && size <= seedPlaces.get(s.place))));
+    const hit = canaries.scan(s.data, only);
     if (!hit) continue;
     if (!bySink.has(s.sink)) bySink.set(s.sink, []);
     bySink.get(s.sink).push({ where: s.where, canary: hit.item, enc: hit.needle.enc });
@@ -61,9 +67,11 @@ const whyHidden = (el) => {
   return null;
 };
 
-// config: { locale, steps, afterReload } of wds-verify.json; target: { name: 'mock' } or { name: 'sandbox', scopeId, serviceOrigin?, libraryFile? }.
+// config: { locale, steps, afterReload, seed } of wds-verify.json; target: { name: 'mock' } or { name: 'sandbox', scopeId, serviceOrigin?, libraryFile? };
+// opts: { headed, waitMs, locale, migrationDelete } (migrationDelete: set window.__WDS_MIGRATION_TEST__ so that a migration deletes the old data in the sandbox too).
 export async function dynamicChecks({ appPath, html, config = {}, library, target = { name: 'mock' }, opts = {} }) {
-  const steps = config.steps || [], afterReload = config.afterReload || [];
+  const steps = config.steps || [], afterReload = config.afterReload || [], seed = config.seed || null;
+  const seedPath = seed ? resolve(dirname(appPath), seed.page) : null;
   const sb = target.name === 'sandbox';
   const findings = [];
   const add = (id, level, title, detail) => findings.push({ id, level, title, detail: detail || '' });
@@ -111,12 +119,13 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
     writeFileSync(pagePath, pageHtml);
 
     const canaries = new Canaries();
-    const passphrase = 'wdsv-' + randomBytes(5).toString('hex') + '-' + randomBytes(5).toString('hex') + '-' + randomBytes(5).toString('hex');
+    const passphrase = newPassphrase();
     canaries.add('the vault passphrase', 'secret', passphrase);
 
     browser = await pw.chromium.launch({ headless: !opts.headed });
     const locale = opts.locale || config.locale || 'en-US';
     info.locale = locale;
+    if (seed) info.migrationDelete = !!opts.migrationDelete;
     const context = await browser.newContext({ locale, acceptDownloads: true, viewport: { width: 1200, height: 900 }, serviceWorkers: 'block' });
     const page = await context.newPage();
 
@@ -139,6 +148,9 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
       else if (rec.kind === 'error') storeErrors.push(rec);
     });
     await context.addInitScript(instrument);
+    // The migration test: the recipe of the docs keeps the old data in the sandbox (it is wiped tonight); this global, set before any script
+    // of the page runs, tells it that the data of this throw-away browser may go, so that its deletion path runs in the sandbox as well.
+    if (seed && opts.migrationDelete && sb) await context.addInitScript((name) => { window[name] = true; try { Object.defineProperty(navigator, 'webdriver', { get: () => true, configurable: true }); } catch (e) { /* already true in an automated browser */ } }, MIGRATION_TEST_GLOBAL);
     context.on('request', (r) => {
       pending.add(r); touch();
       let body = null; try { body = r.postDataBuffer(); } catch (e) { /* none */ }
@@ -202,7 +214,7 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
     // ---- helpers that drive the page ----
     // The library's dialogs are driven by their stable attributes (data-wds-view on the dialog, data-wds on every control), so the
     // run works in every language. Only the app's own buttons are found by their text (and by data-wds-verify="save").
-    const dlg = () => page.locator('[data-wds-view]').last();
+    const dlg = () => dialog(page);
     const ctl = (d, name) => d.locator('[data-wds="' + name + '"]');
     const present = async (d, name) => (await ctl(d, name).first().isVisible().catch(() => false));
     const label = { banner: undefined, bar: undefined };   // the sandbox label: undefined (not looked at), 'visible', 'hidden', 'absent'
@@ -226,14 +238,11 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
         case 'unlock': {
           if (info.vaultCreated) {
             // a second visit (after the reload): the vault exists, unlock it with the passphrase
-            const id = ctl(d, 'access-id-input');
-            if (info.accessId && !(await id.inputValue().catch(() => '')).trim()) await id.fill(info.accessId).catch(() => {});
-            await ctl(d, 'passphrase').fill(passphrase, { timeout: 5000 });
-            await ctl(d, 'unlock-submit').click({ timeout: 5000 });
+            await submitUnlock(d, { accessId: info.accessId, passphrase });
             await sleep(300);
             return true;
           }
-          await ctl(d, 'to-create').click({ timeout: 5000 });
+          await chooseCreate(d);
           return true;
         }
         case 'create': {
@@ -242,15 +251,12 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
             await ctl(d, 'close').click({ timeout: 3000 }).catch(() => {});
             return true;
           }
-          await ctl(d, 'passphrase').fill(passphrase, { timeout: 5000 });
-          await ctl(d, 'passphrase-repeat').fill(passphrase, { timeout: 5000 });
-          await ctl(d, 'create-submit').click({ timeout: 5000 });
+          await submitCreate(d, { passphrase });
           const waitStart = Date.now();
           for (;;) {
             const v = await d.getAttribute('data-wds-view', { timeout: 2000 }).catch(() => null);
             if (v === 'sheet') break;
-            const err = ((await ctl(d, 'form-error').first().innerText().catch(() => '')) || '').trim()
-              || (await d.locator('[aria-invalid="true"]').count().catch(() => 0) ? 'a field was marked invalid' : '');
+            const err = await formError(d);
             if (err) {
               note('creating the vault failed: ' + err);
               createFailures++;
@@ -266,10 +272,7 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
           return true;
         }
         case 'sheet': {
-          info.accessId = ((await ctl(d, 'access-id').first().innerText().catch(() => '')) || '').trim() || info.accessId;
-          await ctl(d, 'sheet-confirm').check({ timeout: 5000 }).catch(() => {});
-          await ctl(d, 'sheet-continue').click({ timeout: 5000 });
-          await d.waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {});
+          info.accessId = (await confirmSheet(page)) || info.accessId;
           return true;
         }
         case 'notice': {
@@ -307,7 +310,7 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
         await sleep(100);
       }
     }
-    async function fillFields(round) {
+    async function fillFields(round, onlyEmpty = false) {
       const handles = await page.$$('input, textarea, [contenteditable=""], [contenteditable="true"]');
       let typed = 0, count = 0, hidden = 0;
       for (const h of handles) {
@@ -332,7 +335,7 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
           if (fixed && d.empty) await h.fill(fixed).catch(() => {});
           continue;
         }
-        if (round > 1 && !d.empty) continue; // second round: only fields the app emptied again (e.g. after "Add")
+        if ((round > 1 || onlyEmpty) && !d.empty) continue; // second round: only fields the app emptied again (e.g. after "Add")
         const c = canaries.make(d.type + ' "' + d.label + '"', kind || 'text');
         c.round = round;   // round 2 fills fields that the app emptied again: a second item
         try {
@@ -384,34 +387,38 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
 
     // The steps of wds-verify.json (steps, afterReload). Failures become findings; ids/titles say which list the step is in.
     const stepCount = { click: 0, fill: 0, upload: 0, wait: 0, select: 0, press: 0, download: 0 };
+    const seedCount = { click: 0, fill: 0, upload: 0, wait: 0, select: 0, press: 0, download: 0 };
     let uploads = 0;
     const requestedDownloads = [];
-    async function runSteps(list, listName) {
+    async function runSteps(list, listName, afterEach) {
       const tag = listName === 'steps' ? '' : listName + ' ';
+      const cnt = listName === 'seed' ? seedCount : stepCount;
+      const round = listName === 'steps' ? 'steps' : listName === 'seed' ? 'seed' : 'afterReload';
+      const flag = (c) => { if (listName === 'seed') c.seed = true; return c; };   // the seed's values are searched for like all others, but they live in the old app's storage by design
       for (let i = 0; i < list.length; i++) {
         const s = list[i];
         const id = (listName === 'steps' ? 'step-' : listName + '-step-') + (i + 1), title = 'wds-verify.json ' + tag + 'step ' + (i + 1);
         try {
           if (s.click) {
-            stepCount.click++; clickTimes.push(Date.now());
+            cnt.click++; clickTimes.push(Date.now());
             const loc = page.locator(s.click).first();
             const txt = await loc.evaluate((el) => ((el.tagName === 'INPUT' ? el.value : el.innerText || el.textContent) || '').trim().replace(/\s+/g, ' '), undefined, { timeout: 5000 }).catch(() => '');
-            if (txt) pressed.add(txt);
+            if (txt && listName !== 'seed') pressed.add(txt);
             await loc.click({ timeout: 5000 }); await settle();
           }
           else if (s.upload) {
-            stepCount.upload++;
+            cnt.upload++;
             let payload;
             if (s.upload.length === 2) {
               payload = resolve(dirname(appPath), s.upload[1]);
               if (!existsSync(payload)) throw new Error('no such file: ' + s.upload[1]);
               const fname = basename(payload);
-              if (fname.length >= 8) canaries.add('wds-verify.json upload file name ' + fname, 'text', fname);
+              if (fname.length >= 8) flag(canaries.add('wds-verify.json upload file name ' + fname, 'text', fname));
             } else {
               const tg = canaries.nonce + 'u' + (++uploads);
               const name = 'wdsfile-' + tg + '.png', marker = 'WDSCANARY-FILE-' + tg;
-              canaries.add('the name of the generated upload file', 'text', name);
-              canaries.add('the bytes of the generated upload file', 'text', marker);
+              flag(canaries.add('the name of the generated upload file', 'text', name));
+              flag(canaries.add('the bytes of the generated upload file', 'text', marker));
               payload = { name, mimeType: 'image/png', buffer: Buffer.concat([PNG_1X1, Buffer.from(marker)]) };
             }
             clickTimes.push(Date.now());
@@ -419,17 +426,25 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
             await settle();
           }
           else if (s.fill) {
-            stepCount.fill++; if (listName === 'steps') info.stepFills++;
-            await page.locator(s.fill[0]).first().fill(s.fill[1], { timeout: 5000 });
+            cnt.fill++; if (listName === 'steps') info.stepFills++;
+            // {canary} in the text becomes a generated unique token (so that a seed or a repeated run never meets an old value by chance)
+            let text = s.fill[1], token = null;
+            if (text.includes(CANARY_PLACEHOLDER)) { token = canaries.token(); text = text.split(CANARY_PLACEHOLDER).join(token); }
+            if (listName === 'afterReload') {
+              // The tool also reads the values of input fields after the reload: a text that was typed before the reload would be "visible again" because the tool typed it again.
+              const clash = canaries.items.find((c) => c.kind !== 'secret' && c.round !== undefined && c.round !== 'afterReload' && text.includes(c.find || c.value));
+              if (clash) throw new Error('its text contains a value that was typed before the reload (' + (clash.selector || clash.label) + '), so the tool would see it again without the app reading anything back. Use another text or the {canary} placeholder');
+            }
+            await page.locator(s.fill[0]).first().fill(text, { timeout: 5000 });
             await page.locator(s.fill[0]).first().evaluate((el) => { el.dispatchEvent(new Event('change', { bubbles: true })); }).catch(() => {});
-            if (s.fill[1].length >= 6) { const c = canaries.add('wds-verify.json fill ' + s.fill[0], 'text', s.fill[1]); c.round = listName === 'steps' ? 'steps' : 'afterReload'; }
-            else add(id, 'warn', title, 'The text "' + s.fill[1] + '" is shorter than 6 characters; it cannot be searched for. Use a longer unique text.');
+            if (text.length >= 6) { const c = flag(canaries.add('wds-verify.json ' + tag + 'fill ' + s.fill[0], 'text', text, token)); c.round = round; c.selector = s.fill[0]; c.find = token || text; }
+            else add(id, 'warn', title, 'The text "' + text + '" is shorter than 6 characters; it cannot be searched for. Use a longer unique text.');
             await settle();
           }
-          else if (s.select) { stepCount.select++; clickTimes.push(Date.now()); await page.locator(s.select[0]).first().selectOption(s.select[1], { timeout: 5000 }); await settle(); }
-          else if (s.press) { stepCount.press++; clickTimes.push(Date.now()); await page.locator(s.press[0]).first().press(s.press[1], { timeout: 5000 }); await settle(); }
+          else if (s.select) { cnt.select++; clickTimes.push(Date.now()); await page.locator(s.select[0]).first().selectOption(s.select[1], { timeout: 5000 }); await settle(); }
+          else if (s.press) { cnt.press++; clickTimes.push(Date.now()); await page.locator(s.press[0]).first().press(s.press[1], { timeout: 5000 }); await settle(); }
           else if (s.download) {
-            stepCount.download++; clickTimes.push(Date.now());
+            cnt.download++; clickTimes.push(Date.now());
             expectDownload++;
             try {
               const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 8000 }), page.locator(s.download).first().click({ timeout: 5000, noWaitAfter: true })]);
@@ -437,8 +452,9 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
             } finally { expectDownload--; }
             await settle();
           }
-          else if (s.wait !== undefined) { stepCount.wait++; await sleep(s.wait); }
+          else if (s.wait !== undefined) { cnt.wait++; await sleep(s.wait); }
         } catch (e) { add(id, 'fail', title, JSON.stringify(s) + ' failed: ' + String(e.message).split('\n')[0]); }
+        if (afterEach) await afterEach();
       }
     }
     // Everything of the page that a person can read after a reload: the rendered text (a tab that is not open shows nothing) and the
@@ -449,10 +465,93 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
       return parts.join('\n');
     }).catch(() => '');
 
+    // The browser storage of the page's origin (file:// pages share it): localStorage, sessionStorage, cookie, IndexedDB (flattened to text), Cache Storage.
+    const readState = () => page.evaluate(async () => {
+      const out = { local: [], session: [], idb: [], idbCount: [], caches: [], cookie: '', name: window.name };
+      try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); out.local.push([k, localStorage.getItem(k)]); } } catch (e) { /* denied */ }
+      try { for (let i = 0; i < sessionStorage.length; i++) { const k = sessionStorage.key(i); out.session.push([k, sessionStorage.getItem(k)]); } } catch (e) { /* denied */ }
+      try { out.cookie = document.cookie; } catch (e) { /* denied */ }
+      // Flatten without JSON escaping, so that bytes stay bytes (JSON would write the NUL bytes of a UTF-16 text as an escape sequence).
+      // Blobs and Files are read too (IndexedDB keeps what an app stored as a Blob).
+      const ser = async (v, depth = 0) => {
+        if (v === null || v === undefined || depth > 8) return '';
+        if (typeof Blob !== 'undefined' && v instanceof Blob) v = await v.arrayBuffer();
+        if (v instanceof ArrayBuffer) v = new Uint8Array(v);
+        if (ArrayBuffer.isView(v)) { const u = new Uint8Array(v.buffer, v.byteOffset, v.byteLength); let s = ''; for (let i = 0; i < u.length; i += 8192) s += String.fromCharCode.apply(null, u.subarray(i, i + 8192)); return s; }
+        if (typeof v === 'object') return (await Promise.all(Object.keys(v).map(async (k) => k + '\n' + await ser(v[k], depth + 1)))).join('\n');
+        return String(v);
+      };
+      try {
+        const dbs = indexedDB.databases ? await indexedDB.databases() : [];
+        for (const d of dbs) {
+          const db = await new Promise((res, rej) => { const q = indexedDB.open(d.name); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
+          for (const name of Array.from(db.objectStoreNames)) {
+            const store = db.transaction(name, 'readonly').objectStore(name);
+            const rows = await new Promise((res, rej) => { const q = store.getAll(); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
+            const keys = await new Promise((res, rej) => { const q = store.getAllKeys(); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
+            out.idb.push([d.name + '/' + name, await ser({ keys, rows })]);
+            out.idbCount.push([d.name + '/' + name, rows.length]);
+          }
+          db.close();
+        }
+      } catch (e) { /* no IndexedDB */ }
+      try { if (self.caches) for (const n of await caches.keys()) { const c = await caches.open(n); out.caches.push([n, (await c.keys()).map((r) => r.url).join('\n')]); } } catch (e) { /* none */ }
+      return out;
+    }).catch(() => ({ local: [], session: [], idb: [], idbCount: [], caches: [], cookie: '', name: '' }));
+
     // ---- run ----
     let libLoaded = false, reload = null;
+    const texts = [];   // what a person can read at several points of the run; every check of "is it visible" takes the union (an app with tabs shows one view at a time)
+    const snapshot = async () => { texts.push(await pageText()); };
+    // What the app SHOWED as text (not in a field) before the reload, at several points: after the tool's first round and after every step. A value that the app never showed
+    // (an invalid duration, an entry without a project: the app rightly rejected it) is not expected back after the reload.
+    const shownBefore = [];
+    const snapshotBefore = async () => { shownBefore.push(await page.evaluate(() => (document.body ? document.body.innerText : '')).catch(() => '')); };
+    let reloadMark = null;   // index in texts of the first screen after the reload and the unlock (null: the page was not reloaded)
+    // Is this value of the seed on a screen after the reload? Then it came out of the vault: nothing before the reload counts (a prompt that lists the old titles, the old storage shown directly).
+    const shownAfter = (c) => reloadMark !== null && texts.slice(reloadMark).some((t) => t.includes(c.find || c.value));
+    // Where the values of the seed are in a browser storage state: [{place, canary}]; place is "sink|where", as in the leak search below.
+    const seedPlaces = new Map();   // the places the old app's data was in after the seed steps (its storage, by design): place -> size in bytes
+    let oldBaseline = null;         // everything the old app had stored after the seed steps: { local: [keys], idb: ["db/store" with rows] }; the migration must leave none of it
+    const seedHolders = (st) => {
+      const out = [];
+      const look = (sink, where, data) => { const buf = Buffer.from(data, 'utf8'); for (const c of canaries.items) if (c.seed && findIn(buf, c.needles)) out.push({ place: sink + '|' + where, canary: c, size: buf.length }); };
+      for (const [k, v] of st.local) look('localStorage', 'key ' + k.slice(0, 60), k + '\n' + v);
+      for (const [k, v] of st.session) look('sessionStorage', 'key ' + k.slice(0, 60), k + '\n' + v);
+      for (const [k, v] of st.idb) look('IndexedDB', k, v);
+      return out;
+    };
+    // Open the old app (a local-only version of the page, or any page that fills the old storage), run the seed steps, and leave. The same
+    // browser context then opens the app: file:// pages share localStorage and IndexedDB, so the app finds the old data like a returning user would.
+    async function runSeed() {
+      try {
+        await page.goto(pathToFileURL(seedPath).href, { waitUntil: 'load', timeout: 30000 });
+        await sleep(300);
+        await settle();
+        const fileInputs = await page.locator('input[type=file]').count().catch(() => 0);
+        await runSteps(seed.steps, 'seed');
+        await sleep(1200);   // a debounced save of the old app
+        await settle();
+        if (fileInputs && !seedCount.upload) add('seed-files', 'warn', 'Seed: files of the old app', 'The old page (' + seed.page + ') has ' + fileInputs + ' file input(s) and the seed has no upload step, so no attachment is seeded and the migration of files (the store that holds them, the Blobs) is not exercised. Add {"upload": ["selector"]} to the seed steps.');
+      } catch (e) {
+        add('seed', 'fail', 'Seed: the old app', 'The old app (' + seed.page + ') could not be opened or driven: ' + String(e.message).split('\n')[0]);
+        return;
+      }
+      const state0 = await readState();
+      const holders = seedHolders(state0);
+      holders.forEach((h) => seedPlaces.set(h.place, h.size));
+      oldBaseline = { local: state0.local.map(([k]) => k), idb: state0.idbCount.filter(([, n]) => n > 0).map(([k]) => k) };
+      const stored = [...new Set(holders.map((h) => h.canary))];
+      info.seed = { page: seed.page, steps: seed.steps.length, stored: stored.length, typed: canaries.items.filter((c) => c.seed).length };
+      if (!stored.length) add('seed', 'fail', 'Seed: the old app', 'After the seed steps the browser storage (localStorage, IndexedDB) holds none of the ' + info.seed.typed + ' typed value(s) of ' + seed.page + ', so the migration has nothing to migrate. Do the steps save the entry (a click on its save button)? Does the old app store anything in this browser at all?');
+      else add('seed', 'pass', 'Seed: the old app', seed.page + ' stored ' + stored.length + ' of ' + info.seed.typed + ' typed value(s) in the browser storage (' + seed.steps.length + ' step(s)).');
+      // what the old page did (requests, console, downloads) is not the app's business
+      for (const list of [requests, externals, navigations, consoleLines, pageErrors, downloads, sockets, apiErrors, netLog, storeLog, exportWindows, storeErrors]) list.length = 0;
+      pending.clear(); touch();
+    }
     try {
     info.clicks = []; info.fields = 0; info.steps = steps.length; info.stepFills = 0; info.stepCount = null;
+    if (seed) await runSeed();
     const fileUrl = pathToFileURL(pagePath).href;
     await page.goto(fileUrl, { waitUntil: 'load', timeout: 30000 });
     libLoaded = await page.evaluate(() => typeof WDS === 'object' && typeof WDS.connect === 'function').catch(() => false);
@@ -464,10 +563,14 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
       await settle();                                   // an app that unlocks at start shows the dialog now
       info.fileInputs = await page.locator('input[type=file]').count().catch(() => 0);
       info.appDialogs = await page.locator('dialog, [role=dialog], [aria-modal="true"]').evaluateAll((els) => els.filter((e) => !e.closest('.wds-root')).length).catch(() => 0);
-      info.fields += await fillFields(1);
+      // With a seed the steps come first: the migration prompt of the app is open right after unlocking, and the first steps answer it. The
+      // tool then types only into fields that are still empty (it would overwrite what the steps typed).
+      if (seed) { await runSteps(steps, 'steps', async () => { await sleep(120); await snapshotBefore(); }); await snapshot(); }
+      info.fields += await fillFields(1, !!seed);
       const clicked = new Set();
       await clickSaves(clicked);
-      await runSteps(steps, 'steps');
+      await sleep(300); await snapshotBefore();
+      if (!seed) await runSteps(steps, 'steps', async () => { await sleep(120); await snapshotBefore(); });
       info.stepCount = stepCount;
       // second round: fields that the app emptied (e.g. after "Add") and fields that appeared, then the buttons again
       await sleep(1100);
@@ -476,11 +579,13 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
       if (more) { await clickSaves(new Set()); }
       await sleep(opts.waitMs !== undefined ? opts.waitMs : 2800);       // debounced autosave
       await settle(900);
+      await snapshotBefore();
       // what the tool did not press
       const rest = [];
       for (const b of await appButtons()) if (b.visible && b.text && !pressed.has(b.text) && !rest.includes(b.text)) rest.push(b.text);
       info.unpressed = rest.slice(0, 12);
       if (sb) label.bar = await probeLabel('sandbox-bar');
+      await snapshot();
 
       // reload: the data must come back (the page's own screen, after unlocking with the passphrase)
       const writtenBefore = requests.filter((r) => r.method === 'PUT' && /\/vaults\/[^/]+\/records\/[^/]+$/.test(new URL(r.url).pathname)).length;
@@ -488,18 +593,29 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
         await page.reload({ waitUntil: 'load', timeout: 30000 }).catch((e) => note('reload failed: ' + String(e.message).split('\n')[0]));
         await sleep(400);
         await settle(900);
-        await runSteps(afterReload, 'afterReload');
+        const mark = reloadMark = texts.length;   // from here on: what is visible after the reload
+        await snapshot();
+        await runSteps(afterReload, 'afterReload', async () => { await sleep(150); await snapshot(); });   // after every step: one view after the other
         await sleep(300);
         await settle(900);
-        const text = await pageText();
+        await snapshot();
+        // Expected back: the values the app showed as text before the reload and the values it wrote to the store (the page instrumentation sees what set, autosave and the
+        // collections are given, so a value that only ever sat in an autosaved field counts). A value that the app neither showed nor wrote (it rejected it: an invalid duration,
+        // an entry without a project) has nothing to come back and is left out. When there is no such value at all, every value counts.
+        const typedValues = canaries.items.filter((x) => x.round !== undefined && x.round !== 'afterReload' && x.round !== 'seed');
+        const wasShown = (c) => shownBefore.some((t) => t.includes(c.find || c.value));
+        const wasWritten = (c) => storeLog.some((w) => (w.op === 'set' || w.op === 'autosave' || w.op === 'cwrite') && findIn(w.value || '', c.needles));
+        const expectedBack = (c) => wasShown(c) || wasWritten(c);
+        const expected = typedValues.some(expectedBack) ? typedValues.filter(expectedBack) : typedValues;
+        if (process.env.WDS_VERIFY_DEBUG) console.error('not expected back after the reload: ' + typedValues.filter((c) => !expected.includes(c)).map((c) => c.label + ' = ' + (c.find || c.value)).join(' | '));
         const groups = new Map();
-        for (const c of canaries.items.filter((x) => x.round !== undefined && x.round !== 'afterReload')) {
+        for (const c of expected) {
           const g = groups.get(c.round) || { total: 0, shown: 0 };
-          g.total++; if (text.includes(c.value)) g.shown++;
+          g.total++; if (texts.slice(mark).some((t) => t.includes(c.find || c.value))) g.shown++;
           groups.set(c.round, g);
         }
         const total = [...groups.values()].reduce((n, g) => n + g.total, 0), shown = [...groups.values()].reduce((n, g) => n + g.shown, 0);
-        reload = { total, shown, everyRound: [...groups.values()].every((g) => g.shown > 0), hasAfter: afterReload.length > 0 };
+        reload = { total, shown, notShown: typedValues.length - expected.length, everyRound: [...groups.values()].every((g) => g.shown > 0), hasAfter: afterReload.length > 0 };
       }
     }
     } catch (e) {
@@ -508,35 +624,14 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
 
     // ---- collect ----
     const finalUrl = page.url();
-    const state = await page.evaluate(async () => {
-      const out = { local: [], session: [], idb: [], caches: [], cookie: '', name: window.name };
-      try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); out.local.push([k, localStorage.getItem(k)]); } } catch (e) { /* denied */ }
-      try { for (let i = 0; i < sessionStorage.length; i++) { const k = sessionStorage.key(i); out.session.push([k, sessionStorage.getItem(k)]); } } catch (e) { /* denied */ }
-      try { out.cookie = document.cookie; } catch (e) { /* denied */ }
-      // Flatten without JSON escaping, so that bytes stay bytes (JSON would write the NUL bytes of a UTF-16 text as an escape sequence).
-      const ser = (v, depth = 0) => {
-        if (v === null || v === undefined || depth > 8) return '';
-        if (v instanceof ArrayBuffer) v = new Uint8Array(v);
-        if (ArrayBuffer.isView(v)) { const u = new Uint8Array(v.buffer, v.byteOffset, v.byteLength); let s = ''; for (let i = 0; i < u.length; i += 8192) s += String.fromCharCode.apply(null, u.subarray(i, i + 8192)); return s; }
-        if (typeof v === 'object') return Object.keys(v).map((k) => k + '\n' + ser(v[k], depth + 1)).join('\n');
-        return String(v);
-      };
-      try {
-        const dbs = indexedDB.databases ? await indexedDB.databases() : [];
-        for (const d of dbs) {
-          const db = await new Promise((res, rej) => { const q = indexedDB.open(d.name); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
-          for (const name of Array.from(db.objectStoreNames)) {
-            const store = db.transaction(name, 'readonly').objectStore(name);
-            const rows = await new Promise((res, rej) => { const q = store.getAll(); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
-            const keys = await new Promise((res, rej) => { const q = store.getAllKeys(); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
-            out.idb.push([d.name + '/' + name, ser({ keys, rows })]);
-          }
-          db.close();
-        }
-      } catch (e) { /* no IndexedDB */ }
-      try { if (self.caches) for (const n of await caches.keys()) { const c = await caches.open(n); out.caches.push([n, (await c.keys()).map((r) => r.url).join('\n')]); } } catch (e) { /* none */ }
-      return out;
-    }).catch(() => ({ local: [], session: [], idb: [], caches: [], cookie: '', name: '' }));
+    const state = await readState();
+    const seedLeft = seed ? [...new Set(seedHolders(state).filter((h) => seedPlaces.has(h.place)).map((h) => h.canary))] : [];   // what of the old app's data is still where it was
+    // everything the old app had filled after the seed steps (not only the places that hold a typed value) that is still there; seed.keep names what may stay
+    const keepNames = new Set((seed && seed.keep) || []);
+    const leftover = seed && oldBaseline ? [
+      ...state.local.map(([k]) => k).filter((k) => oldBaseline.local.includes(k) && !keepNames.has(k)).map((k) => 'localStorage key "' + k.slice(0, 60) + '"'),
+      ...state.idbCount.filter(([k, n]) => n > 0 && oldBaseline.idb.includes(k) && !keepNames.has(k)).map(([k, n]) => 'IndexedDB store ' + k + ' (' + n + ' row' + (n === 1 ? '' : 's') + ')'),
+    ] : [];
     const cookies = await context.cookies().catch(() => []);
     await Promise.all(downloads.map((d) => d.done));
     // server side: the database of the mock after a checkpoint (the write-ahead log holds the latest pages)
@@ -549,6 +644,11 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
         try { await st.deleteVault(); return 'deleted'; } catch (e) { return 'failed: ' + String((e && e.message) || e).slice(0, 100); }
       }).catch(() => 'none');
       info.sandboxCleanup = res;
+    }
+    // The test global is set by the tool (--migration-delete, sandbox) and by nobody else: a page that sets it itself deletes old data in the sandbox on its own.
+    if (libLoaded && !(opts.migrationDelete && sb)) {
+      const own = await page.evaluate((n) => window[n] === true || window[n] === 'true' || window[n] === 1, MIGRATION_TEST_GLOBAL).catch(() => false);
+      if (own) add('migration-test-global', 'fail', 'The page sets the migration test global', 'window.' + MIGRATION_TEST_GLOBAL + ' was true although this run did not set it: the app (or something it loads) sets it itself. Only wds-verify --migration-delete sets it, in a throw-away browser; in a real browser it makes a migration in the sandbox delete the old data, which is gone with the sandbox vault tonight. Remove the assignment.');
     }
     await page.close({ runBeforeUnload: false }).catch(() => {});
 
@@ -575,9 +675,9 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
     }
     for (const u of [...navigations, finalUrl]) { sinks.push({ sink: 'page URL', where: u.slice(0, 120), data: u }); sinks.push({ sink: 'page URL', where: u.slice(0, 120), data: decodeURIComponentSafe(u) }); }
     for (const s of sockets) for (const f of s.frames) sinks.push({ sink: 'WebSocket frame', where: s.url, data: typeof f === 'string' ? f : Buffer.from(f) });
-    for (const [k, v] of state.local) sinks.push({ sink: 'localStorage', where: 'key ' + k.slice(0, 60), data: k + '\n' + v });
-    for (const [k, v] of state.session) sinks.push({ sink: 'sessionStorage', where: 'key ' + k.slice(0, 60), data: k + '\n' + v });
-    for (const [k, v] of state.idb) sinks.push({ sink: 'IndexedDB', where: k, data: v });
+    for (const [k, v] of state.local) sinks.push({ sink: 'localStorage', where: 'key ' + k.slice(0, 60), place: 'localStorage|key ' + k.slice(0, 60), data: k + '\n' + v });
+    for (const [k, v] of state.session) sinks.push({ sink: 'sessionStorage', where: 'key ' + k.slice(0, 60), place: 'sessionStorage|key ' + k.slice(0, 60), data: k + '\n' + v });
+    for (const [k, v] of state.idb) sinks.push({ sink: 'IndexedDB', where: k, place: 'IndexedDB|' + k, data: v });
     for (const [k, v] of state.caches) sinks.push({ sink: 'Cache Storage', where: k, data: v });
     sinks.push({ sink: 'cookie', where: 'document.cookie', data: state.cookie });
     for (const c of cookies) sinks.push({ sink: 'cookie', where: c.name, data: c.name + '=' + c.value });
@@ -585,9 +685,10 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
     for (const l of consoleLines) sinks.push({ sink: 'console output', where: l.slice(0, 80), data: l });
     const inExport = (t) => exportWindows.some((w) => t >= w.start - 500 && t <= w.end + 4000);
     const dlOutside = downloads.filter((d) => !inExport(d.t) && !d.requested);
-    for (const d of dlOutside) sinks.push({ sink: 'download', where: d.filename, data: Buffer.concat([Buffer.from(d.filename + '\n'), d.bytes || Buffer.alloc(0)]) });
+    const isJson = (b) => { try { const v = JSON.parse((b || Buffer.alloc(0)).toString('utf8')); return !!v && typeof v === 'object'; } catch (e) { return false; } };
+    for (const d of dlOutside) sinks.push({ sink: 'download', where: d.filename, backup: isJson(d.bytes), data: Buffer.concat([Buffer.from(d.filename + '\n'), d.bytes || Buffer.alloc(0)]) });
     for (const f of dbFiles) sinks.push({ sink: 'server database (mock)', where: f.f, data: f.data });
-    const leaks = leakFindings(sinks, canaries);
+    const leaks = leakFindings(sinks, canaries, seedPlaces);
     const SINK_ORDER = ['request URL', 'request header', 'request body', 'page URL', 'WebSocket frame', 'localStorage', 'sessionStorage', 'IndexedDB', 'Cache Storage', 'cookie', 'window.name', 'console output', 'download', 'server database (mock)'];
     for (const sink of SINK_ORDER.filter((s) => !(sb && s === 'server database (mock)'))) {
       const hits = leaks.get(sink);
@@ -603,7 +704,7 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
     }
     if (downloads.length) {
       const names = downloads.map((d) => d.filename + (inExport(d.t) ? ' (exportAll, not checked)' : d.requested ? ' (user-requested download, contains canaries: ' + (canaries.scan(d.bytes || Buffer.alloc(0)) ? 'yes' : 'no') + ')' : ''));
-      add('downloads', 'info', 'Downloads', names.join(', '));
+      add('downloads', 'info', 'Downloads', names.join(', ') + (seed && downloads.some((d) => !d.requested && !inExport(d.t) && isJson(d.bytes) && canaries.scan(d.bytes || Buffer.alloc(0), (c) => c.seed)) ? ' (a JSON download that holds the seeded old data: the backup the migration offers before it deletes; not counted as a leak)' : ''));
     }
 
     if (sb) add('database-not-inspected', 'info', 'Server database', 'Server database not inspected (sandbox target); the requests the app and the library sent were still searched for canaries.');
@@ -615,10 +716,39 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
       const puts = requests.filter((r) => r.method === 'PUT' && /\/vaults\/[^/]+\/records\/[^/]+$/.test(new URL(r.url).pathname));
       info.recordWrites = puts.length;
       if (info.vaultCreated && !puts.length) add('saved', 'fail', 'Data was saved', 'The test could not make the app store anything (no record write reached the datastore), so the leak checks prove little. Add steps in wds-verify.json next to the app, e.g. {"steps": [{"fill": ["#name", "some unique text"]}, {"click": "#save"}]}, or mark the app\'s save button with data-wds-verify="save".');
-      else if (puts.length) add('saved', 'pass', 'Data was saved', puts.length + ' encrypted record write(s) reached the mock; the canaries were searched for in all of them.');
+      else if (puts.length) add('saved', 'pass', 'Data was saved', puts.length + ' encrypted record write(s) reached the ' + (sb ? 'service' : 'mock') + '; the canaries were searched for in all of them.');
       if (info.fields === 0 && info.stepFills === 0) add('fields', 'warn', 'Input fields', 'No visible input, textarea or contenteditable element was found to type into.');
       else add('fields', 'info', 'Input fields', (info.fields + info.stepFills) + ' field(s) filled with canaries (' + info.fields + ' found by the tool, ' + info.stepFills + ' by wds-verify.json steps); buttons pressed by the tool: '
         + (info.clicks.length ? info.clicks.map((c) => '"' + c + '"').join(', ') : 'none') + '.');
+      if (seed && info.seed) {
+        const fills = canaries.items.filter((c) => c.seed && c.round === 'seed');
+        const shown = fills.filter(shownAfter), missing = fills.filter((c) => !shownAfter(c));
+        // Only what a person sees after reloading the page and unlocking the vault counts: it was read from the vault then. A prompt of the migration that names the old values, or a screen that lists the old storage
+        // directly, shows them before the copy (or without one) and proves nothing.
+        const looked = 'the start view after reloading and unlocking and every view an afterReload step opens were looked at';
+        let ran = true;   // did the migration visibly run? (the deletion is judged hard only then)
+        if (!fills.length) add('migration-visible', 'info', 'Migration: old data visible', 'The seed has no fill step, so there is no text to look for in the app (the uploaded file is only searched for in the requests).');
+        else if (!info.vaultCreated) { ran = false; add('migration-visible', 'fail', 'Migration: old data visible', 'No vault was created, so the app could not migrate anything.'); }
+        else if (reloadMark === null) { ran = false; add('migration-visible', 'fail', 'Migration: old data visible', 'The app wrote no record to the vault, so none of the ' + fills.length + ' value(s) typed into the old app can have come from it. The tool looks for them after reloading the page and unlocking the vault. Did the migration run? Its prompt is answered by steps (for example {"click": "#migrate-yes"}).'); }
+        else if (!shown.length) { ran = false; add('migration-visible', 'fail', 'Migration: old data visible', 'None of the ' + fills.length + ' value(s) typed into the old app is visible in the app after the migration, reloading and unlocking (' + looked + '). Did the migration run and copy them? Its prompt is answered by steps (for example {"click": "#migrate-yes"}); or the app shows the data in a view that no step opens.'); }
+        else if (missing.length) { ran = shown.length > 0; add('migration-visible', 'warn', 'Migration: old data visible', shown.length + ' of ' + fills.length + ' value(s) typed into the old app are visible in the app after the migration, reloading and unlocking; missing: ' + missing.map((c) => c.selector).join(', ') + ' (' + looked + ').'); }
+        else add('migration-visible', 'pass', 'Migration: old data visible', 'All ' + fills.length + ' value(s) typed into the old app are visible in the app after the migration, reloading and unlocking (' + looked + ').'
+          + (sb && !opts.migrationDelete ? ' The sandbox keeps the old data, so a prompt or a screen that lists the old storage cannot be told from the copy here; --migration-delete (the old data is gone afterwards) proves that the values came from the vault.' : ''));
+        const seedHits = [...leaks.values()].flat().filter((h) => h.canary.seed);
+        if (seedHits.length) add('migration-encrypted', 'fail', 'Migration: old data only encrypted', seedHits.slice(0, 5).map((h) => '- ' + h.canary.label + ' appears (' + h.enc + ') in ' + h.where).join('\n'));
+        else if (info.recordWrites) add('migration-encrypted', 'pass', 'Migration: old data only encrypted', 'None of the seeded values appears in a request, a URL, the console or a ' + (sb ? 'cookie' : 'cookie or the server\'s database') + '; the ' + info.recordWrites + ' record write(s) carry them encrypted.');
+        const baseline = info.seed.stored, left = seedLeft.length;
+        const expectDeleted = !sb || !!opts.migrationDelete;
+        const wasDeleted = baseline > 0 && left === 0 && !leftover.length;
+        if (!baseline) { /* nothing was seeded: the seed finding says so */ }
+        else if (!expectDeleted) {
+          if (left === baseline) add('migration-old-data', 'pass', 'Migration: old data kept in the sandbox', 'The old data is still in the old app\'s storage after the migration, as it must be while the vault is the sandbox (the sandbox is wiped tonight). Run again with --migration-delete to exercise the deletion.');
+          else add('migration-old-data', 'fail', 'Migration: old data kept in the sandbox', (wasDeleted ? 'The old data was deleted' : 'Part of the old data (' + (baseline - left) + ' of ' + baseline + ' value(s)) was deleted') + ' although the vault is the sandbox: the copy there is gone tonight, the old data would be lost for good. The migration must not delete while store.status().sandbox is true.');
+        } else if (wasDeleted) add('migration-old-data', 'pass', 'Migration: old data deleted', 'The old data is gone from the old app\'s storage after the migration (all ' + (oldBaseline.local.length + oldBaseline.idb.length) + ' key(s) and store(s) that the old app had filled)' + (sb ? ' (the run set window.' + MIGRATION_TEST_GLOBAL + ', so the sandbox run deleted like production)' : '') + '.');
+        else add('migration-old-data', ran ? 'fail' : 'warn', 'Migration: old data deleted', (leftover.length ? 'Still in the browser after the migration: ' + leftover.slice(0, 8).join('; ') + (leftover.length > 8 ? '; ...' : '') + '. ' : '')
+          + (left ? left + ' of ' + baseline + ' value(s) typed into the old app are among them. ' : '') + 'The migration should have deleted all of it' + (sb ? ' (the run set window.' + MIGRATION_TEST_GLOBAL + '; the migration must honour it: it keeps only when the vault is the sandbox and the global is not set)' : '') + '. Did it forget a store or key in OLD (the store that holds attachments, a settings key)? '
+          + (ran ? 'Data that has to stay can be named in "seed": { "keep": [...] } of wds-verify.json.' : 'The migration did not visibly run (see "old data visible"), which is why.'));
+      }
       if (steps.length && info.stepCount) {
         const c = info.stepCount;
         const extra = ['select', 'press', 'download'].filter((k) => c[k]).map((k) => ', ' + c[k] + ' ' + k).join('');
@@ -626,16 +756,19 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
       }
       if (info.fileInputs && !(info.stepCount && info.stepCount.upload)) add('file-inputs', 'info', 'File inputs', 'The page has ' + info.fileInputs + ' file input(s) that the tool does not use. Add an {"upload": ["selector"]} step to wds-verify.json to test the upload path (a generated image whose name and bytes are searched for like canaries).');
     }
+    if (seed && opts.migrationDelete && !sb) add('migration-delete', 'info', '--migration-delete', 'The flag has no effect on the mock target: the mock is no sandbox, so the migration deletes the old data as in production anyway.');
     const notes = sb ? unexpected.filter((u) => !/pw\.hibp\.unavailable/.test(u)) : unexpected;
     if (notes.length) add('driver', 'warn', 'Test run notes', notes.slice(0, 6).join('\n'));
     if (info.locale !== 'en-US') add('locale', 'info', 'Browser language', 'The browser ran with the locale ' + info.locale + ' (the library dialogs follow it unless the app sets one).');
 
     // data after a reload: the page must read its data back after unlocking
     if (reload && reload.total) {
-      const { total, shown, everyRound, hasAfter } = reload;
-      if (shown > 0 && everyRound) add('reload', 'pass', 'Data after reload', shown + ' of ' + total + ' typed value(s) are visible again after reloading and unlocking (at least one of every round).');
+      const { total, shown, everyRound, hasAfter, notShown } = reload;
+      const skipped = notShown ? ' ' + notShown + ' other typed value(s) were neither shown as text nor written to the store before the reload (the app rejected them or keeps them nowhere) and are not counted.' : '';
+      if (shown > 0 && everyRound) add('reload', 'pass', 'Data after reload', shown + ' of ' + total + ' typed value(s) are visible again after reloading and unlocking' + (hasAfter ? ' (the start view and every afterReload step looked at, together)' : '') + ' (at least one of every round).' + skipped);
       else if (shown === 0 && !hasAfter) add('reload', 'fail', 'Data after reload', 'Records were written, but after reloading the page and unlocking the vault none of the ' + total + ' typed values is visible. The app does not read its data back when it starts (call store.get / list after unlock and show the values), or it shows the data only in a view that the tool does not open: then add "afterReload" steps to wds-verify.json, for example {"afterReload": [{"click": "#tab-notes"}]}.');
-      else add('reload', 'warn', 'Data after reload', shown + ' of ' + total + ' typed values are visible after reload; an app with tabs needs afterReload steps in wds-verify.json (they open the views that show the data).');
+      else add('reload', 'warn', 'Data after reload', shown + ' of ' + total + ' typed value(s) are visible after the reload' + (hasAfter ? ' and the afterReload steps' : '') + '; the others are in views the tool does not open. '
+        + (hasAfter ? 'Add afterReload steps that open the missing views (the tool looks after every step and takes all of them together).' : 'An app with tabs needs afterReload steps in wds-verify.json (they open the views that show the data; the tool looks after every step).') + skipped);
     }
     info.reload = reload;
 

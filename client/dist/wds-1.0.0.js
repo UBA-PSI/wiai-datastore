@@ -2021,7 +2021,7 @@ return module.exports.argon2id;
  *   await store.get(name, {fresh?}) / getMany(names, {concurrency, fresh}) / set(name, value, {mime?}) / list(prefix) / getBlob(name)
  *   await store.remove(name)                      // -> {name, deleted, resolution: deleted|absent|mine|theirs, value?}
  *   store.autosave(name, () => state, { delayMs, onStatus, onError, onReplaced })   // -> {changed(), flush(), stop(), status, error, stopReason, name}
- *   const notes = store.collection("notes/", { meta?, index? })   // load, refresh, items, has, get, getAll, add(value, {id, meta, mime, created}), set, remove, autosave, flush, rebuild, onChange
+ *   const notes = store.collection("notes/", { meta?, index? })   // load, refresh, items, has, get, getAll, add(value, {id, meta, mime, created}), set(id, value, {meta, mime, created}), remove, autosave, flush, rebuild, onChange
  *   store.onConflict(c => c.keepMine() | c.keepTheirs() | c.merge(fn) | await c.ask())   // global
  *   store.onConflict("notes/", handler) / store.onConflict("settings", handler)           // prefix or exact name -> unsubscribe
  *   await store.history(name) / restore(name, version) / showHistory(name, { title })
@@ -4718,12 +4718,15 @@ return module.exports.argon2id;
         });
         return out;
       };
+      function checkCreated(o) {
+        if (o.created !== undefined && !Number.isFinite(o.created)) throw new Core.UsageError('collection: created must be a number (milliseconds since 1970), it only decides the order of the list');
+      }
       col.add = async function (value, o) {
         o = o || {};
         var id = o.id !== undefined ? checkId(o.id) : newId(), name = prefix + id;
         checkAppName(name);
         var meta = metaFor(value, id, o.meta);
-        if (o.created !== undefined && !Number.isFinite(o.created)) throw new Core.UsageError('collection: created must be a number (milliseconds since 1970), it only decides the order of the list');
+        checkCreated(o);
         var info = {};
         var res = await setRecord(name, value, { mime: o.mime }, info);
         await afterEntity(id, res, info, meta, value, o.meta, undefined, o.created);
@@ -4733,10 +4736,11 @@ return module.exports.argon2id;
         o = o || {};
         checkId(id); var name = prefix + id;
         var meta = metaFor(value, id, o.meta);
+        checkCreated(o);
         await softLoad();
         var info = {};
         var res = await setRecord(name, value, { mime: o.mime }, info);
-        await afterEntity(id, res, info, meta, value, o.meta);
+        await afterEntity(id, res, info, meta, value, o.meta, undefined, o.created);   // created only counts for an entry the index does not have yet
         return res;
       };
       col.remove = async function (id) {

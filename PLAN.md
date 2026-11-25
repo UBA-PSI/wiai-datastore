@@ -550,7 +550,7 @@ await store.remove("settings");             // {name, deleted, resolution: "dele
 const as = store.autosave("draft", () => state, { delayMs: 2000, onStatus, onError, onReplaced });
 as.changed(); await as.flush(); as.stop(); as.status; as.error; as.stopReason;   // idle | dirty | saving | saved | error | replaced | stopped
 const notes = store.collection("notes/", { meta: v => ({ title: v.title }) });   // §8.7
-await notes.load(); notes.items(); await notes.add(value); await notes.set(id, value); await notes.remove(id);
+await notes.load(); notes.items(); await notes.add(value, { id, created }); await notes.set(id, value, { created }); await notes.remove(id);
 notes.autosave(id, getState); notes.onChange(fn); await notes.refresh(); await notes.getAll(); await notes.flush(); await notes.rebuild();
 store.onConflict(c => c.keepMine() /* | c.keepTheirs() | c.merge((mine, theirs) => value) | await c.ask() */);  // global
 store.onConflict("notes/", handler); store.onConflict("settings", handler);       // prefix or exact name; returns unsubscribe
@@ -664,7 +664,9 @@ interferes nor receives passphrases).
 - **Stable attributes.** Every button, input, select, textarea and summary inside `.wds-root` carries `data-wds="<name>"`, every
   dialog `data-wds-view="<view>"` (updated on every view switch), toasts `data-wds-toast="<key>"`. The names are listed in the header
   of `wds-ui.js`; a unit test walks every view and fails on a control without a name. Tests and wds-verify click these, so they work
-  in any locale.
+  in any locale. integration.md (section 12, "Driving the library's dialogs") lists every view with its controls (a test compares the table with
+  the header of `wds-ui.js`), and `tools/lib/drive-library.mjs` (`createVault`, `unlock`, `confirmSheet` and the single steps) drives them for
+  wds-verify and for a developer's own Playwright tests; it reads a join code only from `WDS_JOIN_CODE`, never prints it, and no error contains it.
 - **Sandbox** (§17): when the scope document has a `sandbox` field, every dialog title is prefixed ("Sandbox: " / "Testumgebung: "),
   every dialog shows a banner and, after unlocking, a fixed bar at the top of the page says that the data is deleted tonight (both with
   inline `!important` styles; while the bar is shown the library adds its height to the inline `padding-top` of `<html>` and restores
@@ -717,6 +719,8 @@ coalesced; each call resolves when a write with its operation succeeded, and eve
 An `upsert` that carries a record version lower than the entry's `v` is ignored (a delayed update of an older save never replaces the newer title of another device). No client clock decides anything and there are no
 tombstones: an id removed on one device stays removed, additions of other devices stay. Reads and writes of the index take turns, so a slow read cannot overwrite a newer base.
 
+**`set` is an upsert.** `set(id, value, { meta, mime, created })` writes `prefix + id` and queues an `upsert`: an id the index does not have gets an entry (`created`, by default now, decides only its place in the list), an id it has keeps its `c` and gets the new meta. `add` with an id that exists is a conflict like any write to a record the page has not read; `set` on a record that exists but that the page has not read (it is only in the index) is the same conflict (§8.2), never a silent overwrite. `created` exists on both so that an import or a migration keeps the old order (round E; before, `set` ignored it).
+
 **Write order and repair.** `add` and `set` write the entity first and then queue the index operation; `remove` deletes the entity first. A failure between the two leaves a record without index entry (an
 "orphan"): it is queued whenever the page lists the vault anyway, `rebuild()` repairs explicitly (downloads every item, one request each), and `flush()` resolves when everything queued is on the server.
 Meta changes from autosave are written at most every 10 s. Cost: every index write re-encrypts and uploads the whole index (keep meta small, a few thousand items per collection at most).
@@ -750,8 +754,21 @@ The alternative that was rejected: last-writer-wins with timestamps and tombston
      record holding the data of several items or the whole app state (suggest splitting); steps can also select files (`upload`);
    - the library's dialogs are driven by their `data-wds` / `data-wds-view` attributes (§8.5), so any locale works (`--locale`,
      `locale` in `wds-verify.json`); the app's own buttons are found by text or by `data-wds-verify="save"`;
-   - after the save round the tool reloads the page, unlocks again and checks that the typed values are visible (`afterReload`
-     steps open tabs or lists first);
+   - after the save round the tool reloads the page, unlocks again and checks that the typed values are visible. It looks right after the
+     unlock and after **every** `afterReload` step (tabs, lists) and takes the union. Expected back are only values the app showed as text
+     before the reload or wrote to the store (`set`, `autosave`, the collections' `add`, `set`, `autosave`), so rejected input is left out
+     and an autosaved editor that is never read back is a warning; an `afterReload` fill that repeats a typed value fails (the tool reads
+     field values and would find its own text);
+   - **migration test** (`seed` in `wds-verify.json`: the old local-only page and steps that fill it): the tool runs the old page in the same
+     browser context, snapshots the whole old storage, then runs the new app. Findings: "Seed: the old app" (the old storage holds the values),
+     "Migration: old data visible" (only screens after reload and unlock count; nothing written fails), "Migration: old data only encrypted"
+     (seed values only in a JSON backup download or in an old place that did not grow), "Migration: old data deleted / kept in the sandbox"
+     (mock: everything gone, leftovers fail when the migration visibly ran, `seed.keep` names what may stay; sandbox: kept). `--migration-delete`
+     sets `window.__WDS_MIGRATION_TEST__` and `navigator.webdriver` so that the recipe deletes in the sandbox too (the recipe checks both); an
+     app that assigns the global fails statically, a page that has it set without the flag fails dynamically. The sandbox run cannot prove that
+     visible values came from the vault (the old data stays there); the mock or `--migration-delete` run is that proof;
+   - "Library version released" (version not frozen) is information, not a warning; "Privacy sentence" (info) says when neither the page nor
+     the README next to it has the official sentence;
    - scope check: the app's own scope document is fetched; breach check on without `https://api.pwnedpasswords.com` in
      `connect-src` fails; the report prints enrollment, breach check and limits;
    - output: Markdown report for the app's README, ending with a "Not tested" section.
@@ -767,12 +784,12 @@ The alternative that was rejected: last-writer-wins with timestamps and tombston
    mock's database files. The run fails when it cannot make the app store anything (no vault, no record write): a pass must
    mean that data was written and searched. Library hashes come from `client/dist/hashes.json` (`--hashes` overrides).
    The published hashes are read from `https://wiai.uni-bamberg.de/datastore/client/hashes.json` first and from the clone's
-   `client/dist/hashes.json` otherwise. `wds-verify.json` is an object `{ locale?, steps?, afterReload? }` with the steps `click`,
-   `fill`, `select`, `press`, `upload`, `download` (a download the person asks for is reported, not counted as a leak) and `wait`.
+   `client/dist/hashes.json` otherwise. `wds-verify.json` is an object `{ locale?, steps?, afterReload?, seed? }` (`seed: { page, steps, keep? }`) with the steps `click`,
+   `fill` (a `{canary}` in the text becomes a generated token), `select`, `press`, `upload`, `download` (a download the person asks for is reported, not counted as a leak) and `wait`.
    Targets: `--target auto|mock|sandbox` (auto: mock when Python is there, else the sandbox if reachable, else static checks only);
    `--sandbox-copy <out.html>` writes a copy whose `WDS.connect` scope is the sandbox, for trying the app by hand. Static checks also fail
    the sandbox ID in an app file and CSS that hides library elements, and warn about deleting old local data without a sandbox guard.
-   Further options: `--strict` (warnings fail), `--out`, `--json`, `--script-tag` (prints the current tag and CSP).
+   Further options: `--migration-delete` (needs a `seed`; no effect on the mock, which deletes anyway; the report names it in its first lines), `--strict` (warnings fail), `--out`, `--json`, `--script-tag` (prints the current tag and CSP).
    Exit codes: 0 passed, 1 a check failed, 2 the tool could not run, 3 the sandbox is unavailable (not an app finding). Tests: `scripts/test-tools.sh` with a correct and a
    deliberately leaky example app (`tools/test-apps/good`, `bad`).
 
@@ -800,14 +817,14 @@ per-response CSP nonce). Built in `server/wds_server/dashboard.py` (routes and p
   every scope.
 
 **Prompt for Claude** (dashboard language) carries everything the developer's Claude needs and nothing it has to ask for: what the
-service is and the escrow sentence to repeat in privacy texts; the scope's settings with an "as of" date (scope ID, enrollment with the
+service is and the official privacy sentence to repeat word for word, in English and German ("Data is end-to-end encrypted; the faculty holds a recovery key for emergencies." / "Die Daten sind Ende-zu-Ende-verschlüsselt; die Fakultät verwahrt für Notfälle einen Wiederherstellungsschlüssel."; `PRIVACY_EN` / `PRIVACY_DE` in `prompt.py`; llms.txt, integration.md and users.*.md carry the same words, `test_docs.py` checks; a text in a third language uses the English one, a longer text may follow); the scope's settings with an "as of" date (scope ID, enrollment with the
 warning never to put a join code into the app, breach check mapped to "keep / remove `https://api.pwnedpasswords.com` in
 `connect-src`", limits); the pointer to `llms.txt`; the exact script tag; the `WDS.connect` line and the forbidden patterns; a porting
-line ("If the app already exists, follow 'Porting an existing app'"); when the server has a sandbox, how to test against it and never to
+line ("If the app already exists, follow 'Porting an existing app'"); for a test vault in the real scope (the deletion path of a migration) how to get the join code (ask the person when the step is reached and say what it is for; pass it only through the environment variable `WDS_JOIN_CODE`, which `tools/lib/drive-library.mjs` reads; never into a file or a command line; tell the person when the test ran so that they delete the test vault in the dashboard; the prompt does not name the dashboard, the hint texts next to the prompt and the join code tell the staff member that Claude may ask) or, for an open or closed scope, what to do instead; when the server has a sandbox, how to test against it and never to
 write its ID into the app; running wds-verify from the public repository; and the instruction to add the **CLAUDE.md / AGENTS.md
 section** (English, shown separately too) to the app's folder, keeping existing content. That section keeps the rules in the app's
 repository for later sessions: the scope, read `llms.txt` before changing storage, keep the tag, no own storage or crypto, never the
-sandbox ID, current settings via wds-verify, rerun wds-verify after every change. Each sentence is one line, so the copy box wraps cleanly.
+sandbox ID, the join-code rule (only for a scope with the enrollment "join code"), current settings via wds-verify, rerun wds-verify after every change. Each sentence is one line, so the copy box wraps cleanly.
 
 Built as follows:
 
@@ -944,9 +961,13 @@ filled in at request time). Their public source is the repository https://github
   records, `autosave` for editors); conflicts; members and sharing; export; errors; forbidden patterns (own crypto, own
   `fetch` to the datastore, CDN scripts, app data in browser storage, custom passphrase dialogs); running `wds-verify` and
   putting the report into the README and writing `wds-verify.json`; what to tell users; a complete minimal example app; deployment of the app;
-  "Porting an existing app" (inventory, mapping, a tested one-time migration of old IndexedDB/localStorage data that the owner runs once
-  and that deletes the old data only after a verified copy, never in the sandbox); collections, two devices, files, conflicts in code,
-  lock and unlock again; the sandbox. Downloads the person asks for and forms with `preventDefault` under `form-action 'none'` are
+  "Porting an existing app" (inventory, mapping, an import of the old export file that keeps ids and rewrites references, a tested one-time
+  migration of old IndexedDB/localStorage data that the owner runs once and that deletes the old data only after a verified copy, never in the
+  sandbox unless wds-verify sets its test global; round E added Blobs and key-value stores, a fingerprint over the bytes of every Blob,
+  settings that are applied exactly once (`migratedSettings()`, `settingsDone()`, `fillGaps` before the app writes defaults), the tag per
+  browser with a decision table for `tagged: false`, a strict `toNewRecords`, ids with `-` and `%`, the same-origin condition, and the test
+  of Step 6 with a `seed` block and a test vault in the developer's own scope); collections, two devices, files, conflicts in code,
+  lock and unlock again; the sandbox; the table of the library's dialogs and `drive-library.mjs` for own end-to-end tests. Downloads the person asks for and forms with `preventDefault` under `form-action 'none'` are
   allowed and say so. The code recipes run in three engines against the real server (`examples/docs-recipes.spec.mjs`).
 - `/datastore/docs/users.de.md` and `users.en.md` – for app users: passphrase, access ID, key file and recovery code, new
   device, sharing, conflicts, what the faculty can see (escrow), recovery, export.
@@ -983,12 +1004,14 @@ filled in at request time). Their public source is the repository https://github
 | 5 | Dashboard (login.psi, de/en), audit, privacy page | Built, tested and deployed; login.psi application registered; first real login pending. |
 | 6 | Escrow tools `wds-keygen`, `wds-recover`; operator documentation | Done; production escrow keys generated and pinned. |
 | 7 | Infrastructure (§12) | VM, proxy, deployment role and script done; monitoring open. |
-| 8 | Documentation, example app, pilot with one real app | Documentation, export page and example app done and deployed; porting trial of an existing app done (round D); public sandbox deployed; pilot with one real app open. |
+| 8 | Documentation, example app, pilot with one real app | Documentation, export page and example app done and deployed; porting trial of an existing app done (round D); clean-room porting trial done (round E); public sandbox deployed; pilot with one real app open. |
 
 ## 16. Open points
 
-- **Clean-room porting trial:** a Claude without the repository checkout ports the local-only app using only the public
-  docs and the sandbox.
+- **A clean-room trial with an unrelated app.** The clean-room trial of round E (a Claude with only the public documents and repository)
+  passed wds-verify in the public sandbox, but its app was the predecessor of `examples/zeit-notizen`, so it copied the example and wrote only
+  scope, privacy text, import and migration. It says little about how far the documents carry an app that does not derive from the example
+  (conflict UI, roles, lock were not thought through anew). Next trial: an app with its own structure.
 - **Deferred from round D:** `wds-verify --role read` (testing an app as a read-only member) and a Claude skill/plugin for the service.
 - **Freeze library version 1.0.0** (`node client/build.mjs --freeze`) before the first app embeds its tag; every later
   change then needs a new version number.

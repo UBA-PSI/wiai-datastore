@@ -344,7 +344,7 @@
 <div id="toast" role="status" aria-live="polite"></div>
 
 
-<script src="https://wiai.uni-bamberg.de/datastore/client/wds-1.0.0.js" integrity="sha384-EKOlMMIEnDNee/2BRzXKP7d5U5ECJfzkJTuQ0FFdy+9+U0XnS6RQ7qFm5jdTKH/I" crossorigin="anonymous"
+<script src="https://wiai.uni-bamberg.de/datastore/client/wds-1.0.0.js" integrity="sha384-0chMIOOURpY8WD83X6US8o2hr2LtE5f9IAqz9OtBfXG3bDMeJa4dvx++OyqoEu0F" crossorigin="anonymous"
         onerror="document.body.textContent='Storage service unreachable. Check your connection and reload this page.'"></script>
 <script>
 "use strict";
@@ -380,7 +380,7 @@
       err_conflict: "Die Daten wurden inzwischen anderswo geändert.", err_unknown: "Unbekannter Fehler.",
       read_only_hint: "Sie haben nur Lesezugriff auf diesen Tresor.",
       shared_hint: "Wenn andere Personen mit Ihnen arbeiten, erscheinen deren neue Einträge, sobald Sie zu diesem Fenster zurückkehren, oder nach „Neu laden“.",
-      privacy: "Ihre Daten werden Ende-zu-Ende-verschlüsselt auf einem Server der Fakultät WIAI (Universität Bamberg) gespeichert. Ihre Passphrase kennt der Server nicht; sie lässt sich nicht zurücksetzen. Ausnahme mit Absicht: Die Fakultät verwahrt einen Wiederherstellungsschlüssel. Mit Ihrem Wiederherstellungscode kann sie nach einem dokumentierten Verfahren den Zugang wiederherstellen.",
+      privacy: "Die Daten sind Ende-zu-Ende-verschlüsselt; die Fakultät verwahrt für Notfälle einen Wiederherstellungsschlüssel. Sie liegen auf einem Server der Fakultät WIAI (Universität Bamberg). Ihre Passphrase kennt der Server nicht; sie lässt sich nicht zurücksetzen. Mit Ihrem Wiederherstellungscode kann die Fakultät nach einem dokumentierten Verfahren den Zugang wiederherstellen.",
       privacy_link: "Mehr dazu",
       locked_user: "Der Tresor ist gesperrt. Alle Daten wurden aus dem Speicher dieser Seite entfernt.",
       locked_revoked: "Ihr Zugang wurde entzogen. Die Daten wurden aus dem Speicher dieser Seite entfernt.",
@@ -445,7 +445,7 @@
       err_conflict: "The data was changed elsewhere in the meantime.", err_unknown: "Unknown error.",
       read_only_hint: "You have read-only access to this vault.",
       shared_hint: "If other people work with you, their new entries appear when you return to this window, or after \"Reload\".",
-      privacy: "Your data is stored end-to-end encrypted on a server of the WIAI faculty (University of Bamberg). The server does not know your passphrase; it cannot be reset. Exception by design: the faculty keeps a recovery key. With your recovery code the faculty can restore access after a documented procedure.",
+      privacy: "Data is end-to-end encrypted; the faculty holds a recovery key for emergencies. It is stored on a server of the WIAI faculty (University of Bamberg). The server does not know your passphrase; it cannot be reset. With your recovery code the faculty can restore access after a documented procedure.",
       privacy_link: "Details",
       locked_user: "The vault is locked. All data was removed from the memory of this page.",
       locked_revoked: "Your access was revoked. The data was removed from the memory of this page.",
@@ -689,13 +689,19 @@
   function labelOf(name) {
     var m = String(name).match(/^(notes|time|projects|files)\/(.+)$/);
     if (m) {
-      var id = m[2].split("/")[0].split("-")[0];
+      var id = m[2];     // the whole id: ids of data ported from an older app look like "ab12cd34-j12" or "ab12cd34-soldapp%3Aavatar", so an id is never cut at "-" or "%"
       if (m[1] === "notes") { var n = S.notes.get(id); return t("lb_note", { t: n && n.title ? n.title : t("untitled") }); }
       if (m[1] === "time") { var e = S.time.get(id); return t("lb_time", { t: e ? e.date + " " + (e.desc || projectName(e.project)) : id }); }
       if (m[1] === "projects") { var p = S.projects.get(id); return t("lb_project", { t: p ? p.name : id }); }
-      return t("lb_file", { t: m[2].replace(/^[0-9a-f]{8}-/, "") });
+      return t("lb_file", { t: fileNameOf(id) });
     }
     return /\.index$/.test(name) ? t("lb_index") : name === "settings" ? t("lb_settings") : name === "timer" ? t("lb_timer") : name;
+  }
+
+  // The name of an attachment for the dialogs: from its list entry when the list is loaded, else the id without the random start of an id made here.
+  function fileNameOf(id) {
+    try { var f = filesCol.items().filter(function (it) { return it.id === id; })[0]; if (f && f.meta && f.meta.name) return f.meta.name; } catch (e) { /* the list is not loaded (yet) or the vault is locked */ }
+    return id.replace(/^[0-9a-f]{8}-/, "");
   }
 
   function mapOf(col) { return col === projectsCol ? S.projects : col === timeCol ? S.time : S.notes; }

@@ -3,7 +3,9 @@
 > End-to-end encrypted key-value storage for single-file web apps (one HTML file, opened from file://, a local web
 > server or Electron). Run by the Faculty of Information Systems and Applied Computer Sciences (WIAI), University of
 > Bamberg. The server stores only ciphertext, with one exception by design: the faculty holds a recovery (escrow) key
-> and can restore a vault after a documented procedure. Say so wherever you describe the privacy of an app.
+> and can restore a vault after a documented procedure. Wherever you describe the privacy of an app, use this sentence word for word (a text in another language uses the English one):
+> en: Data is end-to-end encrypted; the faculty holds a recovery key for emergencies.
+> de: Die Daten sind Ende-zu-Ende-verschlüsselt; die Fakultät verwahrt für Notfälle einen Wiederherstellungsschlüssel.
 
 You are probably the Claude of a developer who wants an app to keep its data in this service, a new app or an existing one. Read
 {{base}}/docs/integration.md first. It has the exact script tag (with the current Subresource Integrity hash), the
@@ -30,7 +32,7 @@ Source code, PROTOCOL.md and the verifier wds-verify (public): {{repo_url}}
    Without Node, follow integration.md, "Without wds-verify". Add a wds-verify.json when inputs are hidden until the user acts, the app has tabs or a file input ("Writing wds-verify.json"). Fix what it reports and put the report into the app's README.
    If you cannot run it, say so in the README. Tell the users what they need (integration.md, section "What to tell users").
 7. Porting an existing app? Read integration.md, section "Porting an existing app", before you change anything. Data that old versions left in IndexedDB or localStorage may be read once, written into the store and deleted
-   (a tested recipe is there); replace "saved locally" texts.
+   (a tested recipe is there); replace "saved locally" texts. Test it with a "seed" block in wds-verify.json (the old app's HTML, steps that type old data) and --migration-delete in the sandbox ("Writing wds-verify.json"). Never write window.__WDS_MIGRATION_TEST__ into the app: only wds-verify sets it. The new app must be opened from the same origin as the old one to find its data.
 8. Conflicts: the library's dialog is the default; decide in code only where a merge helps ("Conflicts in code"). Lock and unlock in one page: register store.onLock and store.onUnlock once ("Lock and unlock again").
 9. Downloads the person explicitly asks for (a CSV, an attachment) are fine, with a note that the file is not encrypted. Never download in the background.
 

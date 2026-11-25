@@ -64,19 +64,24 @@ export class Canaries {
     else value = 'WDSCANARY ' + core + ' äöü&=';
     return this.add(label, kind, value);
   }
-  // A text the developer chose (wds-verify.json fill steps), or a secret such as the passphrase.
-  add(label, kind, value) {
+  // A unique token for the {canary} placeholder of wds-verify.json fill steps (letters and digits only, so every field accepts it).
+  token() { return 'WDSCANARY-' + this.nonce + 'z' + String(++this.counter).padStart(2, '0'); }
+  // A text the developer chose (wds-verify.json fill steps), or a secret such as the passphrase. core: a part of the text that is
+  // searched for on its own as well (the generated token inside a longer text).
+  add(label, kind, value, core) {
     const needles = needlesFor(value);
     // the core token alone, so a leak that cuts the text is still found
     if (kind === 'text' && value.startsWith('WDSCANARY ')) needles.push(...needlesFor(value.split(' ')[1]));
+    if (core && core !== value) needles.push(...needlesFor(core));
     const item = { index: this.items.length, label, kind, value, needles };
     this.items.push(item);
     return item;
   }
-  // First canary found in the haystack: {item, needle} or null.
-  scan(haystack) {
+  // First canary found in the haystack: {item, needle} or null. only: optional predicate; the items it rejects are not searched for.
+  scan(haystack, only) {
     const buf = Buffer.isBuffer(haystack) ? haystack : Buffer.from(String(haystack), 'utf8');
     for (const item of this.items) {
+      if (only && !only(item)) continue;
       const n = findIn(buf, item.needles);
       if (n) return { item, needle: n };
     }

@@ -48,6 +48,8 @@ restored. Apps may show a history of earlier versions.
 
 ## What the faculty can see
 
+In short: **Data is end-to-end encrypted; the faculty holds a recovery key for emergencies.** The details:
+
 - The server stores only encrypted data. It sees which app you use, how many items you have, how large they are, when they
   changed and how many people have access (as anonymous entries). It does not see names, texts or files.
 - Server logs of the web server are switched off for this service. IP addresses are used for rate limiting in memory only.

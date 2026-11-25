@@ -8,7 +8,7 @@ test('the good example app passes, and the run proves that data was saved', { ti
   assert.equal(r.code, 0, JSON.stringify(r.failures) + r.stderr);
   assert.equal(r.parsed.failed, false);
   assert.deepEqual(r.failures, []);
-  assert.deepEqual(r.warnings.map((w) => w.id).filter((id) => id !== 'library-frozen'), []);
+  assert.deepEqual(r.warnings.map((w) => w.id), []);   // "library version released" is info: it is about the library, not the app
   for (const id of ['library-loaded', 'vault', 'saved', 'write-rate', 'leak-request body', 'leak-localStorage', 'leak-IndexedDB', 'leak-console output', 'leak-server database (mock)']) assert.equal(r.find(id).level, 'pass', id);
   assert.match(r.find('saved').detail, /record write/);
   assert.match(r.find('fields').detail, /"Save"/);
