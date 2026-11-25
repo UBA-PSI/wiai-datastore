@@ -1,0 +1,28 @@
+{
+  "locale": "de-DE",
+  "steps": [
+    {"click": "#tab-projects"},
+    {"fill": ["#project-name", "Projekt Canary Kolibri"]},
+    {"click": "#project-add"},
+    {"wait": 1500},
+    {"fill": ["#project-name", "Zweites Projekt Canary Dachs"]},
+    {"press": ["#project-name", "Enter"]},
+    {"wait": 1500},
+    {"click": "#tab-time"},
+    {"fill": ["#entry-duration", "1,5 Stunden"]},
+    {"fill": ["#entry-desc", "Zeiteintrag Canary Pelikan"]},
+    {"click": "#entry-add"},
+    {"wait": 1500},
+    {"click": "#tab-notes"},
+    {"click": "#note-new"},
+    {"fill": ["#note-title", "Notiz Canary Wiesel"]},
+    {"fill": ["#note-tags", "canary-tag-otter, zweiter-tag"]},
+    {"fill": ["#note-text", "Notiztext Canary Biber mit mehreren Woertern"]},
+    {"wait": 3500},
+    {"upload": ["#note-file"]},
+    {"wait": 3000},
+    {"click": "#tab-week"},
+    {"download": "#csv-all"}
+  ],
+  "afterReload": [ {"click": "#tab-notes"} ]
+}

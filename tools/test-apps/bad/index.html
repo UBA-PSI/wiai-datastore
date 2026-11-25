@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'wasm-unsafe-eval' https://wiai.uni-bamberg.de/datastore/client/; style-src 'unsafe-inline'; img-src data: blob:; connect-src https://wiai.uni-bamberg.de/datastore/api/ https://api.pwnedpasswords.com; base-uri 'none'; form-action 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Leaky notes (wds-verify deliberately bad example)</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; max-width: 34rem; margin: 2rem auto; padding: 0 1rem; }
+  label { display: block; margin-top: 1rem; font-weight: 600; }
+  input, textarea { width: 100%; box-sizing: border-box; font: inherit; padding: .4rem; }
+  button { font: inherit; margin-top: .5rem; padding: .35rem .9rem; }
+  li { margin: .25rem 0; }
+  #status { color: #555; font-size: .9rem; }
+</style>
+<script src="https://wiai.uni-bamberg.de/datastore/client/wds-1.0.0.js"
+        integrity="sha384-EKOlMMIEnDNee/2BRzXKP7d5U5ECJfzkJTuQ0FFdy+9+U0XnS6RQ7qFm5jdTKH/I" crossorigin="anonymous"
+        onerror="document.title = 'Storage service unreachable'"></script>
+</head>
+<body>
+<h1>Leaky notes</h1>
+<p>Small example for the WIAI Datastore: a profile (one record), a free-text note (autosave) and a list (one record per item).
+Everything is encrypted in the browser before it is stored.</p>
+
+<label for="owner">Your name</label>
+<input id="owner" type="text" autocomplete="off">
+<button id="save-profile" type="button">Save</button>
+
+<label for="note">Note</label>
+<textarea id="note" rows="4"></textarea>
+<div id="status">Not saved yet</div>
+
+<label for="item">New item</label>
+<input id="item" type="text" autocomplete="off">
+<button id="add-item" type="button">Add</button>
+<ul id="items"></ul>
+
+<script>
+(function () {
+  var store = WDS.connect({ scope: 'wds-verify-demo-k7m2a9' });
+  var $ = function (id) { return document.getElementById(id); };
+  var seq = 0;
+
+  function addToList(text) {
+    var li = document.createElement('li');
+    li.textContent = text;           // textContent, never innerHTML: stored text is data, not markup
+    $('items').appendChild(li);
+  }
+
+  // One autosaved record for the note: saves a moment after the last keystroke, never once per key.
+  var noteSave = store.autosave('note', function () { return $('note').value; }, {
+    delayMs: 1500,
+    onStatus: function (s) { $('status').textContent = s === 'saved' ? 'Saved' : s === 'saving' ? 'Saving...' : s === 'error' ? 'Not saved' : 'Unsaved changes'; },
+  });
+  $('note').addEventListener('input', function () {
+    noteSave.changed();
+    // BAD: a convenience copy of the draft in the clear
+    localStorage.setItem('draft', $('note').value);
+  });
+
+  $('save-profile').addEventListener('click', function () {
+    store.set('profile', { owner: $('owner').value });
+  });
+
+  $('add-item').addEventListener('click', async function () {
+    var text = $('item').value.trim();
+    if (!text) return;
+    seq += 1;
+    // BAD: reports every item to a service of the developer's own (not the datastore)
+    fetch('https://stats.example.org/collect', { method: 'POST', body: JSON.stringify({ item: text }) }).catch(function () {});
+    await store.set('items/' + Date.now().toString(36) + '-' + seq, { text: text });
+    addToList(text);
+    $('item').value = '';
+  });
+
+  async function start() {
+    await store.unlock();                      // dialog: create a vault, unlock, redeem an invite
+    var profile = await store.get('profile');
+    if (profile) $('owner').value = profile.owner || '';
+    var note = await store.get('note');
+    if (typeof note === 'string') $('note').value = note;
+    var items = await store.list('items/');
+    for (var i = 0; i < items.length; i++) { var it = await store.get(items[i].name); if (it) addToList(it.text); }
+  }
+  start();
+  // BAD: talks to the datastore API directly instead of through the library
+  fetch('https://wiai.uni-bamberg.de/datastore/api/v1/scopes/wds-verify-demo-k7m2a9').catch(function () {});
+})();
+</script>
+</body>
+</html>

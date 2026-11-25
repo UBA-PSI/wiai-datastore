@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="{{csp}}">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>WIAI Datastore: Export</title>
+<style>
+  :root { color-scheme: light dark; --fg: #1b1f23; --bg: #fff; --muted: #59636e; --line: #b9c0ca; --accent: #1c58b5; --accent-fg: #fff; --err: #b3261e; --ok: #1b6e3c; }
+  @media (prefers-color-scheme: dark) { :root { --fg: #e9ecf0; --bg: #1d2128; --muted: #a5afbc; --line: #434c59; --accent: #7db0ff; --accent-fg: #0a1a33; --err: #ff9a90; --ok: #78d9a0; } }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 38rem; margin: 0 auto; padding: 1.5rem 1rem 4rem; }
+  h1 { font-size: 1.6rem; line-height: 1.25; margin: 0 0 .5rem; }
+  .lang { text-align: right; margin: 0 0 .5rem; font-size: .9rem; }
+  .lang button { font: inherit; background: none; border: 0; color: var(--accent); cursor: pointer; text-decoration: underline; padding: 0 .25rem; }
+  .field { margin: 1rem 0; }
+  label { display: block; font-weight: 600; margin-bottom: .2rem; }
+  input[type=text] { width: 100%; box-sizing: border-box; font: inherit; padding: .5rem .6rem; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
+  input.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .hint { color: var(--muted); font-size: .9rem; margin: .2rem 0 0; }
+  button.primary { font: inherit; padding: .55rem 1.2rem; border-radius: 6px; border: 0; background: var(--accent); color: var(--accent-fg); cursor: pointer; }
+  button.primary:disabled { opacity: .6; cursor: default; }
+  #msg { margin: 1.25rem 0; min-height: 1.5rem; }
+  #msg.err { color: var(--err); } #msg.ok { color: var(--ok); }
+  details { margin-top: 2rem; color: var(--muted); font-size: .92rem; }
+</style>
+</head>
+<body>
+<main>
+<p class="lang"><button type="button" data-set-lang="en">English</button> | <button type="button" data-set-lang="de">Deutsch</button></p>
+<h1 data-t="title">Export a vault</h1>
+<p data-t="intro">Download everything in your vault, decrypted, as a ZIP file. This works for every app of the WIAI Datastore, also when the app itself is gone. You need your access ID (or key file) and your passphrase. The server only ever sees encrypted data.</p>
+
+<form id="form" novalidate>
+  <div class="field">
+    <label for="keyfile" data-t="keyfile">Key file (optional)</label>
+    <input type="file" id="keyfile" accept=".json,application/json">
+    <p class="hint" data-t="keyfileHint">It fills in the app ID and the access ID. A key file holds no secret.</p>
+  </div>
+  <div class="field">
+    <label for="scope" data-t="scope">App ID</label>
+    <input type="text" id="scope" class="mono" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="notenrechner-k7m2a9">
+    <p class="hint" data-t="scopeHint">On your access sheet in brackets after the app name, for example notenrechner-k7m2a9.</p>
+  </div>
+  <div class="field">
+    <label for="access" data-t="access">Access ID (optional here)</label>
+    <input type="text" id="access" class="mono" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX">
+    <p class="hint" data-t="accessHint">You can also enter it in the next window. You enter your passphrase there, never on this page.</p>
+  </div>
+  <button type="submit" class="primary" id="go" data-t="go">Unlock and export</button>
+</form>
+<p id="msg" role="status" aria-live="polite"></p>
+
+<details>
+  <summary data-t="saveTitle">Keep this page for later</summary>
+  <p data-t="save">Save this page as an HTML file (browser menu, "Save page as"). The saved file works from your disk as well: it loads the library from the faculty server and checks its hash, so you need a connection but no other file. Do not create a new vault here.</p>
+  <p><a href="{{base}}/export/wds-export.html" data-t="download">Download this page as a file</a></p>
+</details>
+</main>
+
+{{script_tag}}
+<script>
+"use strict";
+(function () {
+  var BASE = "{{base}}/";
+  var TEXT = {
+    en: {
+      title: "Export a vault",
+      intro: "Download everything in your vault, decrypted, as a ZIP file. This works for every app of the WIAI Datastore, also when the app itself is gone. You need your access ID (or key file) and your passphrase. The server only ever sees encrypted data.",
+      keyfile: "Key file (optional)", keyfileHint: "It fills in the app ID and the access ID. A key file holds no secret.",
+      scope: "App ID", scopeHint: "On your access sheet in brackets after the app name, for example notenrechner-k7m2a9.",
+      access: "Access ID (optional here)", accessHint: "You can also enter it in the next window. You enter your passphrase there, never on this page.",
+      go: "Unlock and export", saveTitle: "Keep this page for later",
+      save: "Save this page as an HTML file (browser menu, \"Save page as\"). The saved file works from your disk as well: it loads the library from the faculty server and checks its hash, so you need a connection but no other file. Do not create a new vault here.",
+      download: "Download this page as a file",
+      keyRead: "Key file read.", keyBad: "This is not a valid key file.", keyOther: "This key file belongs to a different service.",
+      needScope: "Please enter the app ID (or choose the key file).", badScope: "The app ID looks wrong. It has the form name-xxxxxx.",
+      needLib: "The storage library could not be loaded. Check your connection and reload this page.",
+      working: "Unlocking and exporting. Keep this page open.", done: "Done: {n} items saved as {file}. The files in it are not encrypted; store them carefully.",
+      cancelled: "Cancelled. Nothing was exported.", failed: "The export failed: {m}"
+    },
+    de: {
+      title: "Tresor exportieren",
+      intro: "Laden Sie alles aus Ihrem Tresor entschlüsselt als ZIP-Datei herunter. Das funktioniert für jede App des WIAI Datastore, auch wenn die App selbst nicht mehr existiert. Sie brauchen Ihre Zugangskennung (oder Schlüsseldatei) und Ihre Passphrase. Der Server sieht nur verschlüsselte Daten.",
+      keyfile: "Schlüsseldatei (optional)", keyfileHint: "Sie trägt App-ID und Zugangskennung ein. Eine Schlüsseldatei enthält kein Geheimnis.",
+      scope: "App-ID", scopeHint: "Auf Ihrem Zugangsblatt in Klammern hinter dem App-Namen, zum Beispiel notenrechner-k7m2a9.",
+      access: "Zugangskennung (hier optional)", accessHint: "Sie können sie auch im nächsten Fenster eingeben. Ihre Passphrase geben Sie dort ein, nie auf dieser Seite.",
+      go: "Entsperren und exportieren", saveTitle: "Diese Seite aufbewahren",
+      save: "Speichern Sie diese Seite als HTML-Datei (Browsermenü, \"Seite speichern unter\"). Die gespeicherte Datei funktioniert auch von Ihrer Festplatte: Sie lädt die Bibliothek vom Server der Fakultät und prüft deren Hashwert. Sie brauchen also eine Verbindung, aber keine weitere Datei. Legen Sie hier keinen neuen Tresor an.",
+      download: "Diese Seite als Datei herunterladen",
+      keyRead: "Schlüsseldatei gelesen.", keyBad: "Das ist keine gültige Schlüsseldatei.", keyOther: "Diese Schlüsseldatei gehört zu einem anderen Dienst.",
+      needScope: "Bitte geben Sie die App-ID ein (oder wählen Sie die Schlüsseldatei).", badScope: "Die App-ID sieht falsch aus. Sie hat die Form name-xxxxxx.",
+      needLib: "Die Speicherbibliothek konnte nicht geladen werden. Prüfen Sie Ihre Verbindung und laden Sie die Seite neu.",
+      working: "Entsperren und Exportieren läuft. Lassen Sie diese Seite geöffnet.", done: "Fertig: {n} Datensätze als {file} gespeichert. Die Dateien darin sind nicht verschlüsselt; bewahren Sie sie sorgfältig auf.",
+      cancelled: "Abgebrochen. Es wurde nichts exportiert.", failed: "Der Export ist fehlgeschlagen: {m}"
+    }
+  };
+  var lang = /^de/i.test(navigator.language || "") ? "de" : "en";
+  var $ = function (id) { return document.getElementById(id); };
+  function t(key, params) {
+    var s = TEXT[lang][key] || TEXT.en[key] || key;
+    return s.replace(/\{(\w+)\}/g, function (m, k) { return params && params[k] !== undefined ? params[k] : m; });
+  }
+  function setLang(l) {
+    lang = l;
+    document.documentElement.lang = l;
+    document.documentElement.setAttribute("data-lang", l);
+    document.querySelectorAll("[data-t]").forEach(function (el) { el.textContent = t(el.getAttribute("data-t")); });
+    document.title = "WIAI Datastore: " + t("title");
+  }
+  function say(kind, text) { var m = $("msg"); m.className = kind || ""; m.textContent = text; }
+  document.querySelectorAll("[data-set-lang]").forEach(function (b) { b.onclick = function () { setLang(b.getAttribute("data-set-lang")); }; });
+  setLang(lang);
+
+  $("keyfile").onchange = function () {
+    var f = this.files[0];
+    if (!f) return;
+    if (f.size > 20000) { say("err", t("keyBad")); return; }
+    f.text().then(function (text) {
+      var doc;
+      try { doc = JSON.parse(text); } catch (e) { doc = null; }
+      if (!doc || doc.type !== "wds-keyfile" || typeof doc.scope !== "string" || typeof doc.access_id !== "string") { say("err", t("keyBad")); return; }
+      if (doc.service !== BASE) { say("err", t("keyOther")); return; }
+      $("scope").value = doc.scope;
+      $("access").value = typeof WDSCore !== "undefined" && WDSCore.displayCode ? WDSCore.displayCode(doc.access_id) : doc.access_id;
+      say("ok", t("keyRead"));
+    });
+  };
+
+  $("form").onsubmit = async function (ev) {
+    ev.preventDefault();
+    if (typeof WDS === "undefined" || typeof WDSCore === "undefined") { say("err", t("needLib")); return; }
+    var scope = $("scope").value.trim().toLowerCase();
+    if (!scope) { say("err", t("needScope")); $("scope").focus(); return; }
+    if (!/^[a-z0-9][a-z0-9-]*-[a-z0-9]{6}$/.test(scope)) { say("err", t("badScope")); $("scope").focus(); return; }
+    var raw = $("access").value.trim();
+    if (raw) {
+      // The unlock dialog starts with this access ID filled in (the library remembers it; it is not secret).
+      try {
+        if (WDSCore.classifyCode(raw) === "access_id") localStorage.setItem("wds:" + scope + ":access_id", JSON.stringify({ id: WDSCore.normalizeCode(raw), t: Date.now() }));
+      } catch (e) { /* storage unavailable: the dialog asks for the ID */ }
+    }
+    var go = $("go");
+    go.disabled = true;
+    say("", t("working"));
+    var store = WDS.connect({ scope: scope, baseUrl: BASE, watch: false, notify: false });   // this page reports in its own message line; stacked notices would cover it
+    store.setLocale(lang);
+    try {
+      await store.unlock({ cancelable: true });
+      var res = await store.exportAll();
+      say("ok", t("done", { n: res.count, file: res.filename }));
+    } catch (e) {
+      if (e && e.code === "cancelled") say("", t("cancelled"));
+      else say("err", t("failed", { m: (e && e.message) || String(e) }));
+    } finally {
+      try { await store.lock(); } catch (e) { /* already locked */ }
+      go.disabled = false;
+    }
+  };
+})();
+</script>
+</body>
+</html>

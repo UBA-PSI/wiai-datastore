@@ -1,0 +1,57 @@
+# WIAI Datastore
+
+> End-to-end encrypted key-value storage for single-file web apps (one HTML file, opened from file://, a local web
+> server or Electron). Run by the Faculty of Information Systems and Applied Computer Sciences (WIAI), University of
+> Bamberg. The server stores only ciphertext, with one exception by design: the faculty holds a recovery (escrow) key
+> and can restore a vault after a documented procedure. Say so wherever you describe the privacy of an app.
+
+You are probably the Claude of a developer who wants an app to keep its data in this service, a new app or an existing one. Read
+{{base}}/docs/integration.md first. It has the exact script tag (with the current Subresource Integrity hash), the
+Content-Security-Policy that works, the complete API and a working example app. Use that tag as it is.
+
+Current library: version {{version}}, {{library_url}}
+Source code, PROTOCOL.md and the verifier wds-verify (public): {{repo_url}}
+
+## The rules that matter
+
+1. Load the library with exactly one script tag from integration.md (URL, integrity hash, crossorigin). Never copy,
+   inline, modify or self-host the library, and load no other third-party script.
+2. All user data goes through the object from WDS.connect(). No own cryptography, no fetch/XHR/WebSocket to the
+   datastore, no user data in localStorage, sessionStorage, IndexedDB or cookies. The library has no unencrypted path.
+3. Never build your own passphrase, login or key dialogs and never ask for a passphrase or access ID. Call
+   store.unlock() (or any store method; each one unlocks first) and let the library's dialogs do it. The dialogs follow the browser language;
+   an app with its own language switch calls store.setLocale.
+4. One record per entity. Many items or files: store.collection() (integration.md, "Collections"), which keeps the list and merges changes of several devices without losing items.
+   Editors: store.autosave(), never store.set() on every keystroke, never the whole app state in one record.
+5. Put the Content-Security-Policy meta tag from integration.md into the head, before every script, and keep the
+   onerror fallback on the library tag. Never add hosts to script-src or connect-src. Forms whose submit handler calls preventDefault() are fine.
+6. Before you hand the app over, run wds-verify from a clone of {{repo_url}}: (cd tools && npm install && npx playwright install chromium), then, from the root of the clone,
+   node tools/wds-verify.mjs <app.html> (integration.md, section "wds-verify"). Static checks need only Node and the clone. Without Python it tests against the public sandbox (below).
+   Without Node, follow integration.md, "Without wds-verify". Add a wds-verify.json when inputs are hidden until the user acts, the app has tabs or a file input ("Writing wds-verify.json"). Fix what it reports and put the report into the app's README.
+   If you cannot run it, say so in the README. Tell the users what they need (integration.md, section "What to tell users").
+7. Porting an existing app? Read integration.md, section "Porting an existing app", before you change anything. Data that old versions left in IndexedDB or localStorage may be read once, written into the store and deleted
+   (a tested recipe is there); replace "saved locally" texts.
+8. Conflicts: the library's dialog is the default; decide in code only where a merge helps ("Conflicts in code"). Lock and unlock in one page: register store.onLock and store.onUnlock once ("Lock and unlock again").
+9. Downloads the person explicitly asks for (a CSV, an attachment) are fine, with a note that the file is not encrypted. Never download in the background.
+
+## Sandbox
+
+{{sandbox_section}}
+
+## Pages
+
+- {{base}}/docs/integration.md - developer guide for you (Markdown; the same as HTML at {{base}}/docs/integration)
+- {{base}}/docs/users.en.md and {{base}}/docs/users.de.md - guide for the people who use the app
+- {{base}}/docs/operator.md - for the operator of the service (escrow keys, recovery, quotas, sandbox, deployment)
+- {{base}}/export/ - standalone tool that unlocks a vault and downloads everything, decrypted, as a ZIP
+- {{base}}/ - dashboard for faculty staff: register a scope, get the scope ID, the join code, a prompt for you and a section for the app's CLAUDE.md and AGENTS.md
+- {{api_url}} - HTTP API of the library (app code never calls it; wire format: PROTOCOL.md in {{repo_url}})
+
+## Facts to quote correctly
+
+- A scope is one registered app. Its ID looks like notenrechner-k7m2a9. Every user of an app has their own vault
+  inside the scope; the owner can share a vault with others (roles write and read).
+- Users unlock with an access ID and their own passphrase (at least 12 characters). A forgotten passphrase cannot be
+  reset by the server. The access sheet holds a recovery code for the faculty recovery.
+- Default limits per record: 10 MB; per vault: 200 MB including history; the last 10 versions of every record are kept. A scope may set other values: the dashboard prompt and wds-verify print the current ones.
+- The service is online only. When the connection fails, the library offers a backup download of the unsaved values.

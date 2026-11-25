@@ -1,0 +1,20 @@
+{
+  "name": "wiai-datastore-client",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Browser client library of the WIAI Datastore (end-to-end encrypted key-value store)",
+  "license": "MIT",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test test/*.test.mjs",
+    "test:browser": "playwright test",
+    "vectors": "node test/make-vectors.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.1",
+    "hash-wasm": "4.13.0"
+  }
+}

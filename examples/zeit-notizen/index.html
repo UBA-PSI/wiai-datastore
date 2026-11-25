@@ -1,0 +1,1436 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'wasm-unsafe-eval' https://wiai.uni-bamberg.de/datastore/client/; style-src 'unsafe-inline'; img-src data: blob:; connect-src https://wiai.uni-bamberg.de/datastore/api/ https://api.pwnedpasswords.com; base-uri 'none'; form-action 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Zeit &amp; Notizen</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --surface: #ffffff; --text: #1a1f26; --muted: #566070; --line: #cfd4dc;
+    --accent: #1b57c8; --accent-text: #ffffff; --accent-soft: #e4ecfb; --danger: #b3261e; --ok: #17653b;
+    --focus: #0b57d0; --mark: #fff0a8; --shadow: 0 1px 2px rgb(0 0 0 / .07);
+    --c0: #2f6fdd; --c1: #c2410c; --c2: #15803d; --c3: #a21caf; --c4: #b45309; --c5: #0e7490; --c6: #be123c; --c7: #4d7c0f;
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151a; --surface: #1c2027; --text: #e9ecf1; --muted: #a6afbd; --line: #3a4150;
+      --accent: #7eaaf5; --accent-text: #0b1220; --accent-soft: #232d42; --danger: #ff9087; --ok: #7fd6a0;
+      --focus: #9bc1ff; --mark: #5c4d00; --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+  body { margin: 0; background: var(--bg); color: var(--text); }
+  h1, h2, h3, h4 { line-height: 1.25; margin: 0; }
+  h1 { font-size: 1.25rem; }
+  h2 { font-size: 1.35rem; margin-bottom: .75rem; }
+  h3 { font-size: 1.05rem; margin-bottom: .5rem; }
+  h4 { font-size: .95rem; }
+  p { margin: .4rem 0; }
+  a { color: var(--accent); }
+  [hidden] { display: none !important; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .skip { position: absolute; left: .5rem; top: -4rem; background: var(--surface); color: var(--text); padding: .5rem .75rem; border: 2px solid var(--focus); border-radius: 6px; z-index: 20; }
+  .skip:focus { top: .5rem; }
+  :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+  .wrap { max-width: 70rem; margin: 0 auto; padding: 0 1rem; }
+  header.top { background: var(--surface); border-bottom: 1px solid var(--line); }
+  header.top .wrap { display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: center; justify-content: space-between; padding-top: .6rem; padding-bottom: .6rem; }
+  .brand { display: flex; align-items: center; gap: .6rem; }
+  .badge { font-size: .8rem; border: 1px solid var(--line); border-radius: 999px; padding: .05rem .6rem; color: var(--muted); }
+  .actions { display: flex; flex-wrap: wrap; gap: .35rem; }
+  nav.tabs { background: var(--surface); border-bottom: 1px solid var(--line); }
+  nav.tabs .wrap { display: flex; gap: .25rem; overflow-x: auto; }
+  nav.tabs button { border: 0; border-bottom: 3px solid transparent; border-radius: 0; background: none; padding: .7rem .9rem; min-height: 2.75rem; font: inherit; color: var(--muted); cursor: pointer; white-space: nowrap; }
+  nav.tabs button:hover { color: var(--text); }
+  nav.tabs button:focus-visible { outline-offset: -4px; }   /* the strip scrolls and would cut a ring that is drawn outside */
+  nav.tabs button[aria-current="page"] { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+  main.wrap { padding-top: 1.25rem; padding-bottom: 2rem; }
+  main:focus { outline: none; }
+  button, .btn { font: inherit; min-height: 2.5rem; padding: .4rem .9rem; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--text); cursor: pointer; }
+  button:hover { border-color: var(--muted); }
+  button:disabled { opacity: .55; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+  button.primary:hover { filter: brightness(1.08); }
+  button.ghost { background: none; }
+  button.danger { color: var(--danger); border-color: var(--danger); background: none; }
+  button.small { min-height: 2rem; padding: .15rem .6rem; font-size: .9rem; }
+  button.link { border: 0; background: none; color: var(--accent); text-decoration: underline; padding: 0 .2rem; min-height: 0; }
+  input:not([type="checkbox"]):not([type="radio"]), select, textarea { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--muted); border-radius: 8px; padding: .45rem .6rem; min-height: 2.5rem; width: 100%; }
+  select { -webkit-appearance: none; appearance: none; padding-right: 2.2rem; background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+    background-position: calc(100% - 1.15rem) 52%, calc(100% - .8rem) 52%; background-size: .35rem .35rem, .35rem .35rem; background-repeat: no-repeat; }
+  textarea { resize: vertical; line-height: 1.5; }
+  input[type="file"] { padding: .3rem; }
+  input:disabled, select:disabled, textarea:disabled { opacity: .75; }
+  input[type="checkbox"], input[type="radio"] { width: auto; min-height: 0; padding: 0; }
+  label { display: block; font-size: .9rem; font-weight: 600; }
+  label > input, label > select, label > textarea { margin-top: .25rem; font-weight: 400; }
+  label .opt { font-weight: 400; color: var(--muted); }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 1rem; box-shadow: var(--shadow); }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr)); gap: 1rem; }
+  .stack > * + * { margin-top: .75rem; }
+  .row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+  .row2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); gap: .75rem; }
+  .hint, .empty { color: var(--muted); font-size: .9rem; }
+  .big { font-size: 2rem; font-variant-numeric: tabular-nums; font-weight: 600; margin: .25rem 0; }
+  .dot { display: inline-block; width: .7rem; height: .7rem; border-radius: 50%; flex: none; }
+  ul.list { list-style: none; margin: 0; padding: 0; }
+  .entry-day { margin-top: 1.25rem; }
+  .entry-day > h4 { display: flex; justify-content: space-between; border-bottom: 1px solid var(--line); padding-bottom: .25rem; }
+  .entry { display: grid; grid-template-columns: 1fr auto; gap: .15rem .75rem; padding: .55rem 0; border-bottom: 1px solid var(--line); align-items: center; }
+  .entry .what { min-width: 0; overflow-wrap: anywhere; }
+  .entry .proj { display: inline-flex; align-items: center; gap: .4rem; font-weight: 600; }
+  .entry .dur { font-variant-numeric: tabular-nums; font-weight: 600; text-align: right; }
+  .entry .btns { grid-column: 1 / -1; display: flex; gap: .4rem; }
+  .weeknav { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: .75rem; }
+  .weeknav strong { flex: 1 1 12rem; text-align: center; }
+  .tablewrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+  table { border-collapse: collapse; width: 100%; min-width: 38rem; font-variant-numeric: tabular-nums; }
+  th, td { padding: .55rem .45rem; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; padding-left: .7rem; }
+  thead th { font-size: .85rem; color: var(--muted); font-weight: 600; }
+  thead th .dw, thead th .dd { display: block; }
+  tfoot th, tfoot td { border-bottom: 0; border-top: 2px solid var(--line); font-weight: 700; }
+  td.zero { color: var(--muted); }
+  /* a long project name wraps; the total of the week stays at the right edge, also when the table scrolls sideways */
+  #week-table th.pc { white-space: normal; overflow-wrap: anywhere; min-width: 8rem; max-width: 16rem; }
+  #week-table .tot { position: sticky; right: 0; z-index: 1; background: var(--surface); padding-right: .7rem; box-shadow: -1px 0 0 var(--line); font-weight: 700; }
+  #week-table thead .tot { font-weight: 600; }
+  #week-table td.none { text-align: left; white-space: normal; }
+  #week-table .proj { display: inline-flex; gap: .4rem; align-items: baseline; }
+  #week-table .proj .dot { margin-top: .3rem; }
+  .notes-layout { display: grid; grid-template-columns: minmax(16rem, 22rem) 1fr; gap: 1rem; align-items: start; }
+  .note-item { width: 100%; text-align: left; display: block; border: 1px solid var(--line); border-radius: 10px; padding: .6rem .75rem; margin-bottom: .5rem; background: var(--surface); }
+  .note-item[aria-current="true"] { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+  .note-item .t { font-weight: 600; overflow-wrap: anywhere; }
+  .note-item .m, .note-item .s { color: var(--muted); font-size: .85rem; overflow-wrap: anywhere; }
+  mark { background: var(--mark); color: inherit; border-radius: 2px; }
+  .tags { display: flex; flex-wrap: wrap; gap: .35rem; margin: .5rem 0; }
+  .tags button { min-height: 1.9rem; padding: .1rem .65rem; border-radius: 999px; font-size: .85rem; }
+  .tags button[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  .back { display: none; }
+  fieldset { border: 1px solid var(--line); border-radius: 10px; padding: .75rem; margin: 0; }
+  legend { font-weight: 600; font-size: .9rem; padding: 0 .35rem; }
+  .files { list-style: none; margin: 0 0 .75rem; padding: 0; display: grid; gap: .6rem; }
+  .file { display: grid; grid-template-columns: auto 1fr; gap: .2rem .75rem; align-items: center; border: 1px solid var(--line); border-radius: 10px; padding: .5rem; }
+  .file img { max-width: 7rem; max-height: 5rem; border-radius: 6px; display: block; background: var(--accent-soft); cursor: zoom-in; }
+  .file .ico { width: 3.2rem; height: 3.2rem; border-radius: 8px; background: var(--accent-soft); display: grid; place-items: center; font-size: .75rem; font-weight: 700; color: var(--muted); }
+  .file .name { overflow-wrap: anywhere; font-weight: 600; }
+  .file .btns { grid-column: 1 / -1; display: flex; gap: .4rem; flex-wrap: wrap; }
+  #note-status { font-size: .9rem; color: var(--muted); margin-right: auto; }
+  #note-status.err { color: var(--danger); }
+  .proj-row { display: flex; flex-wrap: wrap; gap: .5rem .75rem; align-items: center; padding: .6rem 0; border-bottom: 1px solid var(--line); }
+  .proj-row .grow { flex: 1 1 12rem; min-width: 0; overflow-wrap: anywhere; }
+  .proj-row.archived .grow { color: var(--muted); }
+  #screen { max-width: 36rem; margin: 3rem auto; padding: 0 1rem; text-align: center; }
+  #screen .card { text-align: left; }
+  /* Bottom left: the notices of the library are at the bottom right. Where both would meet (below 960 px), this one moves to the
+     top, just below the header and the tabs (toast() sets "top"), so it never covers a button of the header. */
+  #toast { position: fixed; left: 1rem; bottom: 1rem; max-width: min(28rem, calc(100vw - 2rem)); z-index: 30; pointer-events: none; }
+  @media (max-width: 960px) { #toast { left: 50%; bottom: auto; top: 6rem; transform: translateX(-50%); width: max-content; } }
+  #toast p { margin: 0; background: var(--text); color: var(--bg); padding: .6rem .9rem; border-radius: 10px; box-shadow: 0 4px 16px rgb(0 0 0 / .3); }
+  footer.privacy { color: var(--muted); font-size: .85rem; border-top: 1px solid var(--line); padding-top: 1rem; padding-bottom: 2rem; }
+  dialog.app-dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--surface); color: var(--text); padding: 1.1rem; width: min(34rem, calc(100vw - 1.5rem)); max-height: calc(100vh - 2rem); overflow: auto; }
+  dialog.app-dialog::backdrop { background: rgb(0 0 0 / .5); }
+  dialog.app-dialog h2 { font-size: 1.15rem; }
+  dialog.app-dialog .btns { display: flex; flex-wrap: wrap; gap: .5rem; justify-content: flex-end; margin-top: 1rem; }
+  dialog.app-dialog img.big-img { max-width: 100%; max-height: 70vh; display: block; margin: 0 auto; }
+  .versions { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr)); gap: .75rem; }
+  .versions pre { margin: .25rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; border: 1px solid var(--line); border-radius: 8px; padding: .5rem; max-height: 14rem; overflow: auto; }
+  .versions .ln { display: block; min-height: 1.5em; }
+  .versions .ln.diff { background: var(--mark); box-shadow: -.5rem 0 0 var(--mark), inset 3px 0 0 var(--accent); padding-left: .35rem; margin-left: -.35rem; }
+  .versions .when { margin: .1rem 0 0; }
+  .err-text { color: var(--danger); font-size: .9rem; }
+  @media (max-width: 760px) {
+    /* weekly overview: one card per project (name and total on top, a chip for each day with time) instead of a table to scroll */
+    .tablewrap { overflow: visible; background: none; border: 0; border-radius: 0; }
+    #week-table, #week-table tbody, #week-table tfoot { display: block; min-width: 0; }
+    #week-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+    #week-table tr { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: .6rem .75rem; margin-bottom: .6rem; }
+    #week-table th, #week-table td { border: 0; padding: 0; text-align: left; white-space: normal; }
+    #week-table th[scope="row"] { order: 0; flex: 1 1 calc(100% - 7.5rem); min-width: 0; max-width: none; }
+    #week-table td.tot { order: 1; position: static; box-shadow: none; background: none; padding: 0; flex: 0 0 auto; font-size: 1.05rem; }
+    #week-table td.tot::before { content: attr(data-label) " "; font-weight: 400; color: var(--muted); font-size: .85rem; }
+    #week-table td.day { order: 2; border: 1px solid var(--line); border-radius: 999px; padding: .15rem .6rem; font-size: .9rem; }
+    #week-table td.day::before { content: attr(data-label) " "; color: var(--muted); }
+    #week-table td.day.zero { display: none; }
+    #week-table td.none { flex: 1 1 100%; }
+    #week-table tfoot tr { background: var(--accent-soft); }
+    .notes-layout { grid-template-columns: 1fr; }
+    #view-notes.editing .notes-list-pane { display: none; }
+    #view-notes:not(.editing) .note-editor-pane { display: none; }
+    .back { display: inline-block; }
+  }
+  @media (max-width: 480px) {
+    html { font-size: 15px; }
+    .wrap { padding: 0 .75rem; }
+    .big { font-size: 1.7rem; }
+    .actions button { padding: .3rem .6rem; }
+  }
+  body[data-role="read"] .write-only { display: none !important; }
+</style>
+</head>
+<body data-role="owner">
+<a class="skip" href="#main" data-i18n="skip">Zum Inhalt springen</a>
+
+<section id="screen" role="status" aria-live="polite">
+  <h1 data-i18n="app_title">Zeit &amp; Notizen</h1>
+  <p id="screen-msg" data-i18n="loading">Verbindung zum Speicherdienst wird aufgebaut ...</p>
+  <p><button type="button" id="screen-btn" class="primary" hidden data-i18n="unlock">Entsperren</button></p>
+</section>
+
+<div id="app" hidden>
+<header class="top">
+  <div class="wrap">
+    <div class="brand">
+      <h1 data-i18n="app_title">Zeit &amp; Notizen</h1>
+      <span id="role-badge" class="badge"></span>
+    </div>
+    <div class="actions" role="group" aria-label="Aktionen" data-i18n-aria="actions">
+      <button type="button" class="ghost" id="btn-reload" data-i18n="reload" data-i18n-title="reload_title" title="Neue Einträge anderer Personen laden">Neu laden</button>
+      <button type="button" class="ghost" id="btn-share" data-i18n="share">Teilen</button>
+      <button type="button" class="ghost" id="btn-export" data-i18n="export" data-i18n-title="export_title" title="Alle Daten als ZIP herunterladen (nicht verschlüsselt)">Export</button>
+      <button type="button" class="ghost" id="btn-lang" lang="en" aria-label="Switch to English">EN</button>
+      <button type="button" class="ghost" id="btn-lock" data-i18n="lock">Sperren</button>
+    </div>
+  </div>
+</header>
+<nav class="tabs" aria-label="Bereiche" data-i18n-aria="sections">
+  <div class="wrap">
+    <button type="button" id="tab-time" data-view="time" data-i18n="tab_time">Zeit</button>
+    <button type="button" id="tab-week" data-view="week" data-i18n="tab_week">Woche</button>
+    <button type="button" id="tab-notes" data-view="notes" data-i18n="tab_notes">Notizen</button>
+    <button type="button" id="tab-projects" data-view="projects" data-i18n="tab_projects">Projekte</button>
+  </div>
+</nav>
+
+<main id="main" class="wrap" tabindex="-1">
+
+  <section id="view-time" class="view" aria-labelledby="h-time">
+    <h2 id="h-time">Zeit erfassen</h2>
+    <p id="no-projects-hint" class="hint" hidden><span data-i18n="need_project">Legen Sie zuerst ein Projekt an.</span>
+      <button type="button" class="link" id="goto-projects" data-i18n="to_projects">Zu den Projekten</button></p>
+    <div class="grid2">
+      <div class="card write-only" id="timer-card">
+        <h3 data-i18n="timer">Timer</h3>
+        <form id="timer-form" class="stack" autocomplete="off">
+          <label><span data-i18n="project">Projekt</span>
+            <select id="timer-project"></select></label>
+          <label><span data-i18n="description">Beschreibung</span> <span class="opt" data-i18n="optional">(optional)</span>
+            <input id="timer-desc" maxlength="200"></label>
+          <button type="submit" class="primary" id="timer-start" data-i18n="timer_start">Timer starten</button>
+        </form>
+        <div id="timer-running" class="stack" hidden>
+          <p id="timer-info"></p>
+          <p class="big" id="timer-elapsed" role="timer" aria-live="off">0:00:00</p>
+          <div class="row">
+            <button type="button" class="primary" id="timer-stop" data-i18n="timer_stop">Stoppen und speichern</button>
+            <button type="button" class="ghost" id="timer-discard" data-i18n="timer_discard">Verwerfen</button>
+          </div>
+        </div>
+      </div>
+      <div class="card write-only" id="manual-card">
+        <h3 data-i18n="manual">Zeit nachtragen</h3>
+        <form id="entry-form" class="stack" autocomplete="off">
+          <label><span data-i18n="project">Projekt</span>
+            <select id="entry-project"></select></label>
+          <div class="row2">
+            <label><span data-i18n="date">Datum</span>
+              <input id="entry-date" type="date" required></label>
+            <label><span data-i18n="duration">Dauer</span>
+              <input id="entry-duration" inputmode="decimal" placeholder="1:30" data-i18n-ph="duration_ph" aria-describedby="duration-hint"></label>
+          </div>
+          <p id="duration-hint" class="hint" data-i18n="duration_hint">Zum Beispiel 1:30, 1,5 oder 45 min.</p>
+          <label><span data-i18n="description">Beschreibung</span> <span class="opt" data-i18n="optional">(optional)</span>
+            <input id="entry-desc" maxlength="200"></label>
+          <p id="entry-error" class="err-text" role="alert"></p>
+          <button type="submit" class="primary" id="entry-add" data-i18n="entry_add">Eintrag hinzufügen</button>
+        </form>
+      </div>
+    </div>
+    <h3 style="margin-top:1.5rem" data-i18n="entries">Einträge</h3>
+    <div id="entries"></div>
+  </section>
+
+  <section id="view-week" class="view" aria-labelledby="h-week" hidden>
+    <h2 id="h-week" data-i18n="h_week">Wochenübersicht</h2>
+    <div class="weeknav">
+      <button type="button" id="week-prev" data-i18n="week_prev">Vorige Woche</button>
+      <strong id="week-label" aria-live="polite"></strong>
+      <button type="button" id="week-next" data-i18n="week_next">Nächste Woche</button>
+      <button type="button" class="ghost" id="week-today" data-i18n="week_today">Diese Woche</button>
+    </div>
+    <div class="tablewrap" tabindex="0" role="region" aria-label="Stunden pro Projekt und Tag" data-i18n-aria="week_region">
+      <table id="week-table"></table>
+    </div>
+    <div class="row" style="margin-top:.75rem">
+      <button type="button" id="csv-week" data-i18n="csv_week">CSV: diese Woche</button>
+      <button type="button" id="csv-all" data-i18n="csv_all">CSV: alle Einträge</button>
+    </div>
+    <p class="hint" data-i18n="csv_hint">Die CSV-Datei ist nicht verschlüsselt. Bewahren Sie sie entsprechend auf.</p>
+  </section>
+
+  <section id="view-notes" class="view" aria-labelledby="h-notes" hidden>
+    <h2 id="h-notes" data-i18n="h_notes">Notizen</h2>
+    <div class="notes-layout">
+      <div class="notes-list-pane">
+        <div class="row" style="margin-bottom:.6rem">
+          <button type="button" class="primary write-only" id="note-new" data-i18n="note_new">Neue Notiz</button>
+        </div>
+        <div class="stack">
+          <label><span data-i18n="search">Suche</span>
+            <input id="note-search" type="search" placeholder="Titel, Text, Tags, Dateinamen" data-i18n-ph="search_ph" autocomplete="off"></label>
+          <label><span data-i18n="filter_project">Projekt</span>
+            <select id="note-filter-project"></select></label>
+        </div>
+        <div class="tags" id="tag-filter" role="group" aria-label="Tags" data-i18n-aria="tags"></div>
+        <p class="hint" id="note-count" role="status"></p>
+        <ul class="list" id="note-list"></ul>
+      </div>
+      <div class="note-editor-pane">
+        <p class="hint" id="note-empty" data-i18n="note_empty">Wählen Sie eine Notiz aus oder legen Sie eine neue an.</p>
+        <div class="card stack" id="note-editor" hidden>
+          <div><button type="button" class="ghost back" id="note-back" data-i18n="note_back">Alle Notizen</button></div>
+          <label><span data-i18n="title">Titel</span>
+            <input id="note-title" maxlength="200"></label>
+          <div class="row2">
+            <label><span data-i18n="project">Projekt</span>
+              <select id="note-project"></select></label>
+            <label><span data-i18n="tags">Tags</span> <span class="opt" data-i18n="tags_hint">(mit Komma trennen)</span>
+              <input id="note-tags" maxlength="300"></label>
+          </div>
+          <label><span data-i18n="text">Text</span>
+            <textarea id="note-text" rows="12"></textarea></label>
+          <fieldset id="attachments">
+            <legend data-i18n="attachments">Anhänge</legend>
+            <ul class="files" id="file-list"></ul>
+            <label class="write-only"><span data-i18n="attach">Datei anhängen</span>
+              <input type="file" id="note-file" multiple></label>
+            <p class="hint" id="file-hint"></p>
+          </fieldset>
+          <div class="row">
+            <span id="note-status" role="status"></span>
+            <button type="button" class="ghost" id="note-history" data-i18n="history">Verlauf</button>
+            <button type="button" class="danger write-only" id="note-delete" data-i18n="delete">Löschen</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="view-projects" class="view" aria-labelledby="h-projects" hidden>
+    <h2 id="h-projects" data-i18n="h_projects">Projekte</h2>
+    <form id="project-form" class="card row write-only" autocomplete="off" style="align-items:end">
+      <label style="flex:1 1 14rem"><span data-i18n="project_name">Name des Projekts</span>
+        <input id="project-name" maxlength="80"></label>
+      <button type="submit" class="primary" id="project-add" data-i18n="project_add">Projekt anlegen</button>
+      <p id="project-error" class="err-text" role="alert" style="flex-basis:100%;margin:0"></p>
+    </form>
+    <div id="project-list" style="margin-top:1rem"></div>
+  </section>
+
+</main>
+
+<footer class="wrap privacy">
+  <p id="privacy-text"></p>
+  <p class="hint" id="shared-hint"></p>
+  <p class="hint write-only"><button type="button" class="link" id="btn-repair" data-i18n="repair">Listen reparieren</button> <span data-i18n="repair_hint">Liest alle Datensätze und baut die Verzeichnisse neu auf.</span></p>
+</footer>
+</div>
+
+<div id="toast" role="status" aria-live="polite"></div>
+
+
+<script src="https://wiai.uni-bamberg.de/datastore/client/wds-1.0.0.js" integrity="sha384-EKOlMMIEnDNee/2BRzXKP7d5U5ECJfzkJTuQ0FFdy+9+U0XnS6RQ7qFm5jdTKH/I" crossorigin="anonymous"
+        onerror="document.body.textContent='Storage service unreachable. Check your connection and reload this page.'"></script>
+<script>
+"use strict";
+(function () {
+  if (typeof WDS === "undefined") return;   // the library tag above already replaced the page with its error message
+
+  // ---------------------------------------------------------------- configuration
+  var PALETTE = 8;
+
+  // ---------------------------------------------------------------- texts (German is the default, English is a toggle)
+  var I18N = {
+    de: {
+      skip: "Zum Inhalt springen", app_title: "Zeit & Notizen", loading: "Verbindung zum Speicherdienst wird aufgebaut ...",
+      loading_data: "Daten werden geladen ({n} von {total}) ...", unlock: "Entsperren", actions: "Aktionen", sections: "Bereiche",
+      reload: "Neu laden", reload_title: "Neue Einträge anderer Personen laden", share: "Teilen", export: "Export",
+      export_title: "Alle Daten als ZIP herunterladen (nicht verschlüsselt)", lock: "Sperren",
+      tab_time: "Zeit", tab_week: "Woche", tab_notes: "Notizen", tab_projects: "Projekte",
+      h_time: "Zeit erfassen", need_project: "Legen Sie zuerst ein Projekt an.", to_projects: "Zu den Projekten",
+      timer: "Timer", project: "Projekt", description: "Beschreibung", optional: "(optional)", timer_start: "Timer starten",
+      timer_stop: "Stoppen und speichern", timer_discard: "Verwerfen", manual: "Zeit nachtragen", date: "Datum", duration: "Dauer",
+      duration_ph: "1:30", duration_hint: "Zum Beispiel 1:30, 1,5 oder 45 min.", entry_add: "Eintrag hinzufügen", entries: "Einträge",
+      h_week: "Wochenübersicht", week_prev: "Vorige Woche", week_next: "Nächste Woche", week_today: "Diese Woche",
+      week_region: "Stunden pro Projekt und Tag", csv_week: "CSV: diese Woche", csv_all: "CSV: alle Einträge",
+      csv_hint: "Die CSV-Datei ist nicht verschlüsselt. Bewahren Sie sie entsprechend auf.",
+      h_notes: "Notizen", note_new: "Neue Notiz", search: "Suche", search_ph: "Titel, Text, Tags, Dateinamen", filter_project: "Projekt",
+      tags: "Tags", tags_hint: "(mit Komma trennen)", note_empty: "Wählen Sie eine Notiz aus oder legen Sie eine neue an.",
+      note_back: "Alle Notizen", title: "Titel", text: "Text", attachments: "Anhänge", attach: "Datei anhängen", history: "Verlauf",
+      delete: "Löschen", h_projects: "Projekte", project_name: "Name des Projekts", project_add: "Projekt anlegen",
+      all_projects: "Alle Projekte", no_project: "Kein Projekt", pick_project: "Projekt wählen ...", deleted_project: "(gelöschtes Projekt)",
+      untitled: "(ohne Titel)", role_owner: "Eigentümer", role_write: "Schreibzugriff", role_read: "Nur lesen", h_time_read: "Zeiteinträge",
+      err_offline: "Keine Verbindung zum Speicherdienst.", err_quota: "Der Speicherplatz ist aufgebraucht.", err_auth: "Der Zugang ist nicht mehr gültig.",
+      err_forbidden: "Dafür fehlt die Berechtigung (nur Lesezugriff).", err_integrity: "Die Daten konnten nicht geprüft werden. Laden Sie die Seite neu.",
+      err_conflict: "Die Daten wurden inzwischen anderswo geändert.", err_unknown: "Unbekannter Fehler.",
+      read_only_hint: "Sie haben nur Lesezugriff auf diesen Tresor.",
+      shared_hint: "Wenn andere Personen mit Ihnen arbeiten, erscheinen deren neue Einträge, sobald Sie zu diesem Fenster zurückkehren, oder nach „Neu laden“.",
+      privacy: "Ihre Daten werden Ende-zu-Ende-verschlüsselt auf einem Server der Fakultät WIAI (Universität Bamberg) gespeichert. Ihre Passphrase kennt der Server nicht; sie lässt sich nicht zurücksetzen. Ausnahme mit Absicht: Die Fakultät verwahrt einen Wiederherstellungsschlüssel. Mit Ihrem Wiederherstellungscode kann sie nach einem dokumentierten Verfahren den Zugang wiederherstellen.",
+      privacy_link: "Mehr dazu",
+      locked_user: "Der Tresor ist gesperrt. Alle Daten wurden aus dem Speicher dieser Seite entfernt.",
+      locked_revoked: "Ihr Zugang wurde entzogen. Die Daten wurden aus dem Speicher dieser Seite entfernt.",
+      locked_expired: "Die Sitzung ist abgelaufen. Entsperren Sie den Tresor erneut.",
+      load_failed: "Die Daten konnten nicht geladen werden: {msg}", retry: "Erneut versuchen",
+      repair: "Listen reparieren", repair_hint: "Liest alle Datensätze und baut die Verzeichnisse neu auf (nur nötig, wenn etwas in den Listen fehlt).",
+      repairing: "Listen werden repariert ...", repaired: "Listen repariert.", kept_newer: "Die neuere Fassung wurde behalten, es wurde nichts gelöscht.",
+      timer_info: "Läuft für {project} seit {since}", timer_running_for: "Timer läuft: {project}",
+      timer_saved: "Zeiteintrag gespeichert: {dur}", timer_discarded: "Timer verworfen.", timer_discard_q: "Den laufenden Timer verwerfen? Die gemessene Zeit wird nicht gespeichert.",
+      entry_saved: "Eintrag gespeichert.", entry_edit: "Eintrag bearbeiten", entry_delete_q: "Diesen Zeiteintrag löschen?",
+      entry_edit_aria: "Eintrag bearbeiten: {what}", entry_delete_aria: "Eintrag löschen: {what}",
+      edit: "Bearbeiten", save: "Speichern", cancel: "Abbrechen", close: "Schließen", no_entries: "Noch keine Einträge.",
+      more_entries: "Ältere Einträge anzeigen", total: "Summe", no_week_entries: "In dieser Woche gibt es keine Einträge.",
+      week_label: "KW {w} · {from} bis {to}", err_project: "Bitte ein Projekt wählen.", err_date: "Bitte ein Datum angeben.",
+      err_duration: "Die Dauer wurde nicht erkannt oder ist länger als 24 Stunden. Beispiele: 1:30, 1,5, 45 min.",
+      note_status_idle: "", note_status_dirty: "Ungespeicherte Änderungen", note_status_saving: "Speichert ...", note_status_saved: "Gespeichert",
+      note_status_error: "Speichern fehlgeschlagen", note_readonly: "Nur Lesezugriff",
+      notes_count: "{n} von {total} Notizen", notes_count_one: "1 von {total} Notizen", notes_none: "Keine Notizen gefunden.", tag_all: "Alle Tags",
+      note_deleted: "Notiz gelöscht.", note_delete_q: "Notiz „{title}“ mit allen Anhängen löschen?", note_replaced: "Eine neuere Fassung dieser Notiz wurde übernommen.",
+      note_save_first: "Die Notiz konnte nicht gespeichert werden. Prüfen Sie die Verbindung und versuchen Sie es erneut.",
+      file_hint: "Bilder, PDF und beliebige Dateien bis {max} pro Datei.", file_hint_unknown: "Bilder, PDF und beliebige Dateien.",
+      file_too_big: "„{name}“ ist größer als {max} und wurde nicht hochgeladen.", uploading: "Lade „{name}“ hoch ...", uploaded: "„{name}“ angehängt.",
+      upload_failed: "„{name}“ konnte nicht hochgeladen werden: {msg}", no_files: "Keine Anhänge.", download: "Herunterladen", remove: "Entfernen", enlarge: "Vergrößern",
+      remove_file_q: "Anhang „{name}“ entfernen?", file_missing: "Die Datei wurde nicht gefunden.", download_failed: "Der Download ist fehlgeschlagen: {msg}",
+      preview_alt: "Vorschau: {name}", file_removed: "Anhang entfernt.",
+      project_exists: "Ein Projekt mit diesem Namen gibt es schon.", project_empty: "Bitte einen Namen eingeben.", project_added: "Projekt angelegt.",
+      project_none: "Noch keine Projekte.", archive: "Archivieren", unarchive: "Wieder aktivieren", archived: "archiviert", rename: "Umbenennen",
+      project_stats: "{time} erfasst, {n} Notizen", project_stats_one: "{time} erfasst, 1 Notiz", project_delete_q: "Projekt „{name}“ löschen? {n} Zeiteinträge dieses Projekts werden mit gelöscht. Notizen bleiben erhalten und verlieren nur die Zuordnung.",
+      project_timer_running: "Für dieses Projekt läuft ein Timer. Stoppen Sie ihn zuerst.", project_renamed: "Projekt umbenannt.", project_deleted: "Projekt gelöscht.",
+      new_name: "Neuer Name", confirm: "Bestätigen",
+      csv_done: "CSV gespeichert ({n} Einträge).", csv_empty: "Es gibt keine Einträge für die CSV-Datei.",
+      csv_head: "Datum;Projekt;Beschreibung;Dauer (h:mm);Stunden (dezimal)", lang_switched: "Sprache: Deutsch",
+      reloaded: "Daten neu geladen.", error_generic: "Das hat nicht geklappt: {msg}",
+      cf_title: "Es gibt eine neuere Fassung", cf_text: "Eine andere Person oder ein anderes Gerät hat {what} geändert, während Sie daran gearbeitet haben. Welche Fassung soll gelten?",
+      cf_mine: "Meine Fassung", cf_theirs: "Neuere Fassung", cf_keep_mine: "Meine Fassung behalten", cf_keep_theirs: "Neuere Fassung behalten",
+      cf_deleted: "(wurde gelöscht)", cf_keep_deleted: "Gelöscht lassen", cf_restore_mine: "Meine Fassung wiederherstellen", cf_note: "Die nicht gewählte Fassung bleibt im Verlauf erhalten.",
+      cf_unsaved: "Noch nicht gespeichert", cf_will_delete: "Noch nicht gelöscht", cf_delete_anyway: "Trotzdem löschen", cf_saved_at: "Gespeichert: {time}", cf_diff: "Farbig hinterlegte Zeilen gibt es nur in einer der beiden Fassungen.",
+      lb_note: "Notiz „{t}“", lb_time: "Zeiteintrag „{t}“", lb_project: "Projekt „{t}“", lb_file: "Anhang „{t}“", lb_index: "Verzeichnis", lb_settings: "Einstellungen", lb_timer: "Timer",
+      weekdays_short: "Mo,Di,Mi,Do,Fr,Sa,So"
+    },
+    en: {
+      skip: "Skip to content", app_title: "Time & notes", loading: "Connecting to the storage service ...",
+      loading_data: "Loading data ({n} of {total}) ...", unlock: "Unlock", actions: "Actions", sections: "Sections",
+      reload: "Reload", reload_title: "Load new entries from other people", share: "Share", export: "Export",
+      export_title: "Download all data as a ZIP (not encrypted)", lock: "Lock",
+      tab_time: "Time", tab_week: "Week", tab_notes: "Notes", tab_projects: "Projects",
+      h_time: "Track time", need_project: "Create a project first.", to_projects: "Go to projects",
+      timer: "Timer", project: "Project", description: "Description", optional: "(optional)", timer_start: "Start timer",
+      timer_stop: "Stop and save", timer_discard: "Discard", manual: "Add time manually", date: "Date", duration: "Duration",
+      duration_ph: "1:30", duration_hint: "For example 1:30, 1.5 or 45 min.", entry_add: "Add entry", entries: "Entries",
+      h_week: "Weekly overview", week_prev: "Previous week", week_next: "Next week", week_today: "This week",
+      week_region: "Hours per project and day", csv_week: "CSV: this week", csv_all: "CSV: all entries",
+      csv_hint: "The CSV file is not encrypted. Store it accordingly.",
+      h_notes: "Notes", note_new: "New note", search: "Search", search_ph: "Title, text, tags, file names", filter_project: "Project",
+      tags: "Tags", tags_hint: "(separate with commas)", note_empty: "Select a note or create a new one.",
+      note_back: "All notes", title: "Title", text: "Text", attachments: "Attachments", attach: "Attach file", history: "History",
+      delete: "Delete", h_projects: "Projects", project_name: "Project name", project_add: "Create project",
+      all_projects: "All projects", no_project: "No project", pick_project: "Choose project ...", deleted_project: "(deleted project)",
+      untitled: "(untitled)", role_owner: "Owner", role_write: "Can write", role_read: "Read only", h_time_read: "Time entries",
+      err_offline: "No connection to the storage service.", err_quota: "The storage space is used up.", err_auth: "The access is no longer valid.",
+      err_forbidden: "You are not allowed to do that (read-only access).", err_integrity: "The data could not be verified. Reload the page.",
+      err_conflict: "The data was changed elsewhere in the meantime.", err_unknown: "Unknown error.",
+      read_only_hint: "You have read-only access to this vault.",
+      shared_hint: "If other people work with you, their new entries appear when you return to this window, or after \"Reload\".",
+      privacy: "Your data is stored end-to-end encrypted on a server of the WIAI faculty (University of Bamberg). The server does not know your passphrase; it cannot be reset. Exception by design: the faculty keeps a recovery key. With your recovery code the faculty can restore access after a documented procedure.",
+      privacy_link: "Details",
+      locked_user: "The vault is locked. All data was removed from the memory of this page.",
+      locked_revoked: "Your access was revoked. The data was removed from the memory of this page.",
+      locked_expired: "The session has expired. Unlock the vault again.",
+      load_failed: "The data could not be loaded: {msg}", retry: "Try again",
+      repair: "Repair lists", repair_hint: "Reads every record and rebuilds the lists (only needed when something is missing from them).",
+      repairing: "Repairing the lists ...", repaired: "Lists repaired.", kept_newer: "The newer version was kept, nothing was deleted.",
+      timer_info: "Running for {project} since {since}", timer_running_for: "Timer running: {project}",
+      timer_saved: "Time entry saved: {dur}", timer_discarded: "Timer discarded.", timer_discard_q: "Discard the running timer? The measured time will not be saved.",
+      entry_saved: "Entry saved.", entry_edit: "Edit entry", entry_delete_q: "Delete this time entry?",
+      entry_edit_aria: "Edit entry: {what}", entry_delete_aria: "Delete entry: {what}",
+      edit: "Edit", save: "Save", cancel: "Cancel", close: "Close", no_entries: "No entries yet.",
+      more_entries: "Show older entries", total: "Total", no_week_entries: "There are no entries in this week.",
+      week_label: "Week {w} · {from} to {to}", err_project: "Please choose a project.", err_date: "Please enter a date.",
+      err_duration: "The duration was not recognised or is longer than 24 hours. Examples: 1:30, 1.5, 45 min.",
+      note_status_idle: "", note_status_dirty: "Unsaved changes", note_status_saving: "Saving ...", note_status_saved: "Saved",
+      note_status_error: "Saving failed", note_readonly: "Read only",
+      notes_count: "{n} of {total} notes", notes_count_one: "1 of {total} notes", notes_none: "No notes found.", tag_all: "All tags",
+      note_deleted: "Note deleted.", note_delete_q: "Delete note \"{title}\" with all attachments?", note_replaced: "A newer version of this note was adopted.",
+      note_save_first: "The note could not be saved. Check the connection and try again.",
+      file_hint: "Images, PDF and any other files up to {max} each.", file_hint_unknown: "Images, PDF and any other files.",
+      file_too_big: "\"{name}\" is larger than {max} and was not uploaded.", uploading: "Uploading \"{name}\" ...", uploaded: "\"{name}\" attached.",
+      upload_failed: "\"{name}\" could not be uploaded: {msg}", no_files: "No attachments.", download: "Download", remove: "Remove", enlarge: "Enlarge",
+      remove_file_q: "Remove attachment \"{name}\"?", file_missing: "The file was not found.", download_failed: "The download failed: {msg}",
+      preview_alt: "Preview: {name}", file_removed: "Attachment removed.",
+      project_exists: "A project with this name already exists.", project_empty: "Please enter a name.", project_added: "Project created.",
+      project_none: "No projects yet.", archive: "Archive", unarchive: "Reactivate", archived: "archived", rename: "Rename",
+      project_stats: "{time} tracked, {n} notes", project_stats_one: "{time} tracked, 1 note", project_delete_q: "Delete project \"{name}\"? {n} time entries of this project are deleted with it. Notes are kept and only lose their link.",
+      project_timer_running: "A timer is running for this project. Stop it first.", project_renamed: "Project renamed.", project_deleted: "Project deleted.",
+      new_name: "New name", confirm: "Confirm",
+      csv_done: "CSV saved ({n} entries).", csv_empty: "There are no entries for the CSV file.",
+      csv_head: "Date,Project,Description,Duration (h:mm),Hours (decimal)", lang_switched: "Language: English",
+      reloaded: "Data reloaded.", error_generic: "That did not work: {msg}",
+      cf_title: "A newer version exists", cf_text: "Another person or device changed {what} while you were working on it. Which version should win?",
+      cf_mine: "My version", cf_theirs: "Newer version", cf_keep_mine: "Keep my version", cf_keep_theirs: "Keep the newer version",
+      cf_deleted: "(was deleted)", cf_keep_deleted: "Keep it deleted", cf_restore_mine: "Restore my version", cf_note: "The version you do not choose stays in the history.",
+      cf_unsaved: "Not saved yet", cf_will_delete: "Not deleted yet", cf_delete_anyway: "Delete anyway", cf_saved_at: "Saved: {time}", cf_diff: "Highlighted lines exist in only one of the two versions.",
+      lb_note: "note \"{t}\"", lb_time: "time entry \"{t}\"", lb_project: "project \"{t}\"", lb_file: "attachment \"{t}\"", lb_index: "index", lb_settings: "settings", lb_timer: "timer",
+      weekdays_short: "Mon,Tue,Wed,Thu,Fri,Sat,Sun"
+    }
+  };
+
+  // ---------------------------------------------------------------- state
+  var S = {
+    lang: /^de\b/i.test(navigator.language || "") ? "de" : "en",   // before the vault is open: the language of the browser; a choice stored in the vault replaces it
+    role: "owner", loaded: false,
+    projects: new Map(), time: new Map(), notes: new Map(),
+    timer: null, settings: {},
+    view: "time", week: null, timeDays: 14,
+    noteId: null, saver: null, upload: null, previews: new Map(), query: "", tag: "", filterProject: "",
+    ticker: null, maxBytes: null, syncing: false
+  };
+
+  var $ = function (id) { return document.getElementById(id); };
+  function t(key, vars) {
+    var s = I18N[S.lang][key];
+    if (s === undefined) s = I18N.de[key];
+    if (s === undefined) return "[[" + key + "]]";
+    if (vars) s = s.replace(/\{(\w+)\}/g, function (m, k) { return vars[k] !== undefined ? vars[k] : m; });
+    return s;
+  }
+  function h(tag, attrs) {
+    var el = document.createElement(tag);
+    if (attrs) Object.keys(attrs).forEach(function (k) {
+      var v = attrs[k];
+      if (v === false || v === null || v === undefined) return;
+      if (k === "class") el.className = v;
+      else if (k === "text") el.textContent = v;
+      else if (k.indexOf("on") === 0) el.addEventListener(k.slice(2), v);
+      else if (k === "value" || k === "checked" || k === "disabled" || k === "selected" || k === "hidden") el[k] = v;
+      else el.setAttribute(k, v === true ? "" : v);
+    });
+    for (var i = 2; i < arguments.length; i++) append(el, arguments[i]);
+    return el;
+  }
+  function append(el, kid) {
+    if (kid === null || kid === undefined || kid === false) return;
+    if (Array.isArray(kid)) { kid.forEach(function (k) { append(el, k); }); return; }
+    el.append(kid.nodeType ? kid : String(kid));
+  }
+
+  function setKids(el, kids) { el.replaceChildren(); append(el, kids); }
+
+  // ---------------------------------------------------------------- dates and numbers
+  var pad = function (n) { return (n < 10 ? "0" : "") + n; };
+  var uid = function () { return crypto.randomUUID().slice(0, 8); };
+  var loc = function () { return S.lang === "de" ? "de-DE" : "en-GB"; };
+  function ymd(d) { return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()); }
+  function parseYmd(s) { var p = s.split("-"); return new Date(+p[0], +p[1] - 1, +p[2], 12); }
+  function addDays(d, n) { var x = new Date(d.getFullYear(), d.getMonth(), d.getDate() + n, 12); return x; }
+  function mondayOf(d) { var x = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; }
+  function isoWeek(d) {
+    var x = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+    x.setUTCDate(x.getUTCDate() + 4 - (x.getUTCDay() || 7));
+    var y0 = new Date(Date.UTC(x.getUTCFullYear(), 0, 1));
+    return Math.ceil(((x - y0) / 86400000 + 1) / 7);
+  }
+  function fmtDate(d) { return new Intl.DateTimeFormat(loc(), { day: "2-digit", month: "2-digit", year: "numeric" }).format(d); }
+  function fmtDay(d) { return new Intl.DateTimeFormat(loc(), { weekday: "long", day: "2-digit", month: "2-digit", year: "numeric" }).format(d); }
+  function fmtDateTime(ms) { return ms ? new Intl.DateTimeFormat(loc(), { dateStyle: "medium", timeStyle: "short" }).format(new Date(ms)) : ""; }
+  function fmtTime(ms) { return new Intl.DateTimeFormat(loc(), { timeStyle: "short" }).format(new Date(ms)); }
+  function fmtDur(min) { return Math.floor(min / 60) + ":" + pad(min % 60); }
+  function fmtDec(min) { return (Math.round(min / 60 * 100) / 100).toFixed(2).replace(".", S.lang === "de" ? "," : "."); }
+  function fmtHMS(ms) { var s = Math.max(0, Math.floor(ms / 1000)); return Math.floor(s / 3600) + ":" + pad(Math.floor(s / 60) % 60) + ":" + pad(s % 60); }
+  function fmtBytes(n) {
+    if (n >= 1048576) return (n / 1048576).toFixed(n >= 10485760 ? 0 : 1).replace(".", S.lang === "de" ? "," : ".") + " MB";
+    if (n >= 1024) return Math.round(n / 1024) + " KB";
+    return n + " B";
+  }
+  function parseDuration(s) {
+    s = String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
+    var m, min = null;
+    if ((m = s.match(/^(\d{1,2}):(\d{1,2})$/))) { if (+m[2] <= 59) min = +m[1] * 60 + +m[2]; }
+    else if ((m = s.match(/^(\d+(?:[.,]\d+)?) ?(h|std|std\.|stunde|stunden|hour|hours)?$/))) min = Math.round(parseFloat(m[1].replace(",", ".")) * 60);
+    else if ((m = s.match(/^(\d+) ?(m|min|minute|minuten|minutes)$/))) min = +m[1];
+    else if ((m = s.match(/^(\d+) ?h ?(\d+) ?(m|min)?$/))) min = +m[1] * 60 + +m[2];
+    return min !== null && min >= 1 && min <= 1440 ? min : null;
+  }
+  function norm(s) { return String(s || "").toLowerCase().split("").map(function (c) { var n = c.normalize("NFD").replace(/[̀-ͯ]/g, ""); return n.length === 1 ? n : c; }).join(""); }
+
+  // ---------------------------------------------------------------- messages, dialogs
+  var toastTimer = null;
+  function toast(msg) {
+    var box = $("toast");
+    var tabs = document.querySelector("nav.tabs");
+    if (window.matchMedia("(max-width: 960px)").matches && tabs) {
+      box.style.top = Math.min(Math.max(tabs.getBoundingClientRect().bottom + 8, 8), window.innerHeight - 80) + "px";
+    } else box.style.top = "";
+    box.replaceChildren(h("p", { text: msg }));
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { box.replaceChildren(); }, 7000);
+  }
+  // What a person reads about an error: our own sentence per kind of error, never the text of the exception (it is English
+  // and meant for developers; it goes to the console).
+  function errText(e) {
+    if (typeof console !== "undefined" && e) console.warn(e);
+    if (e instanceof WDS.OfflineError) return t("err_offline");
+    if (e instanceof WDS.QuotaError) return t("err_quota");
+    if (e instanceof WDS.AuthError) return e.code === "forbidden" ? t("err_forbidden") : t("err_auth");
+    if (e instanceof WDS.IntegrityError || e instanceof WDS.VersionError) return t("err_integrity");
+    if (e instanceof WDS.ConflictError) return t("err_conflict");
+    return t("err_unknown");
+  }
+  // The end of the session (access revoked, session expired) is announced by the library and the lock screen follows.
+  function sessionEnded(e) { return e instanceof WDS.AuthError && (e.code === "revoked" || e.status === 401); }
+  function fail(e) { if (sessionEnded(e)) return; toast(t("error_generic", { msg: errText(e) })); }
+
+  // One modal dialog at a time. build(dlg, done) fills it; done(value) closes it. sticky: Escape and a click outside do nothing.
+  function modal(build, opts) {
+    opts = opts || {};
+    return new Promise(function (resolve) {
+      var dlg = h("dialog", { class: "app-dialog" });
+      var finished = false;
+      function done(v) { if (finished) return; finished = true; if (dlg.open) dlg.close(); dlg.remove(); resolve(v); }
+      dlg.addEventListener("cancel", function (e) { e.preventDefault(); if (!opts.sticky) done(null); });
+      dlg.addEventListener("mousedown", function (e) {      // a click on the backdrop, not on the padding of the dialog
+        var r = dlg.getBoundingClientRect();
+        if (e.target === dlg && !opts.sticky && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)) done(null);
+      });
+      build(dlg, done);
+      document.body.append(dlg);
+      dlg.showModal();
+    });
+  }
+  function confirmDialog(text, okLabel, danger) {
+    return modal(function (dlg, done) {
+      var id = "dlg-t-" + uid();
+      dlg.setAttribute("aria-labelledby", id);
+      dlg.append(h("h2", { id: id, text: t("confirm") }), h("p", { text: text }),
+        h("div", { class: "btns" },
+          h("button", { type: "button", autofocus: true, text: t("cancel"), onclick: function () { done(false); } }),
+          h("button", { type: "button", class: danger ? "danger" : "primary", text: okLabel || t("confirm"), onclick: function () { done(true); } })));
+    }).then(function (v) { return v === true; });
+  }
+  // fields: [{ id, label, type: text|date|select, value, options: [[value, label]], required, hint }]; resolves with { id: value } or null
+  function formDialog(title, fields, okLabel, validate) {
+    return modal(function (dlg, done) {
+      var tid = "dlg-t-" + uid();
+      dlg.setAttribute("aria-labelledby", tid);
+      var err = h("p", { class: "err-text", role: "alert" });
+      var inputs = {};
+      var form = h("form", { class: "stack", autocomplete: "off" });
+      fields.forEach(function (f) {
+        var control;
+        if (f.type === "select") {
+          control = h("select", {}, f.options.map(function (o) { return h("option", { value: o[0], text: o[1], selected: o[0] === f.value }); }));
+        } else control = h("input", { type: f.type || "text", value: f.value || "", maxlength: f.type === "date" ? false : "200" });
+        inputs[f.id] = control;
+        form.append(h("label", {}, h("span", { text: f.label }), control));
+      });
+      form.append(err, h("div", { class: "btns" },
+        h("button", { type: "button", text: t("cancel"), onclick: function () { done(null); } }),
+        h("button", { type: "submit", class: "primary", text: okLabel || t("save") })));
+      form.addEventListener("submit", function (e) {
+        e.preventDefault();
+        var vals = {};
+        fields.forEach(function (f) { vals[f.id] = inputs[f.id].value; });
+        var problem = validate ? validate(vals) : null;
+        if (problem) { err.textContent = problem; return; }
+        done(vals);
+      });
+      dlg.append(h("h2", { id: tid, text: title }), form);
+    });
+  }
+
+  // ---------------------------------------------------------------- language
+  function applyLang() {
+    document.documentElement.lang = S.lang;
+    document.querySelectorAll("[data-i18n]").forEach(function (el) { el.textContent = t(el.getAttribute("data-i18n")); });
+    document.querySelectorAll("[data-i18n-ph]").forEach(function (el) { el.setAttribute("placeholder", t(el.getAttribute("data-i18n-ph"))); });
+    document.querySelectorAll("[data-i18n-aria]").forEach(function (el) { el.setAttribute("aria-label", t(el.getAttribute("data-i18n-aria"))); });
+    document.querySelectorAll("[data-i18n-title]").forEach(function (el) { el.setAttribute("title", t(el.getAttribute("data-i18n-title"))); });
+    var lb = $("btn-lang");
+    lb.textContent = S.lang === "de" ? "EN" : "DE";
+    lb.setAttribute("lang", S.lang === "de" ? "en" : "de");
+    lb.setAttribute("aria-label", S.lang === "de" ? "Switch to English" : "Auf Deutsch umstellen");
+    $("privacy-text").replaceChildren(t("privacy") + " ", h("a", { href: "https://wiai.uni-bamberg.de/datastore/docs/users." + S.lang, target: "_blank", rel: "noopener", text: t("privacy_link") }));
+    $("shared-hint").textContent = S.role === "read" ? t("read_only_hint") : t("shared_hint");
+    store.setLocale(S.lang);      // dialogs and notices of the library speak the language of the app
+    applyRole();
+    if (S.loaded) renderAll();
+  }
+  function applyRole() {
+    document.body.dataset.role = S.role;
+    var badge = $("role-badge");
+    badge.textContent = t(S.role === "read" ? "role_read" : S.role === "write" ? "role_write" : "role_owner");
+    $("h-time").textContent = t(S.role === "read" ? "h_time_read" : "h_time");   // a read member cannot record time
+  }
+  var canWrite = function () { return S.role !== "read"; };
+
+  // ---------------------------------------------------------------- the store
+  // Four collections (store.collection): projects/<id>, time/<id>, notes/<id> and files/<id> (the bytes of an attachment). Each one keeps
+  // an index record (projects.index, ...) with a little meta per item, merges the changes of several devices without losing items and can be
+  // repaired with rebuild(). settings and timer are single records. The app never calls list(): that would download every attachment.
+  var store = WDS.connect({ scope: "zeitnotizen-demo-xn8kp9", label: labelOf });   // public scope ID of the demo scope (the join code is never part of the app)
+  var projectsCol = store.collection("projects/", { meta: function (p) { return { name: String(p.name || "").slice(0, 80) }; } });
+  var timeCol = store.collection("time/", { meta: function (e) { return { date: e.date, minutes: e.minutes, project: e.project }; } });
+  var notesCol = store.collection("notes/", { meta: function (n) { return { title: String(n.title || "").slice(0, 80) }; } });
+  var filesCol = store.collection("files/");     // attachments: the value is the File, the meta (given with add) says which note it belongs to
+
+  function labelOf(name) {
+    var m = String(name).match(/^(notes|time|projects|files)\/(.+)$/);
+    if (m) {
+      var id = m[2].split("/")[0].split("-")[0];
+      if (m[1] === "notes") { var n = S.notes.get(id); return t("lb_note", { t: n && n.title ? n.title : t("untitled") }); }
+      if (m[1] === "time") { var e = S.time.get(id); return t("lb_time", { t: e ? e.date + " " + (e.desc || projectName(e.project)) : id }); }
+      if (m[1] === "projects") { var p = S.projects.get(id); return t("lb_project", { t: p ? p.name : id }); }
+      return t("lb_file", { t: m[2].replace(/^[0-9a-f]{8}-/, "") });
+    }
+    return /\.index$/.test(name) ? t("lb_index") : name === "settings" ? t("lb_settings") : name === "timer" ? t("lb_timer") : name;
+  }
+
+  function mapOf(col) { return col === projectsCol ? S.projects : col === timeCol ? S.time : S.notes; }
+
+  // A collection call that stored the item but could not write the list entry yet (err.stored) is a success for the screen: the library
+  // keeps the list change queued and retries it (next write, back online, window focus, lock).
+  function stored(promise) {
+    return promise.catch(function (e) {
+      if (e && e.stored) { console.warn("list entry of " + e.record + " is written later", e); return { id: e.id, resolution: "saved" }; }
+      throw e;
+    });
+  }
+  // Writes one item of a collection. When another device or person saved first and its version won, the app adopts that value.
+  async function save(col, id, value) {
+    var res = await stored(col.set(id, value));
+    if (res.resolution === "theirs") adopt(col, id, res.deleted ? undefined : res.value);
+    else mapOf(col).set(id, value);
+    return res;
+  }
+  function adopt(col, id, value) {
+    var map = mapOf(col);
+    if (value === undefined || value === null) map.delete(id); else map.set(id, value);
+    renderAll();
+  }
+  // What a remove() left behind: gone, or (the person kept the other side's newer version) that version.
+  function afterRemove(col, id, res) {
+    var map = mapOf(col);
+    if (res.deleted || res.resolution === "absent") map.delete(id); else if (res.value) map.set(id, res.value);
+    return res.deleted || res.resolution === "absent";
+  }
+
+  // The attachments of every note, from the meta of the files collection (no attachment is downloaded for this).
+  function filesByNote() {
+    var by = new Map();
+    filesCol.items().forEach(function (it) {
+      var m = it.meta || {};
+      if (!m.note) return;
+      if (!by.has(m.note)) by.set(m.note, []);
+      by.get(m.note).push({ id: it.id, rec: it.name, name: m.name || it.id, mime: m.mime || "", size: m.size || 0 });
+    });
+    return by;
+  }
+  function filesOf(noteId) { return filesByNote().get(noteId) || []; }
+
+  async function pool(items, n, fn) {
+    var i = 0;
+    await Promise.all(Array.from({ length: Math.min(n, items.length) }, async function () {
+      while (i < items.length) { var k = i++; await fn(items[k]); }
+    }));
+  }
+
+  // refresh: read the lists again (the reload button); otherwise they are read once per unlock.
+  async function loadAll(refresh) {
+    S.syncing = true;
+    try {
+      var heads = await Promise.all([store.get("settings"), store.get("timer")]);
+      S.settings = heads[0] && typeof heads[0] === "object" ? heads[0] : {};
+      S.timer = heads[1] && heads[1].start ? heads[1] : null;
+      var cols = [projectsCol, timeCol, notesCol, filesCol];
+      await Promise.all(cols.map(function (c) { return refresh ? c.refresh() : c.load(); }));
+      var total = projectsCol.items().length + timeCol.items().length + notesCol.items().length, done = 0;
+      for (var k = 0; k < 3; k++) {
+        var col = cols[k], map = mapOf(col);
+        var rows = await col.getAll({ concurrency: 8 });       // records that are gone are skipped (and leave the list with the next write)
+        map.clear();
+        rows.forEach(function (r) { if (r.value && typeof r.value === "object") map.set(r.id, r.value); });
+        done += col.items().length;
+        $("screen-msg").textContent = t("loading_data", { n: done, total: total });
+      }
+      try { var u = await store.usage(); S.maxBytes = u && u.limits && u.limits.max_value_bytes ? u.limits.max_value_bytes : null; } catch (e) { S.maxBytes = null; }
+      if (S.settings.lang === "de" || S.settings.lang === "en") S.lang = S.settings.lang;
+    } finally { S.syncing = false; }
+  }
+  // Items that other devices added, removed or changed arrive when the window gets focus: the collections tell us (not for our own calls).
+  [projectsCol, timeCol, notesCol].forEach(function (col) {
+    col.onChange(async function (ch) {
+      if (!S.loaded || S.syncing) return;
+      var map = mapOf(col);
+      ch.removed.forEach(function (id) { map.delete(id); });
+      try {
+        await Promise.all(ch.added.concat(ch.changed).map(async function (id) {
+          if (col === notesCol && id === S.noteId) return;       // the open note belongs to its editor
+          var v = await col.get(id);
+          if (v && typeof v === "object") map.set(id, v); else map.delete(id);
+        }));
+      } catch (e) { return; }
+      if (S.loaded) renderAll();
+    });
+  });
+  filesCol.onChange(function () { if (S.loaded) { renderNoteList(); if (S.noteId) renderFiles(); } });
+
+  // ---------------------------------------------------------------- projects
+  function projectName(id) { var p = S.projects.get(id); return p ? p.name : t("deleted_project"); }
+  function projectsSorted(includeArchived) {
+    return Array.from(S.projects.values()).filter(function (p) { return includeArchived || !p.archived; })
+      .sort(function (a, b) { return a.name.localeCompare(b.name, loc()); });
+  }
+  var colorOf = function (id) { var p = S.projects.get(id); return "var(--c" + (p ? (p.color || 0) % PALETTE : 0) + ")"; };
+  function dot(id) { return h("span", { class: "dot", style: "background:" + colorOf(id), "aria-hidden": "true" }); }
+
+  function fillProjectSelect(sel, opts) {
+    var keep = sel.value;
+    var list = projectsSorted(false);
+    if (opts.current && S.projects.has(opts.current) && S.projects.get(opts.current).archived) list.push(S.projects.get(opts.current));
+    var options = [];
+    if (opts.first) options.push(h("option", { value: "", text: opts.first }));
+    list.forEach(function (p) { options.push(h("option", { value: p.id, text: p.name + (p.archived ? " (" + t("archived") + ")" : "") })); });
+    sel.replaceChildren.apply(sel, options);
+    var want = opts.value !== undefined ? opts.value : keep;
+    if (want && list.some(function (p) { return p.id === want; })) sel.value = want;
+    else if (!opts.first && list.length) sel.value = list[0].id;
+    else sel.value = "";
+  }
+
+  async function addProject(name) {
+    var p = { id: uid(), name: name, color: S.projects.size % PALETTE, archived: false, created: Date.now() };
+    await stored(projectsCol.add(p, { id: p.id }));
+    S.projects.set(p.id, p);
+  }
+  async function saveProject(p) { await save(projectsCol, p.id, p); }
+  // Deletes the time entries of the project, then the project. Returns false when the person kept a newer version of something (nothing is lost then).
+  async function deleteProject(p) {
+    var ids = Array.from(S.time.values()).filter(function (e) { return e.project === p.id; }).map(function (e) { return e.id; });
+    await pool(ids, 6, async function (id) { afterRemove(timeCol, id, await timeCol.remove(id)); });
+    if (Array.from(S.time.values()).some(function (e) { return e.project === p.id; })) return false;
+    return afterRemove(projectsCol, p.id, await projectsCol.remove(p.id));
+  }
+
+  function renderProjects() {
+    fillProjectSelect($("timer-project"), {});
+    fillProjectSelect($("entry-project"), {});
+    fillProjectSelect($("note-project"), { first: t("no_project"), current: S.noteId && S.notes.get(S.noteId) ? S.notes.get(S.noteId).project : "", value: S.noteId && S.notes.get(S.noteId) ? S.notes.get(S.noteId).project || "" : "" });
+    var f = $("note-filter-project"), keep = f.value;
+    setKids(f, [h("option", { value: "", text: t("all_projects") }), h("option", { value: "-", text: t("no_project") }),
+      projectsSorted(true).map(function (p) { return h("option", { value: p.id, text: p.name }); })]);
+    f.value = Array.from(f.options).some(function (o) { return o.value === keep; }) ? keep : "";
+    S.filterProject = f.value;
+    $("no-projects-hint").hidden = projectsSorted(false).length > 0 || !canWrite();
+    var box = $("project-list");
+    var all = projectsSorted(true);
+    if (!all.length) { box.replaceChildren(h("p", { class: "empty", text: t("project_none") })); return; }
+    setKids(box, all.map(function (p) {
+      var minutes = 0; S.time.forEach(function (e) { if (e.project === p.id) minutes += e.minutes; });
+      var notes = 0; S.notes.forEach(function (n) { if (n.project === p.id) notes++; });
+      return h("div", { class: "proj-row" + (p.archived ? " archived" : "") },
+        dot(p.id),
+        h("div", { class: "grow" }, h("strong", { text: p.name }), p.archived ? " (" + t("archived") + ")" : "",
+          h("div", { class: "hint", text: t(notes === 1 ? "project_stats_one" : "project_stats", { time: fmtDur(minutes), n: notes }) })),
+        canWrite() ? h("div", { class: "row" },
+          h("button", { type: "button", class: "small", "aria-label": t("rename") + ": " + p.name, text: t("rename"), onclick: function () { renameProject(p); } }),
+          h("button", { type: "button", class: "small", "aria-label": (p.archived ? t("unarchive") : t("archive")) + ": " + p.name, text: p.archived ? t("unarchive") : t("archive"),
+            onclick: function () { saveProject(Object.assign({}, p, { archived: !p.archived })).then(renderAll, fail); } }),
+          h("button", { type: "button", class: "small danger", "aria-label": t("delete") + ": " + p.name, text: t("delete"), onclick: function () { removeProject(p); } })) : null);
+    }));
+  }
+  async function renameProject(p) {
+    var v = await formDialog(t("rename"), [{ id: "name", label: t("new_name"), value: p.name }], t("save"), function (x) { return x.name.trim() ? null : t("project_empty"); });
+    if (!v) return;
+    try { await saveProject(Object.assign({}, p, { name: v.name.trim() })); renderAll(); toast(t("project_renamed")); } catch (e) { fail(e); }
+  }
+  async function removeProject(p) {
+    if (S.timer && S.timer.project === p.id) { toast(t("project_timer_running")); return; }
+    var n = Array.from(S.time.values()).filter(function (e) { return e.project === p.id; }).length;
+    if (!(await confirmDialog(t("project_delete_q", { name: p.name, n: n }), t("delete"), true))) return;
+    try { var gone = await deleteProject(p); renderAll(); toast(t(gone ? "project_deleted" : "kept_newer")); } catch (e) { fail(e); renderAll(); }
+  }
+
+  // ---------------------------------------------------------------- time entries and the timer
+  function entryText(e) { return e.desc || projectName(e.project); }
+  async function addEntry(e) {
+    await stored(timeCol.add(e, { id: e.id }));
+    S.time.set(e.id, e);
+  }
+  function renderEntries() {
+    var box = $("entries");
+    var all = Array.from(S.time.values()).sort(function (a, b) { return a.date < b.date ? 1 : a.date > b.date ? -1 : (b.created || 0) - (a.created || 0); });
+    if (!all.length) { box.replaceChildren(h("p", { class: "empty", text: t("no_entries") })); return; }
+    var cutoff = ymd(addDays(new Date(), -S.timeDays));
+    var shown = all.filter(function (e) { return e.date >= cutoff; });
+    var days = [];
+    shown.forEach(function (e) { var d = days[days.length - 1]; if (!d || d.date !== e.date) days.push(d = { date: e.date, items: [], sum: 0 }); d.items.push(e); d.sum += e.minutes; });
+    var out = days.map(function (d) {
+      return h("section", { class: "entry-day", "aria-label": fmtDay(parseYmd(d.date)) },
+        h("h4", {}, h("span", { text: fmtDay(parseYmd(d.date)) }), h("span", { text: fmtDur(d.sum) })),
+        h("ul", { class: "list" }, d.items.map(function (e) {
+          return h("li", { class: "entry" },
+            h("div", { class: "what" }, h("span", { class: "proj" }, dot(e.project), projectName(e.project)), e.desc ? h("div", { text: e.desc }) : null),
+            h("div", { class: "dur", text: fmtDur(e.minutes) }),
+            canWrite() ? h("div", { class: "btns" },
+              h("button", { type: "button", class: "small", text: t("edit"), "aria-label": t("entry_edit_aria", { what: entryText(e) }), onclick: function () { editEntry(e); } }),
+              h("button", { type: "button", class: "small danger", text: t("delete"), "aria-label": t("entry_delete_aria", { what: entryText(e) }), onclick: function () { deleteEntry(e); } })) : null);
+        })));
+    });
+    if (shown.length < all.length) out.push(h("p", {}, h("button", { type: "button", text: t("more_entries"), onclick: function () { S.timeDays += 30; renderEntries(); } })));
+    if (!shown.length) out.unshift(h("p", { class: "empty", text: t("no_entries") }));
+    setKids(box, out);
+  }
+  async function editEntry(e) {
+    var opts = projectsSorted(false); if (!S.projects.has(e.project) || S.projects.get(e.project).archived) { if (S.projects.has(e.project)) opts.push(S.projects.get(e.project)); }
+    var v = await formDialog(t("entry_edit"), [
+      { id: "project", label: t("project"), type: "select", value: e.project, options: opts.map(function (p) { return [p.id, p.name]; }) },
+      { id: "date", label: t("date"), type: "date", value: e.date },
+      { id: "duration", label: t("duration"), value: fmtDur(e.minutes) },
+      { id: "desc", label: t("description"), value: e.desc || "" }
+    ], t("save"), function (x) { if (!x.project) return t("err_project"); if (!x.date) return t("err_date"); return parseDuration(x.duration) ? null : t("err_duration"); });
+    if (!v) return;
+    try {
+      var upd = Object.assign({}, e, { project: v.project, date: v.date, minutes: parseDuration(v.duration), desc: v.desc.trim() });
+      await save(timeCol, e.id, upd); renderAll(); toast(t("entry_saved"));
+    } catch (err) { fail(err); }
+  }
+  async function deleteEntry(e) {
+    if (!(await confirmDialog(t("entry_delete_q") + " " + entryText(e) + ", " + fmtDur(e.minutes), t("delete"), true))) return;
+    try { var gone = afterRemove(timeCol, e.id, await timeCol.remove(e.id)); renderAll(); if (!gone) toast(t("kept_newer")); } catch (err) { fail(err); }
+  }
+
+  function renderTimer() {
+    var running = !!S.timer;
+    $("timer-form").hidden = running;
+    $("timer-running").hidden = !running;
+    if (running) {
+      $("timer-info").textContent = t("timer_info", { project: projectName(S.timer.project), since: fmtTime(S.timer.start) }) + (S.timer.desc ? ": " + S.timer.desc : "");
+      tickTimer();
+    }
+    clearInterval(S.ticker);
+    S.ticker = running ? setInterval(tickTimer, 1000) : null;
+  }
+  function tickTimer() { if (S.timer) $("timer-elapsed").textContent = fmtHMS(Date.now() - S.timer.start); }
+  async function startTimer() {
+    var project = $("timer-project").value;
+    if (!project) { toast(t("err_project")); return; }
+    var timer = { project: project, desc: $("timer-desc").value.trim(), start: Date.now() };
+    try { await store.set("timer", timer); S.timer = timer; $("timer-desc").value = ""; renderTimer(); } catch (e) { fail(e); }
+  }
+  async function stopTimer() {
+    var tm = S.timer; if (!tm) return;
+    var minutes = Math.max(1, Math.round((Date.now() - tm.start) / 60000));
+    var entry = { id: uid(), project: tm.project, date: ymd(new Date(tm.start)), minutes: minutes, desc: tm.desc || "", start: tm.start, created: Date.now() };
+    try {
+      await addEntry(entry);
+      await store.remove("timer");
+      S.timer = null;
+      renderAll();
+      toast(t("timer_saved", { dur: fmtDur(minutes) }));
+    } catch (e) { fail(e); }
+  }
+  async function discardTimer() {
+    if (!(await confirmDialog(t("timer_discard_q"), t("timer_discard"), true))) return;
+    try { await store.remove("timer"); S.timer = null; renderTimer(); toast(t("timer_discarded")); } catch (e) { fail(e); }
+  }
+
+  // ---------------------------------------------------------------- week and CSV
+  function entriesBetween(from, to) {
+    var a = ymd(from), b = ymd(to);
+    return Array.from(S.time.values()).filter(function (e) { return e.date >= a && e.date <= b; });
+  }
+  function renderWeek() {
+    var mon = S.week, sun = addDays(mon, 6);
+    $("week-label").textContent = t("week_label", { w: isoWeek(mon), from: fmtDate(mon), to: fmtDate(sun) });
+    var entries = entriesBetween(mon, sun);
+    var days = [0, 1, 2, 3, 4, 5, 6].map(function (i) { return addDays(mon, i); });
+    var rows = new Map();
+    entries.forEach(function (e) {
+      var r = rows.get(e.project); if (!r) rows.set(e.project, r = { project: e.project, cells: [0, 0, 0, 0, 0, 0, 0], sum: 0 });
+      var i = Math.round((parseYmd(e.date) - mon) / 86400000); r.cells[i] += e.minutes; r.sum += e.minutes;
+    });
+    var list = Array.from(rows.values()).sort(function (a, b) { return projectName(a.project).localeCompare(projectName(b.project), loc()); });
+    var table = $("week-table");
+    // The cells carry their day as data-label: on a narrow screen the rows become cards (CSS) and show it in front of the time.
+    var dayName = function (d) { return new Intl.DateTimeFormat(loc(), { weekday: "short", day: "2-digit", month: "2-digit" }).format(d); };
+    var head = h("tr", {}, h("th", { scope: "col", class: "pc", text: t("project") }),
+      days.map(function (d) {
+        return h("th", { scope: "col", "aria-label": dayName(d) },
+          h("span", { class: "dw", "aria-hidden": "true", text: new Intl.DateTimeFormat(loc(), { weekday: "short" }).format(d) }),
+          h("span", { class: "dd", "aria-hidden": "true", text: new Intl.DateTimeFormat(loc(), { day: "2-digit", month: "2-digit" }).format(d) }));
+      }),
+      h("th", { scope: "col", class: "tot", text: t("total") }));
+    var colSums = [0, 0, 0, 0, 0, 0, 0], all = 0;
+    var cell = function (m, i) { return h("td", { class: "day" + (m ? "" : " zero"), "data-label": dayName(days[i]), text: m ? fmtDur(m) : "–" }); };
+    var body = list.map(function (r) {
+      r.cells.forEach(function (m, i) { colSums[i] += m; }); all += r.sum;
+      return h("tr", {}, h("th", { scope: "row", class: "pc" }, h("span", { class: "proj" }, dot(r.project), projectName(r.project))),
+        r.cells.map(cell), h("td", { class: "tot", "data-label": t("total"), text: fmtDur(r.sum) }));
+    });
+    var foot = h("tr", {}, h("th", { scope: "row", class: "pc", text: t("total") }), colSums.map(cell), h("td", { class: "tot", "data-label": t("total"), text: fmtDur(all) }));
+    table.replaceChildren(h("caption", { class: "sr", text: t("h_week") + ": " + $("week-label").textContent }), h("thead", {}, head), h("tbody", {}, body.length ? body :
+      h("tr", {}, h("td", { colspan: "9", class: "zero none", text: t("no_week_entries") }))), h("tfoot", {}, foot));
+  }
+  function csvCell(v, sep) {
+    v = String(v === undefined || v === null ? "" : v);
+    if (/^[=+\-@\t\r]/.test(v)) v = "'" + v;      // a spreadsheet must not run a description as a formula
+    return v.indexOf(sep) >= 0 || /["\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+  }
+  function exportCsv(entries, label) {
+    if (!entries.length) { toast(t("csv_empty")); return; }
+    var sep = S.lang === "de" ? ";" : ",";
+    var rows = entries.slice().sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : (a.created || 0) - (b.created || 0); });
+    var lines = [t("csv_head")].concat(rows.map(function (e) {
+      return [e.date, projectName(e.project), e.desc || "", fmtDur(e.minutes), fmtDec(e.minutes)].map(function (c) { return csvCell(c, sep); }).join(sep);
+    }));
+    saveBlob(new Blob(["﻿" + lines.join("\r\n") + "\r\n"], { type: "text/csv;charset=utf-8" }), "zeiteintraege-" + label + ".csv");
+    toast(t("csv_done", { n: rows.length }));
+  }
+  function saveBlob(blob, name) {
+    var url = URL.createObjectURL(blob);
+    var a = h("a", { href: url, download: name });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 20000);
+  }
+
+  // ---------------------------------------------------------------- notes
+  function parseTags(s) {
+    var seen = {}, out = [];
+    String(s || "").split(",").forEach(function (x) { x = x.trim().replace(/^#/, ""); if (x && !seen[norm(x)]) { seen[norm(x)] = 1; out.push(x.slice(0, 40)); } });
+    return out;
+  }
+  function noteHaystack(n, files) {
+    return norm([n.title, n.text, (n.tags || []).join(" "), n.project ? projectName(n.project) : "", (files || []).map(function (f) { return f.name; }).join(" ")].join("\n"));
+  }
+  function visibleNotes(filesBy) {
+    var words = norm(S.query).split(/\s+/).filter(Boolean);
+    return Array.from(S.notes.values()).filter(function (n) {
+      if (S.filterProject === "-" ? n.project && S.projects.has(n.project) : S.filterProject && n.project !== S.filterProject) return false;
+      if (S.tag && !(n.tags || []).some(function (x) { return norm(x) === norm(S.tag); })) return false;
+      if (!words.length) return true;
+      var hay = noteHaystack(n, filesBy.get(n.id));
+      return words.every(function (w) { return hay.indexOf(w) >= 0; });
+    }).sort(function (a, b) { return (b.updated || 0) - (a.updated || 0); });
+  }
+  // text with the search words marked, as DOM nodes (never as HTML)
+  function highlight(text, words) {
+    if (!words.length) return [text];
+    var low = norm(text);
+    if (low.length !== text.length) return [text];
+    var spans = [];
+    words.forEach(function (w) { var i = low.indexOf(w); while (i >= 0) { spans.push([i, i + w.length]); i = low.indexOf(w, i + w.length); } });
+    spans.sort(function (a, b) { return a[0] - b[0]; });
+    var out = [], pos = 0;
+    spans.forEach(function (s) { if (s[0] < pos) return; out.push(text.slice(pos, s[0]), h("mark", { text: text.slice(s[0], s[1]) })); pos = s[1]; });
+    out.push(text.slice(pos));
+    return out;
+  }
+  function snippet(n, words) {
+    var text = String(n.text || "").replace(/\s+/g, " ").trim();
+    if (!text) return "";
+    var low = norm(text), at = 0;
+    if (low.length === text.length) for (var i = 0; i < words.length; i++) { var p = low.indexOf(words[i]); if (p >= 0) { at = p; break; } }
+    var from = Math.max(0, at - 40);
+    return (from > 0 ? "… " : "") + text.slice(from, from + 140) + (from + 140 < text.length ? " …" : "");
+  }
+  function renderNoteList() {
+    var words = norm(S.query).split(/\s+/).filter(Boolean);
+    var filesBy = filesByNote();
+    var notes = visibleNotes(filesBy);
+    var counts = {};
+    S.notes.forEach(function (n) { (n.tags || []).forEach(function (x) { var k = norm(x); counts[k] = counts[k] || { name: x, n: 0 }; counts[k].n++; }); });
+    var tags = Object.keys(counts).sort().map(function (k) { return counts[k]; });
+    if (S.tag && !counts[norm(S.tag)]) S.tag = "";
+    setKids($("tag-filter"), tags.map(function (x) {
+      return h("button", { type: "button", "aria-pressed": norm(S.tag) === norm(x.name) ? "true" : "false", text: x.name + " (" + x.n + ")",
+        onclick: function () { S.tag = norm(S.tag) === norm(x.name) ? "" : x.name; renderNoteList(); } });
+    }));
+    $("tag-filter").hidden = !tags.length;
+    $("note-count").textContent = notes.length === 1 ? t("notes_count_one", { total: S.notes.size }) : t("notes_count", { n: notes.length, total: S.notes.size });
+    setKids($("note-list"), notes.length ? notes.map(function (n) {
+      var meta = [n.project && S.projects.has(n.project) ? projectName(n.project) : "", fmtDateTime(n.updated), (filesBy.get(n.id) || []).length ? "📎 " + filesBy.get(n.id).length : ""].filter(Boolean).join(" · ");
+      var snip = snippet(n, words);
+      return h("li", {}, h("button", { type: "button", class: "note-item", "aria-current": n.id === S.noteId ? "true" : "false", onclick: function () { openNote(n.id, true); } },
+        h("div", { class: "t" }, highlight(n.title || t("untitled"), words)),
+        h("div", { class: "m" }, meta, (n.tags || []).length ? " · #" + n.tags.join(" #") : ""),
+        snip ? h("div", { class: "s" }, highlight(snip, words)) : null));
+    }) : h("li", { class: "empty", text: S.notes.size ? t("notes_none") : "" }));
+  }
+
+  var STATUS = { idle: "note_status_idle", dirty: "note_status_dirty", saving: "note_status_saving", saved: "note_status_saved", error: "note_status_error" };
+  function setNoteStatus(s) {
+    var el = $("note-status");
+    el.textContent = t(STATUS[s] || "note_status_idle");
+    el.className = s === "error" ? "err" : "";
+  }
+  function setEditing(on) { $("view-notes").classList.toggle("editing", on); }
+
+  // Saves the open note and closes the editor. Resolves false when the note could not be saved (the editor then stays open).
+  async function closeNote() {
+    if (S.upload) { try { await S.upload; } catch (e) { /* reported where it happened */ } }
+    if (S.saver) {
+      try { await S.saver.flush(); } catch (e) { toast(t("note_save_first")); return false; }
+      S.saver.stop(); S.saver = null;
+    }
+    S.noteId = null;
+    S.previews.forEach(function (url) { URL.revokeObjectURL(url); });
+    S.previews.clear();
+    $("note-editor").hidden = true; $("note-empty").hidden = false;
+    setEditing(false);
+    return true;
+  }
+  function fillEditor() {
+    var n = S.notes.get(S.noteId); if (!n) return;
+    var ro = !canWrite();
+    $("note-title").value = n.title || ""; $("note-text").value = n.text || ""; $("note-tags").value = (n.tags || []).join(", ");
+    fillProjectSelect($("note-project"), { first: t("no_project"), current: n.project, value: n.project && S.projects.has(n.project) ? n.project : "" });
+    ["note-title", "note-text", "note-tags", "note-project"].forEach(function (id) { $(id).disabled = ro; });
+    $("note-file").disabled = ro;
+    renderFiles();
+  }
+  async function openNote(id, focus) {
+    if (S.noteId === id) { setEditing(true); return; }
+    if (S.saver || S.upload || S.noteId) { if (!(await closeNote())) return; }   // no await when no note is open: the editor is usable at once
+    var n = S.notes.get(id); if (!n) return;
+    S.noteId = id;
+    $("note-empty").hidden = true; $("note-editor").hidden = false; setEditing(true);
+    fillEditor();
+    setNoteStatus("idle");
+    if (canWrite()) {
+      S.saver = notesCol.autosave(id, function () { return S.notes.get(id); }, {     // also keeps the title of the list entry current
+        onStatus: function (s) { if (S.noteId === id) setNoteStatus(s); },
+        onResolved: function (res) {
+          if (res.resolution !== "theirs") return;
+          S.notes.set(id, res.value);
+          if (S.noteId === id) { fillEditor(); toast(t("note_replaced")); }
+          renderNoteList();
+        }
+      });
+    }
+    renderNoteList();
+    if (focus) $("note-title").focus();
+  }
+  async function newNote() {
+    var id = uid();
+    var n = { id: id, title: "", text: "", tags: [], project: S.filterProject && S.filterProject !== "-" ? S.filterProject : null, created: Date.now(), updated: Date.now() };
+    S.notes.set(id, n);
+    await openNote(id, true);
+    $("note-title").focus();
+    // The record and its list entry are created now (autosave only keeps them current); typing does not wait for the requests.
+    stored(notesCol.add(n, { id: id })).catch(fail);
+  }
+  function noteEdited() {
+    var n = S.notes.get(S.noteId); if (!n || !S.saver) return;
+    n.title = $("note-title").value; n.text = $("note-text").value; n.tags = parseTags($("note-tags").value);
+    n.project = $("note-project").value || null; n.updated = Date.now();
+    renderNoteList();
+    S.saver.changed();
+  }
+  async function deleteNote() {
+    var n = S.notes.get(S.noteId); if (!n) return;
+    if (!(await confirmDialog(t("note_delete_q", { title: n.title || t("untitled") }), t("delete"), true))) return;
+    try {
+      var files = filesOf(n.id);
+      if (S.saver) { S.saver.stop(); S.saver = null; }
+      await closeNote();
+      await pool(files, 4, function (f) { return filesCol.remove(f.id); });
+      var gone = afterRemove(notesCol, n.id, await notesCol.remove(n.id));
+      renderAll(); toast(t(gone ? "note_deleted" : "kept_newer"));
+    } catch (e) { fail(e); renderAll(); }
+  }
+
+  // ---------------------------------------------------------------- attachments
+  var isImage = function (f) { return /^image\/(png|jpe?g|gif|webp|avif|bmp|svg\+xml)$/i.test(f.mime || ""); };
+  function safeName(name) {
+    var m = String(name).match(/\.[A-Za-z0-9]{1,8}$/);
+    var ext = m ? m[0].toLowerCase() : "";
+    var base = (m ? name.slice(0, -m[0].length) : name).replace(/[^\p{L}\p{N}_-]+/gu, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "datei";
+    return base + ext;
+  }
+  function renderFiles() {
+    var n = S.notes.get(S.noteId); if (!n) return;
+    var list = $("file-list"), files = filesOf(n.id);
+    setKids(list, files.length ? files.map(function (f) {
+      var li = h("li", { class: "file" });
+      var thumb = h("div", { class: "ico", "aria-hidden": "true", text: (f.name.split(".").pop() || "").slice(0, 4).toUpperCase() });
+      li.append(thumb, h("div", {}, h("div", { class: "name", text: f.name }), h("div", { class: "hint", text: fmtBytes(f.size) + " · " + (f.mime || "") })),
+        h("div", { class: "btns" },
+          h("button", { type: "button", class: "small", text: t("download"), "aria-label": t("download") + ": " + f.name, onclick: function () { downloadFile(f); } }),
+          canWrite() ? h("button", { type: "button", class: "small danger", text: t("remove"), "aria-label": t("remove") + ": " + f.name, onclick: function () { removeFile(n, f); } }) : null));
+      if (isImage(f)) loadPreview(n.id, f, thumb);
+      return li;
+    }) : h("li", { class: "hint", text: t("no_files") }));
+    $("file-hint").hidden = !canWrite();                       // nothing to say about uploads to someone who cannot upload
+    $("file-hint").textContent = S.maxBytes ? t("file_hint", { max: fmtBytes(S.maxBytes) }) : t("file_hint_unknown");
+  }
+  async function loadPreview(noteId, f, thumb) {
+    await Promise.resolve();      // the list item is attached to the page by the time this continues
+    try {
+      var url = S.previews.get(f.rec);
+      if (!url) {
+        var blob = await store.getBlob(f.rec);
+        if (!blob || S.noteId !== noteId) return;
+        url = URL.createObjectURL(blob); S.previews.set(f.rec, url);
+      }
+      if (S.noteId !== noteId || !thumb.isConnected) return;
+      var img = h("img", { src: url, alt: t("preview_alt", { name: f.name }), title: t("enlarge"), tabindex: "0", role: "button", onclick: function () { showImage(url, f); },
+        onkeydown: function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); showImage(url, f); } } });
+      thumb.replaceWith(img);
+    } catch (e) { /* the icon stays; the download button reports problems */ }
+  }
+  function showImage(url, f) {
+    modal(function (dlg, done) {
+      var tid = "dlg-t-" + uid();
+      dlg.setAttribute("aria-labelledby", tid);
+      dlg.append(h("h2", { id: tid, text: f.name }), h("img", { class: "big-img", src: url, alt: t("preview_alt", { name: f.name }) }),
+        h("div", { class: "btns" }, h("button", { type: "button", autofocus: true, text: t("close"), onclick: function () { done(true); } })));
+    });
+  }
+  async function downloadFile(f) {
+    try {
+      var blob = await store.getBlob(f.rec);
+      if (!blob) { toast(t("file_missing")); return; }
+      saveBlob(blob, f.name);
+    } catch (e) { if (!sessionEnded(e)) toast(t("download_failed", { msg: errText(e) })); }
+  }
+  async function removeFile(n, f) {
+    if (!(await confirmDialog(t("remove_file_q", { name: f.name }), t("remove"), true))) return;
+    try {
+      await filesCol.remove(f.id);
+      n.updated = Date.now();
+      if (S.saver) S.saver.changed();
+      var url = S.previews.get(f.rec); if (url) { URL.revokeObjectURL(url); S.previews.delete(f.rec); }
+      renderFiles(); renderNoteList(); toast(t("file_removed"));
+    } catch (e) { fail(e); }
+  }
+  function addFiles(files) {
+    var n = S.notes.get(S.noteId), saver = S.saver;
+    if (!n || !saver) return;
+    var list = Array.from(files);
+    S.upload = (async function () {
+      for (var i = 0; i < list.length; i++) {
+        var f = list[i];
+        if (S.maxBytes && f.size > S.maxBytes) { toast(t("file_too_big", { name: f.name, max: fmtBytes(S.maxBytes) })); continue; }
+        var fid = uid(), mime = f.type || "application/octet-stream";
+        $("file-hint").textContent = t("uploading", { name: f.name });
+        try {
+          // the ending stays in the id (files/<id>.pdf in the export); the meta says which note owns the file
+          await stored(filesCol.add(f, { id: fid + "-" + safeName(f.name), mime: mime, meta: { note: n.id, name: f.name.slice(0, 100), mime: mime.slice(0, 80), size: f.size } }));
+          n.updated = Date.now();
+          saver.changed(); await saver.flush();
+          if (S.noteId === n.id) { renderFiles(); renderNoteList(); }
+          toast(t("uploaded", { name: f.name }));
+        } catch (e) { if (sessionEnded(e)) break; toast(t("upload_failed", { name: f.name, msg: errText(e) })); }
+      }
+      $("file-hint").textContent = S.maxBytes ? t("file_hint", { max: fmtBytes(S.maxBytes) }) : t("file_hint_unknown");
+    })().finally(function () { S.upload = null; });
+  }
+
+  // ---------------------------------------------------------------- conflicts
+  // The lines a person reads for a version of a record (no time here: when it was saved is shown above, per version).
+  function describeLines(name, v) {
+    if (v === undefined || v === null) return [t("cf_deleted")];
+    if (name.indexOf("notes/") === 0) {
+      var lines = [v.title || t("untitled"), ""].concat(String(v.text || "").slice(0, 600).split("\n"));
+      if ((v.tags || []).length) lines.push("#" + v.tags.join(" #"));
+      return lines;
+    }
+    if (name.indexOf("time/") === 0) return [v.date + " · " + projectName(v.project) + " · " + fmtDur(v.minutes)].concat(v.desc ? [v.desc] : []);
+    if (name.indexOf("projects/") === 0) return [v.name + (v.archived ? " (" + t("archived") + ")" : "")];
+    return [];
+  }
+  // One version: heading, when it was saved ("not saved yet" for the person's own), the text with the lines that the other
+  // version does not have marked.
+  function versionPane(title, when, lines, other) {
+    var seen = {};
+    (other || []).forEach(function (l) { seen[l] = true; });
+    return h("div", {}, h("strong", { text: title }), h("p", { class: "hint when", text: when }),
+      h("pre", {}, lines.map(function (l) { return h("span", { class: "ln" + (other && l.trim() && !seen[l] ? " diff" : ""), text: l }); })));
+  }
+  // The conflict dialog for notes, time entries and projects (replaces the library's for these records only): the person sees titles and texts,
+  // never raw JSON. Resolves "mine" or "theirs". Attachments (bytes) keep the library's dialog; settings and the timer are decided in code.
+  function askPerson(c) {
+    var gone = !c.theirs || c.theirs.deleted, deleting = c.mine.deleted;
+    return modal(function (dlg, done) {
+      var tid = "dlg-t-" + uid();
+      dlg.setAttribute("aria-labelledby", tid);
+      dlg.append(h("h2", { id: tid, text: t("cf_title") }), h("p", { text: t("cf_text", { what: labelOf(c.name) }) }),
+        h("div", { class: "versions" },
+          versionPane(t("cf_mine"), t(deleting ? "cf_will_delete" : "cf_unsaved"), describeLines(c.name, c.mine.value), gone || deleting ? null : describeLines(c.name, c.theirs.value)),
+          versionPane(t("cf_theirs"), c.theirs && c.theirs.time ? t("cf_saved_at", { time: fmtDateTime(c.theirs.time) }) : "", describeLines(c.name, gone ? null : c.theirs.value), deleting ? null : describeLines(c.name, c.mine.value))),
+        gone || deleting ? null : h("p", { class: "hint", text: t("cf_diff") }),
+        h("p", { class: "hint", text: t("cf_note") }),
+        h("div", { class: "btns" },
+          h("button", { type: "button", text: gone ? t("cf_keep_deleted") : t("cf_keep_theirs"), onclick: function () { done("theirs"); } }),
+          h("button", { type: "button", class: "primary", autofocus: true, text: deleting ? t("cf_delete_anyway") : gone ? t("cf_restore_mine") : t("cf_keep_mine"), onclick: function () { done("mine"); } })));
+    }, { sticky: true });
+  }
+  ["notes/", "time/", "projects/"].forEach(function (prefix) { store.onConflict(prefix, askPerson); });
+  store.onConflict("settings", function (c) { c.merge(function (mine, theirs) { return Object.assign({}, theirs, mine); }); });   // two devices changed different settings: keep both
+  store.onConflict("timer", function (c) { c.keepMine(); });
+
+  // ---------------------------------------------------------------- views and wiring
+  function renderAll() {
+    if (!S.loaded) return;
+    renderProjects(); renderTimer(); renderEntries(); renderWeek(); renderNoteList();
+    var n = S.notes.get(S.noteId);
+    if (S.noteId && !n) { if (S.saver) { S.saver.stop(); S.saver = null; } S.noteId = null; $("note-editor").hidden = true; $("note-empty").hidden = false; setEditing(false); }
+  }
+  function showView(name, focus) {
+    S.view = name;
+    ["time", "week", "notes", "projects"].forEach(function (v) {
+      $("view-" + v).hidden = v !== name;
+      var tab = $("tab-" + v);
+      if (v === name) tab.setAttribute("aria-current", "page"); else tab.removeAttribute("aria-current");
+    });
+    if (focus) $("main").focus();
+  }
+  function showScreen(msg, button) {
+    $("app").hidden = true; $("screen").hidden = false;
+    $("screen-msg").textContent = msg;
+    $("screen-btn").hidden = !button;
+    if (button) { $("screen-btn").textContent = button; $("screen-btn").focus(); }
+  }
+
+  // Runs after every successful unlock (the library calls it, the first time and after "Unlock" on the lock screen): reads the lists and the
+  // records, shows the app. Collections and autosave handles are created per use, so it can run many times.
+  async function start() {
+    S.loaded = false;
+    showScreen(t("loading"));
+    try {
+      S.role = store.status().role || "owner";
+      await loadAll(false);
+    } catch (e) {
+      showScreen(t("load_failed", { msg: errText(e) }), t("retry"));
+      $("screen-btn").onclick = start;
+      return;
+    }
+    S.loaded = true;
+    S.week = mondayOf(new Date());
+    $("entry-date").value = ymd(new Date());
+    $("screen").hidden = true; $("app").hidden = false;
+    applyLang();
+    showView(S.view);
+    renderAll();
+  }
+  function unlockAgain() { store.unlock().catch(fail); }
+
+  // Registered once (not inside start): the library stops the autosave handles on a lock, the app clears everything that belongs to the vault.
+  store.onUnlock(start);
+  store.onLock(function (reason) {
+    S.saver = null;
+    S.loaded = false; S.noteId = null;
+    clearInterval(S.ticker);
+    S.previews.forEach(function (url) { URL.revokeObjectURL(url); }); S.previews.clear();
+    S.projects.clear(); S.time.clear(); S.notes.clear(); S.timer = null;
+    clearTimeout(toastTimer); $("toast").replaceChildren();
+    ["note-title", "note-text", "note-tags"].forEach(function (id) { $(id).value = ""; });
+    $("note-editor").hidden = true; $("note-empty").hidden = false; $("entries").replaceChildren(); $("note-list").replaceChildren(); $("project-list").replaceChildren();
+    showScreen(t(reason === "revoked" ? "locked_revoked" : reason === "expired" ? "locked_expired" : "locked_user"), t("unlock"));
+    $("screen-btn").onclick = unlockAgain;
+  });
+
+  document.querySelectorAll("nav.tabs button").forEach(function (b) { b.addEventListener("click", function () { showView(b.getAttribute("data-view")); }); });
+  $("goto-projects").addEventListener("click", function () { showView("projects"); $("project-name").focus(); });
+
+  $("timer-form").addEventListener("submit", function (e) { e.preventDefault(); startTimer(); });
+  $("timer-stop").addEventListener("click", stopTimer);
+  $("timer-discard").addEventListener("click", discardTimer);
+  $("entry-form").addEventListener("submit", async function (e) {
+    e.preventDefault();
+    var err = $("entry-error"); err.textContent = "";
+    var project = $("entry-project").value, date = $("entry-date").value, minutes = parseDuration($("entry-duration").value);
+    if (!project) { err.textContent = t("err_project"); return; }
+    if (!date) { err.textContent = t("err_date"); return; }
+    if (!minutes) { err.textContent = t("err_duration"); $("entry-duration").focus(); return; }
+    var durField = $("entry-duration"), descField = $("entry-desc"), durValue = durField.value, descValue = descField.value, btn = $("entry-add");
+    btn.disabled = true;
+    try {
+      await addEntry({ id: uid(), project: project, date: date, minutes: minutes, desc: descValue.trim(), start: null, created: Date.now() });
+      if (durField.value === durValue) durField.value = "";      // not when the person has already typed the next entry
+      if (descField.value === descValue) descField.value = "";
+      if ($("entry-date").value === date) $("entry-date").value = ymd(new Date());   // the next entry is for today again, not for the last day used
+      renderAll(); toast(t("entry_saved"));
+    } catch (ex) { fail(ex); } finally { btn.disabled = false; }
+  });
+
+  $("week-prev").addEventListener("click", function () { S.week = addDays(S.week, -7); renderWeek(); });
+  $("week-next").addEventListener("click", function () { S.week = addDays(S.week, 7); renderWeek(); });
+  $("week-today").addEventListener("click", function () { S.week = mondayOf(new Date()); renderWeek(); });
+  $("csv-week").addEventListener("click", function () { exportCsv(entriesBetween(S.week, addDays(S.week, 6)), ymd(S.week)); });
+  $("csv-all").addEventListener("click", function () { exportCsv(Array.from(S.time.values()), ymd(new Date())); });
+
+  $("project-form").addEventListener("submit", async function (e) {
+    e.preventDefault();
+    var err = $("project-error"); err.textContent = "";
+    var name = $("project-name").value.trim();
+    if (!name) { err.textContent = t("project_empty"); return; }
+    if (projectsSorted(true).some(function (p) { return norm(p.name) === norm(name); })) { err.textContent = t("project_exists"); return; }
+    try { await addProject(name); $("project-name").value = ""; renderAll(); toast(t("project_added")); $("project-name").focus(); } catch (ex) { fail(ex); }
+  });
+
+  $("note-new").addEventListener("click", newNote);
+  $("note-back").addEventListener("click", async function () { if (await closeNote()) { renderNoteList(); var cur = $("note-new"); cur.focus(); } });
+  ["note-title", "note-text", "note-tags"].forEach(function (id) { $(id).addEventListener("input", noteEdited); });
+  $("note-project").addEventListener("change", noteEdited);
+  $("note-search").addEventListener("input", function () { S.query = $("note-search").value; renderNoteList(); });
+  $("note-filter-project").addEventListener("change", function () { S.filterProject = $("note-filter-project").value; renderNoteList(); });
+  $("note-file").addEventListener("change", function () { addFiles($("note-file").files); $("note-file").value = ""; });
+  $("note-delete").addEventListener("click", deleteNote);
+  $("note-history").addEventListener("click", async function () {
+    var n = S.notes.get(S.noteId); if (!n) return;
+    try { if (S.saver) await S.saver.flush(); await store.showHistory("notes/" + n.id, { title: n.title || t("untitled") }); } catch (e) { fail(e); }   // the library builds the heading: History of "<title>"
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "/" && S.loaded && S.view === "notes" && !/^(input|textarea|select)$/i.test(document.activeElement.tagName) && !document.querySelector("dialog[open]")) {
+      e.preventDefault(); $("note-search").focus();
+    }
+  });
+
+  $("btn-share").addEventListener("click", function () { store.share().catch(function (e) { if (e && e.code !== "cancelled") fail(e); }); });
+  $("btn-export").addEventListener("click", async function () {
+    try { await store.exportAll({ filename: "zeit-notizen-export.zip" }); } catch (e) { fail(e); }   // the library confirms with its own notice
+  });
+  $("btn-reload").addEventListener("click", async function () {
+    try {
+      if (!(await closeNote())) return;
+      await loadAll(true); renderAll(); applyLang(); toast(t("reloaded"));
+    } catch (e) { fail(e); }
+  });
+  // The lists repair themselves from the records: reads every record once and writes the lists new (cost: one request per record).
+  $("btn-repair").addEventListener("click", async function () {
+    try {
+      if (!(await closeNote())) return;
+      toast(t("repairing"));
+      await Promise.all([projectsCol, timeCol, notesCol, filesCol].map(function (c) { return c.rebuild(); }));
+      await loadAll(false); renderAll(); toast(t("repaired"));
+    } catch (e) { fail(e); }
+  });
+  $("btn-lock").addEventListener("click", async function () { try { if (await closeNote()) await store.lock(); } catch (e) { fail(e); } });
+  $("btn-lang").addEventListener("click", async function () {
+    S.lang = S.lang === "de" ? "en" : "de";
+    applyLang(); toast(t("lang_switched"));
+    if (!canWrite()) return;
+    try { S.settings = Object.assign({}, S.settings, { lang: S.lang }); await store.set("settings", S.settings); } catch (e) { fail(e); }
+  });
+
+  applyLang();
+  showScreen(t("loading"));
+  unlockAgain();                      // the library's dialog: create a vault or unlock; start() runs when it is done
+})();
+</script>
+</body>
+</html>

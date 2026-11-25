@@ -1,0 +1,16 @@
+{
+  "name": "wiai-datastore-tools",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Operator and developer tools of the WIAI Datastore (wds-keygen, wds-recover, wds-verify)",
+  "license": "UNLICENSED",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "playwright": "1.65.1"
+  }
+}

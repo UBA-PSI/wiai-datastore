@@ -1,0 +1,14 @@
+{
+  "1.0.0": {
+    "file": "wds-1.0.0.js",
+    "sri": "sha384-EKOlMMIEnDNee/2BRzXKP7d5U5ECJfzkJTuQ0FFdy+9+U0XnS6RQ7qFm5jdTKH/I",
+    "sha256": "e5cf8828a6bdb8ef4ec4e1c4598b5c5a94ee482e2ff5ab305039e4183fe0c7f2",
+    "bytes": 361689,
+    "escrow_pins": [
+      "jPpQPgYBsi1_jbhpXomvO_qDGg6B_oqL8t8qCEU7AAg",
+      "tVvmpc-8Du0iPnpniKhKa3vmXgL4uJ0atqDP6dOY1ic"
+    ],
+    "retired_escrow": [],
+    "frozen": false
+  }
+}

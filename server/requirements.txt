@@ -1,0 +1,4 @@
+# Exactly the Debian 13 versions (production installs them from Debian packages; this file is for local development).
+starlette==0.46.1
+uvicorn==0.32.0
+pynacl==1.5.0
