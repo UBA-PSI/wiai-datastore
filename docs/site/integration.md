@@ -37,7 +37,7 @@ If the scope has the breach check of passphrases switched on (the default; the d
 ## 1. Register a scope
 
 A scope is one registered app. Staff of the University of Bamberg open the dashboard at {{base}}/ and sign in with login.psi. After the first sign-in they choose "Create a new app" and fill in three fields: the app's **name**, a **contact e-mail address** (prefilled with their own) and, optionally, a **description**.
-That is all a standard app needs. The dashboard uses the **standard variant** for everything else, and "More settings (for experts)" is folded:
+That is all a standard app needs. The dashboard uses the **standard variant** for everything else, and "Expert settings" is folded:
 
 - **Vaults only with the join code**: new users type the code when they create their vault. The code is handed to the users in person, by e-mail or in class and is never part of the app; it does not protect data, it only keeps strangers from filling the storage. The alternatives (anyone who has the app, up to the maximum number of vaults; nobody) are in the expert settings.
 - **Passphrases from known data breaches are refused** (the breach check, on). It makes every user's browser ask the service Pwned Passwords in the USA, so the app's privacy text carries one more sentence (the top of this page).

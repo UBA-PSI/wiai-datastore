@@ -74,7 +74,7 @@ class DefaultCreateForm(DashCase):
         for field in ('id="c_name"', 'id="c_mail"', 'id="c_desc"'):
             self.assertIn(field, outside)
         self.assertNotIn("<details class=\"expert\" id=\"create-more\" open", home)
-        self.assertIn("Weitere Einstellungen (für Fachleute)", home)
+        self.assertIn("Experteneinstellungen", home)
 
     def test_defaults_sentence_names_the_values_and_the_us_service(self):
         a = self.staff()
