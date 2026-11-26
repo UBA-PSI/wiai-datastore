@@ -465,7 +465,7 @@ without a new epoch, any other invite only by a revocation (`409 revocation_requ
 Per vault the server stores at most 1000 ordinary versions; a *protective* version (it removes a slot, drops an epoch,
 adopts a renewal or switches escrow) may go on up to 1100 versions in total. Beyond that: `507 quota_exceeded` with
 `limit` = `roster_versions`. The bytes of all stored versions (body, signature, new slot blobs) are tracked per vault: an
-ordinary version is refused with `507 quota_exceeded` / `limit` = `roster_bytes` above 16 MiB and counts toward
+ordinary version is refused with `507 quota_exceeded` / `limit` = `roster_bytes` above 16 MB (2^20 bytes each) and counts toward
 `vault_bytes` and `scope_bytes`; protective versions are never refused for quota reasons.
 
 ### 6.4 Keyring rule

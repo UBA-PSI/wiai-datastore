@@ -20,7 +20,8 @@ test('create vault: passphrase rules, breach check, access sheet, then set/get a
   const hibp = await mockHibp(page, { pwned: ['Tr0ub4dor-and-3-horses'] });
   await page.evaluate(() => { window.unlockP = store.unlock(); });
   const dlg = dialog(page);
-  await expect(dlg).toHaveAttribute('aria-modal', 'true');
+  expect(await dlg.evaluate((n) => n.tagName === 'DIALOG' && n.matches(':modal'))).toBe(true); // a real modal <dialog> in the top layer
+  await expect(dlg).not.toHaveAttribute('aria-modal', /.*/);
   await expect(dlg.getByRole('heading', { name: 'Unlock your data' })).toBeVisible();
   await shot(page, 'en-unlock');
   await dlg.getByRole('button', { name: 'Create a new vault' }).click();
@@ -122,7 +123,7 @@ test('new device: key file by choosing or dropping, key file of another app is r
   // drop the right key file onto the dialog
   const text = readFileSync(vault.keyFile.path, 'utf8');
   const dt = await p2.evaluateHandle((t) => { const x = new DataTransfer(); x.items.add(new File([t], 'k.wds.json', { type: 'application/json' })); return x; }, text);
-  await p2.locator('.wds-overlay').dispatchEvent('drop', { dataTransfer: dt });
+  await p2.locator('dialog.wds-dialog').dispatchEvent('drop', { dataTransfer: dt });
   await expect(d.getByText('Key file loaded.')).toBeVisible();
   await expect(d.getByLabel('Access ID')).toHaveValue(vault.accessId);
   await d.getByLabel('Passphrase', { exact: true }).fill(vault.passphrase);
@@ -460,26 +461,27 @@ test('dialog accessibility: role, label, focus trap, inert page, focus restored,
   await page.locator('#app-button').focus();
   await page.evaluate(() => { window.unlockP = store.unlock(); });
   const d = dialog(page);
-  await expect(d).toHaveAttribute('role', 'dialog');
+  expect(await d.evaluate((n) => n.tagName)).toBe('DIALOG'); // implicit role dialog; the browser makes the rest of the page inert
   const labelledby = await d.getAttribute('aria-labelledby');
   await expect(page.locator('#' + labelledby)).toHaveText('Unlock your data');
-  await expect(page.locator('#app')).toHaveAttribute('inert', '');
+  const inertProbe = () => page.evaluate(() => { const b = document.querySelector('#app-button'); b.focus(); return document.activeElement === b; });
+  expect(await inertProbe()).toBe(false); // the page behind the modal dialog cannot take focus
   for (let i = 0; i < 14; i++) {
     await page.keyboard.press(i % 2 ? 'Tab' : 'Shift+Tab');
-    expect(await page.evaluate(() => !!document.activeElement.closest('[role=dialog]'))).toBe(true);
+    expect(await page.evaluate(() => !document.activeElement.closest('#app'))).toBe(true); // never reaches the page behind (the browser's own cycle)
   }
   for (let i = 0; i < 14; i++) {
     await page.keyboard.press('Tab');
-    expect(await page.evaluate(() => !!document.activeElement.closest('[role=dialog]'))).toBe(true);
+    expect(await page.evaluate(() => !document.activeElement.closest('#app'))).toBe(true);
   }
-  await page.keyboard.press('Escape');
+  for (let i = 0; i < 3; i++) await page.keyboard.press('Escape');
   await expect(d).toBeVisible();
   // every input has an accessible name
   const unnamed = await page.evaluate(() => [...document.querySelectorAll('.wds-dialog input:not([type=hidden]), .wds-dialog select')].filter((i) => !(i.labels && i.labels.length) && !i.getAttribute('aria-label')).length);
   expect(unnamed).toBe(0);
   await createVaultViaUi(page);
-  await expect(page.locator('#app')).not.toHaveAttribute('inert', '');
-  expect(await page.evaluate(() => document.activeElement && document.activeElement.id)).toBe('app-button');
+  expect(await page.evaluate(() => document.activeElement && document.activeElement.id)).toBe('app-button'); // focus returned to the opener
+  expect(await inertProbe()).toBe(true); // the page is usable again
   // a cancelable unlock closes with Escape and rejects with code "cancelled"
   await page.evaluate(() => store.lock());
   await page.evaluate(() => { window.cancelP = store.unlock({ cancelable: true }).then(() => 'unlocked', (e) => e.code); });

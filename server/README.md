@@ -46,7 +46,8 @@ read-only; it never appears for staff.
 the Art. 13 notice. Login goes through login.psi: put the 32-byte shared key (base64) in the file named by `[loginpsi] key_file`
 and register `wiai-datastore` with callback `<public_base>/_lpmiddleware/login` on login.psi. Staff (e-mail ending exactly in
 `@uni-bamberg.de`, no matriculation number) can create scopes; operators are listed in `[dashboard] operators`. The privacy page takes
-its date and the VM backup sentence from `[privacy]`. For local development set `[dashboard] dev_login = true` (never in production):
+its date and the VM backup sentence from `[privacy]`. `[server] help_contact` (an e-mail address or a short text, empty by default) adds a "Questions?" line to the help box of every app page.
+A scope page shows lay staff a default view (next steps with the text for Claude and the join code, usage, help, App ID) and folds everything else into the "Expert settings"; the choice "always show them opened" is the cookie `wds_expert` of that browser (no database row). For local development set `[dashboard] dev_login = true` (never in production):
 the login page then shows a form that creates a session for any user ID, applying the same staff rule. The pre-login cookie is `__Host-wds_pre; Secure`. Chromium and Firefox store it on
 `http://127.0.0.1`, WebKit/Safari do not: to check the dashboard in WebKit, serve it under an https origin (for example a
 local TLS proxy or a mapped host name with a certificate the browser trusts). Production runs on https and is not affected.

@@ -344,7 +344,7 @@
 <div id="toast" role="status" aria-live="polite"></div>
 
 
-<script src="https://wiai.uni-bamberg.de/datastore/client/wds-1.0.0.js" integrity="sha384-0chMIOOURpY8WD83X6US8o2hr2LtE5f9IAqz9OtBfXG3bDMeJa4dvx++OyqoEu0F" crossorigin="anonymous"
+<script src="https://wiai.uni-bamberg.de/datastore/client/wds-1.0.0.js" integrity="sha384-pJ91rXyzYaiJ3rU07TvKd6mFiHItRn/yEdLkmWDqay83HLMh+OKnmlOAOz16I/xs" crossorigin="anonymous"
         onerror="document.body.textContent='Storage service unreachable. Check your connection and reload this page.'"></script>
 <script>
 "use strict";
@@ -380,7 +380,7 @@
       err_conflict: "Die Daten wurden inzwischen anderswo geändert.", err_unknown: "Unbekannter Fehler.",
       read_only_hint: "Sie haben nur Lesezugriff auf diesen Tresor.",
       shared_hint: "Wenn andere Personen mit Ihnen arbeiten, erscheinen deren neue Einträge, sobald Sie zu diesem Fenster zurückkehren, oder nach „Neu laden“.",
-      privacy: "Die Daten sind Ende-zu-Ende-verschlüsselt; die Fakultät verwahrt für Notfälle einen Wiederherstellungsschlüssel. Sie liegen auf einem Server der Fakultät WIAI (Universität Bamberg). Ihre Passphrase kennt der Server nicht; sie lässt sich nicht zurücksetzen. Mit Ihrem Wiederherstellungscode kann die Fakultät nach einem dokumentierten Verfahren den Zugang wiederherstellen.",
+      privacy: "Die Daten sind Ende-zu-Ende-verschlüsselt; die Fakultät verwahrt für Notfälle einen Wiederherstellungsschlüssel. Wenn Sie eine Passphrase wählen, prüft Ihr Browser sie beim Dienst Pwned Passwords (USA) auf bekannte Datenlecks; der Dienst erhält Ihre IP-Adresse und die ersten fünf Zeichen einer Prüfsumme der Passphrase, nie die Passphrase selbst. Die Daten liegen auf einem Server der Fakultät WIAI (Universität Bamberg). Ihre Passphrase kennt der Server nicht; sie lässt sich nicht zurücksetzen. Mit Ihrem Wiederherstellungscode kann die Fakultät nach einem dokumentierten Verfahren den Zugang wiederherstellen.",
       privacy_link: "Mehr dazu",
       locked_user: "Der Tresor ist gesperrt. Alle Daten wurden aus dem Speicher dieser Seite entfernt.",
       locked_revoked: "Ihr Zugang wurde entzogen. Die Daten wurden aus dem Speicher dieser Seite entfernt.",
@@ -445,7 +445,7 @@
       err_conflict: "The data was changed elsewhere in the meantime.", err_unknown: "Unknown error.",
       read_only_hint: "You have read-only access to this vault.",
       shared_hint: "If other people work with you, their new entries appear when you return to this window, or after \"Reload\".",
-      privacy: "Data is end-to-end encrypted; the faculty holds a recovery key for emergencies. It is stored on a server of the WIAI faculty (University of Bamberg). The server does not know your passphrase; it cannot be reset. With your recovery code the faculty can restore access after a documented procedure.",
+      privacy: "Data is end-to-end encrypted; the faculty holds a recovery key for emergencies. When you choose a passphrase, your browser checks it against known data breaches with the Pwned Passwords service (USA); the service receives your IP address and the first five characters of a checksum of the passphrase, never the passphrase itself. The data is stored on a server of the WIAI faculty (University of Bamberg). The server does not know your passphrase; it cannot be reset. With your recovery code the faculty can restore access after a documented procedure.",
       privacy_link: "Details",
       locked_user: "The vault is locked. All data was removed from the memory of this page.",
       locked_revoked: "Your access was revoked. The data was removed from the memory of this page.",
@@ -496,7 +496,7 @@
     timer: null, settings: {},
     view: "time", week: null, timeDays: 14,
     noteId: null, saver: null, upload: null, previews: new Map(), query: "", tag: "", filterProject: "",
-    ticker: null, maxBytes: null, syncing: false
+    ticker: null, maxBytes: null, syncing: false, migrationChecked: false
   };
 
   var $ = function (id) { return document.getElementById(id); };
@@ -1288,6 +1288,54 @@
   store.onConflict("settings", function (c) { c.merge(function (mine, theirs) { return Object.assign({}, theirs, mine); }); });   // two devices changed different settings: keep both
   store.onConflict("timer", function (c) { c.keepMine(); });
 
+  // ---------------------------------------------------------------- data of the older, local-only version
+  // The predecessor of this app (old/index.html) kept projects and time entries as one JSON text in localStorage and notes, attachments and the running timer in IndexedDB.
+  // store.migrateLocal takes that over once, in the owner's vault: it asks the person, copies, reads everything back, and deletes the old data afterwards (not in the sandbox).
+  // The app never reads or deletes the old storage itself. The ids of migrated items are made by h.id (<tag>-j12, <tag>-sp1): the app takes an id whole and never splits it.
+  async function takeOverOldData() {
+    // migrateLocal: begin
+    const result = await store.migrateLocal({
+      id: "zeitnotizen",
+      indexedDB: { name: "zeitnotizen", stores: ["notes", "files", "meta"] },
+      localStorage: { keys: ["zeitnotizen.daten"] },
+      map(old, h) {
+        const DATA = "zeitnotizen.daten";                   // projects and time entries: one JSON text in localStorage
+        const data = old.json(DATA) || {};
+        const projects = Array.isArray(data.projects) ? data.projects : [], entries = Array.isArray(data.entries) ? data.entries : [];
+        const pid = (n) => h.id("p" + n), eid = (n) => h.id("e" + n);    // two counters in one JSON text: "p" and "e" keep their ids apart
+        const known = new Set(projects.map((p) => p.id));
+        const meta = {};                                    // the key-value store: "timer" and "lang"
+        for (const row of old.rows("meta")) { if (row.key === "timer" || row.key === "lang") meta[row.key] = row; else h.skip(row, "not a setting of the new app"); }
+        const ending = (name) => (/\.[A-Za-z0-9]{1,8}$/.exec(String(name)) || [""])[0];   // nothing refers to the id of a file, so its id may use the name
+    
+        const items = [];
+        if (!projects.length && !entries.length && old.local[DATA] !== undefined) h.skip(DATA, "no projects and no entries");
+        projects.forEach((p, i) => items.push({ col: projectsCol, id: pid(p.id), from: DATA,
+          value: { id: pid(p.id), name: String(p.name || ""), color: i, archived: false, created: 0 } }));
+        entries.forEach((e) => items.push({ col: timeCol, id: eid(e.id), from: DATA,
+          value: { id: eid(e.id), project: known.has(e.project) ? pid(e.project) : null, date: String(e.date), minutes: Number(e.minutes) || 0, desc: String(e.desc || ""), start: null, created: h.created(e.date) || 0 } }));
+        for (const row of old.rows("notes")) {
+          const n = row.value, made = h.created(n.created) || 0;
+          items.push({ col: notesCol, id: h.id(row.key), from: row, created: h.created(n.created),
+            value: { id: h.id(row.key), title: String(n.title || ""), text: String(n.text || ""), tags: Array.isArray(n.tags) ? n.tags.map(String) : [], project: null, created: made, updated: made } });
+        }
+        for (const row of old.rows("files")) {
+          const f = row.value, note = h.ref("notes", f.noteId);              // the id that the note side computes; null when the note is gone: the file is kept, it just belongs to no note
+          const blob = h.blob(f);
+          items.push({ col: filesCol, id: h.id(row.key, ending(f.name)), from: row, value: blob, mime: blob.type || "application/octet-stream",
+            meta: { note, name: String(f.name).slice(0, 100), mime: (blob.type || "application/octet-stream").slice(0, 80), size: blob.size } });
+        }
+    
+        const records = [], t = meta.timer && meta.timer.value;
+        if (t) records.push({ name: "timer", from: meta.timer, value: { project: known.has(t.project) ? pid(t.project) : null, desc: String(t.desc || ""), start: Number(t.start) } });   // a timer of a deleted project keeps running, without a project
+        const settings = meta.lang ? { record: "settings", from: meta.lang, value: { lang: meta.lang.value === "en" ? "en" : "de" } } : undefined;
+        return { items, records, settings };
+      },
+    });
+    // migrateLocal: end
+    return result;
+  }
+
   // ---------------------------------------------------------------- views and wiring
   function renderAll() {
     if (!S.loaded) return;
@@ -1318,6 +1366,11 @@
     showScreen(t("loading"));
     try {
       S.role = store.status().role || "owner";
+      if (!S.migrationChecked) {                  // once per page, before anything of the vault is read or written
+        S.migrationChecked = true;
+        var taken = await takeOverOldData();
+        if (taken.status === "failed") console.warn("old data not taken over:", taken.why);   // the library has told the person; the old data is still where it was
+      }
       await loadAll(false);
     } catch (e) {
       showScreen(t("load_failed", { msg: errText(e) }), t("retry"));

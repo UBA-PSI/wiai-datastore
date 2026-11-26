@@ -81,13 +81,13 @@ A stolen access sheet cannot be used silently: the waiting period, the notice at
 ## 4. Quotas and limits
 
 Operator defaults and ceilings are in `[limits.defaults]` and `[limits.ceilings]` of the configuration; scope administrators set their scope's
-limits on the dashboard within the ceilings.
+limits on the dashboard within the ceilings. Sizes are in MB and GB everywhere in the documentation and on the dashboard: 1 MB = 1,048,576 bytes, 1 GB = 1,073,741,824 bytes (the configuration and the API give exact bytes, for example `max_value_bytes = 10485760`).
 
 | Limit | Default | Ceiling |
 |---|---|---|
-| `max_value_bytes` (plaintext value) | 10 MiB | 25 MiB |
-| `vault_bytes` (including history) | 200 MiB | 1 GiB |
-| `scope_bytes` | 2 GiB | 10 GiB |
+| `max_value_bytes` (plaintext value) | 10 MB | 25 MB |
+| `vault_bytes` (including history) | 200 MB | 1 GB |
+| `scope_bytes` | 2 GB | 10 GB |
 | `max_vaults` per scope | 50 | 500 |
 | `history_versions` per record | 10 | 50 |
 

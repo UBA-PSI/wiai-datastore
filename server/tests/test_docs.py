@@ -227,7 +227,7 @@ class RepositoryDocuments(unittest.TestCase):
         return sorted(p.stem for p in REPO_DOCS.glob("*.md"))
 
     def test_expected_documents_exist(self):
-        self.assertTrue({"integration", "users.de", "users.en", "operator"} <= set(self.names()))
+        self.assertTrue({"integration", "porting", "users.de", "users.en", "operator"} <= set(self.names()))
         self.assertTrue((REPO_DOCS / "llms.txt").is_file())
         self.assertTrue((REPO_DOCS / "export.html").is_file())
 
@@ -302,12 +302,38 @@ class RepositoryDocuments(unittest.TestCase):
         self.assertIn(PRIVACY_DE, llms)
         self.assertIn(PRIVACY_EN, self.c.get("/datastore/docs/users.en.md").text)
         self.assertIn(PRIVACY_DE, self.c.get("/datastore/docs/users.de.md").text)
+        porting = self.c.get("/datastore/docs/porting.md").text  # a ported app replaces "your data stays on this device" with the official sentence
+        self.assertIn(PRIVACY_EN, porting)
+        self.assertIn(PRIVACY_DE, porting)
 
-    def test_integration_guide_documents_set_created_dialogs_and_the_migration_decisions(self):
+    def test_the_breach_check_sentence_is_the_same_everywhere(self):
+        from wds_server.prompt import HIBP_DE, HIBP_EN
+        self.assertIn("Pwned Passwords", HIBP_EN)
+        self.assertIn("checksum", HIBP_EN)
+        self.assertNotIn("hash", HIBP_EN.lower())
+        self.assertIn("Prüfsumme", HIBP_DE)
+        self.assertNotIn("Hash", HIBP_DE)
+        guide = self.c.get("/datastore/docs/integration.md").text
+        self.assertGreaterEqual(guide.count(HIBP_EN), 2)  # the top of the guide and the text for users (section 13)
+        self.assertGreaterEqual(guide.count(HIBP_DE), 2)
+        self.assertIn(HIBP_EN, self.c.get("/datastore/llms.txt").text)
+        self.assertIn(HIBP_DE, self.c.get("/datastore/llms.txt").text)
+        self.assertIn(HIBP_EN, self.c.get("/datastore/docs/users.en.md").text)
+        self.assertIn(HIBP_DE, self.c.get("/datastore/docs/users.de.md").text)
+        porting = self.c.get("/datastore/docs/porting.md").text
+        self.assertIn(HIBP_EN, porting)
+        self.assertIn(HIBP_DE, porting)
+        # the example app of the repository carries both sentences in its privacy text
+        app = (REPO_DOCS.parents[1] / "examples" / "zeit-notizen" / "index.html").read_text(encoding="utf-8")
+        self.assertIn(HIBP_EN, app)
+        self.assertIn(HIBP_DE, app)
+
+    def test_integration_guide_documents_set_created_dialogs_and_the_new_views(self):
         text = self.c.get("/datastore/docs/integration.md").text
         for part in ("**`set` and `created`.**", "upsert", "### Driving the library's dialogs in your own end-to-end tests", "tools/lib/drive-library.mjs",
-                     "**Do you need the tag in the item ids? Decide by the old ids.**", "**The new ids contain `-` and `%`**", "migratedSettings", "settingsDone", "fillGaps",
-                     "WDS_JOIN_CODE", "keepInSandbox"):
+                     "| `migrate` |", "| `migrate-differs` |", "| `migrate-large` |", "migrate-large-ack", "migrate-differs-keep-both", "aria-busy",
+                     "### The library's dialogs and your own modal dialogs", "dialog:not(.wds-dialog)", "store.setLocale(\"de\")", "get(id, { fresh })", "window.open(\"\", \"_blank\")",
+                     "redeemInvite", "1 MB = 1,048,576 bytes"):
             self.assertIn(part, text, part)
         # `set` takes the option created (for a new entry; an existing entry keeps its date), in the method list and in the paragraph
         self.assertIn("`set(id, value, { meta, mime, created })`", text)
@@ -315,6 +341,56 @@ class RepositoryDocuments(unittest.TestCase):
         self.assertIn("**for an entry that exists it is ignored**", text)
         self.assertNotIn("`set` has no `created` option", text)
         self.assertNotIn("`set(id, value, { meta, mime })`", text)
+
+    def test_integration_section_16_is_a_pointer_and_the_hand_recipe_is_gone_from_every_document(self):
+        text = self.c.get("/datastore/docs/integration.md").text
+        start = text.index("## 16. Porting an existing app")
+        section = text[start:text.index("## 17. The sandbox")]
+        self.assertLess(len(section.splitlines()), 14)  # a pointer, not a guide
+        self.assertIn("/docs/porting.md", section)
+        self.assertIn("/docs/porting.md", self.c.get("/datastore/llms.txt").text)
+        self.assertRegex(self.c.get("/datastore/docs/").text, r"/docs/porting")
+        for path in sorted(REPO_DOCS.iterdir()):
+            if path.suffix not in (".md", ".txt", ".html"):
+                continue
+            body = path.read_text(encoding="utf-8")
+            for gone in ("openOldDb", "keepInSandbox", "migratedSettings", "settingsDone", "toNewRecords", "migrateOldData", "WDS_JOIN_CODE=", "export WDS_JOIN_CODE", "MiB", "GiB", "Hashwert"):
+                self.assertNotIn(gone, body, path.name + " still has " + gone)
+
+    def test_porting_guide_has_the_load_bearing_parts(self):
+        raw = self.c.get("/datastore/docs/porting.md")
+        self.assertEqual(raw.status, 200)
+        self.assertEqual(raw.headers["content-type"], "text/markdown; charset=utf-8")
+        text = raw.text
+        page = self.c.get("/datastore/docs/porting")
+        self.assertEqual(page.status, 200)
+        self.assertIn("<title>Porting an existing app to WIAI Datastore - WIAI Datastore</title>", page.text)
+        self.assertIn("/docs/porting.md", page.text)  # the Markdown link in the header
+        for part in ("store.migrateLocal", "from", "h.skip", "h.fail", "h.ref", "h.id", "h.blob", "h.created", "WDS.fillGaps", "tagged: false", "**The new ids contain `-` and `%`**",
+                     "**Do you need the tag in the item ids? Decide by the old ids.**", "### Example 1:", "### Example 2:", "### What your app does with the result",
+                     "migrate-differs", "migrate-large", "Entries that differ", "The join code for tests", "(umask 077; cat > ~/.wds/join-code)", "mkdir -p ~/.wds && chmod 700 ~/.wds",
+                     "WDS_JOIN_CODE_FILE", "never read, print, copy or list that file", "redeemInvite", "deleteVault", "--migration-delete", "context.addInitScript", "__WDS_MIGRATION_TEST__",
+                     "## 7. Checklist for apps with forms and modal dialogs", "dialog:not(.wds-dialog)", "CSS.escape", "window.open(\"\", \"_blank\")", "setLocale(\"de\")",
+                     "same folder, same file name", "sessionStorage", "fresh browser profile", "1 MB = 1,048,576 bytes", "nothing", "busy", "skipped", "declined", "partial", "failed", "migrated"):
+            self.assertIn(part, text, part)
+        # the seed run is described in its order: old app, new app, dialogs, steps, filling, reload
+        order = [text.index(x) for x in ("1. **The old app.**", "2. **The new app**", "3. **The library's dialogs.**", "4. **The steps**", "5. **Automatic filling", "6. **The reload**")]
+        self.assertEqual(order, sorted(order))
+        # the guide has to say what no code can: units once, and that the file with the join code is the person's own
+        self.assertIn("Units: 1 MB = 1,048,576 bytes", text)
+        self.assertNotIn("{{", text)
+
+    def test_users_documents_explain_the_old_data_question(self):
+        en = self.c.get("/datastore/docs/users.en.md").text
+        de = self.c.get("/datastore/docs/users.de.md").text
+        self.assertIn("## Data from an earlier version of the app", en)
+        self.assertIn("## Daten aus einer früheren Version der App", de)
+        self.assertIn("**not encrypted**", en)
+        self.assertIn("**nicht verschlüsselt**", de)
+        self.assertIn("checksum", en)
+        self.assertIn("Prüfsumme", de)
+        self.assertIn("app ID", en)
+        self.assertIn("App-ID", de)
 
     def test_export_page_is_standalone(self):
         page = self.c.get("/datastore/export/").text

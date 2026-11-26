@@ -99,6 +99,7 @@ export function instrument() {
   // The collections of the store: what the app hands to add/set/autosave is what it writes, so it is logged like store.set (op "cwrite";
   // the collections call the real store inside, not this wrapper). One wrapper per collection object.
   var colWraps = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+  var colOrigs = typeof WeakMap !== 'undefined' ? new WeakMap() : null;   // wrapper -> the library's collection (store.migrateLocal checks the identity of "col")
   function wrapCollection(orig) {
     if (!orig || typeof orig !== 'object') return orig;
     if (colWraps && colWraps.has(orig)) return colWraps.get(orig);
@@ -121,8 +122,13 @@ export function instrument() {
         Object.defineProperty(w, k, { enumerable: true, configurable: true, get: function () { return orig[k]; } });
       }
     });
-    if (colWraps) colWraps.set(orig, w);
+    if (colWraps) { colWraps.set(orig, w); colOrigs.set(w, orig); }
     return w;
+  }
+  // store.migrateLocal({ map }) returns items whose "col" is a collection the app got from the wrapped store: hand the library its own object.
+  function unwrapItems(r) {
+    if (!r || typeof r !== 'object' || !Array.isArray(r.items) || !colOrigs) return r;
+    return Object.assign({}, r, { items: r.items.map(function (it) { return it && typeof it === 'object' && colOrigs.has(it.col) ? Object.assign({}, it, { col: colOrigs.get(it.col) }) : it; }) });
   }
   function wrapStore(orig) {
     if (!orig || typeof orig !== 'object') return orig;
@@ -138,6 +144,10 @@ export function instrument() {
             a[1] = function () { var v = getter.apply(this, arguments); log({ kind: 'store', op: 'autosave', name: name, value: json(v) }); return v; };
           }
           if (k === 'collection') return wrapCollection(d.value.apply(orig, a));
+          if (k === 'migrateLocal' && a[0] && typeof a[0] === 'object' && typeof a[0].map === 'function') {
+            var mopts = a[0], mmap = mopts.map;
+            a[0] = Object.assign({}, mopts, { map: function () { var r = mmap.apply(this, arguments); return r && typeof r.then === 'function' ? r.then(unwrapItems) : unwrapItems(r); } });
+          }
           if (k === 'exportAll') {
             var s0 = Date.now(), done = function () { log({ kind: 'export', start: s0, end: Date.now() }); };
             var r = d.value.apply(orig, a);

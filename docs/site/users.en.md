@@ -7,8 +7,7 @@ before it is sent**. This page explains what you need, what to keep safe and who
 
 1. **A join code** from the person who runs the app. You need it once, to create your vault.
 2. **A passphrase of your own**, at least 12 characters. Four or more unrelated words work well ("purple elephant marching slowly").
-   The app rejects very common passphrases (also German ones such as "ichliebedich123") and passphrases that appear in known data breaches. If the breach check cannot be reached, or is switched off for the app, the app asks for a stronger passphrase. For that check only the first five
-   characters of a hash of your passphrase go to the service Pwned Passwords in the USA, never the passphrase itself.
+   The app rejects very common passphrases (also German ones such as "ichliebedich123") and passphrases that appear in known data breaches. If the breach check cannot be reached, or is switched off for the app, the app asks for a stronger passphrase. When you choose a passphrase, your browser checks it against known data breaches with the Pwned Passwords service (USA); the service receives your IP address and the first five characters of a checksum of the passphrase, never the passphrase itself.
 3. **Your access sheet.** After creating your vault the app shows it: your **access ID** (five groups of four characters) and your
    **recovery code**. Print it or save it, and keep it apart from your computer.
 
@@ -72,6 +71,17 @@ In short: **Data is end-to-end encrypted; the faculty holds a recovery key for e
 
 Without a recovery code, recovery works only if you stored an e-mail address as recovery contact when you created the vault;
 the waiting period is then 7 days. With neither, your data cannot be recovered.
+
+## Data from an earlier version of the app
+
+If the app existed before as a version that kept its data only in your browser, the new version asks **once**, when you open it: "This browser holds … entries from an earlier version of this app … Copy them into your vault and then delete them from this browser?"
+
+- The app copies the entries into your vault, reads them back from the server and compares them, and only then deletes the old copy in the browser. Nothing is overwritten in your vault, and a copy that did not work leaves the old data where it is.
+- **Download a backup first** if you want one: it is a ZIP file with all old entries and their files. It is **not encrypted**, so keep it safe or delete it after you have looked at it.
+- "Not now" changes nothing; the old data stays unencrypted in this browser and the app asks again next time.
+- If something is too large for your vault, the app lists it and lets you download each file before it deletes anything.
+- Only the owner of a vault can do this. If you were invited into someone else's vault, the app shows a notice and leaves the old data alone; take it over in a vault of your own.
+- Open the new version the way you opened the old one (the same file in the same place, or the same web address): a browser keeps the data of every address separately.
 
 ## If a dialog says "Sandbox"
 

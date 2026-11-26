@@ -2026,11 +2026,19 @@ return module.exports.argon2id;
  *   store.onConflict("notes/", handler) / store.onConflict("settings", handler)           // prefix or exact name -> unsubscribe
  *   await store.history(name) / restore(name, version) / showHistory(name, { title })
  *   await store.share(); await store.exportAll(); store.lock(); store.status() (with sandbox: boolean)
+ *   await store.migrateLocal({ id, indexedDB?, localStorage?, tagged?, map(old, h), texts? })   // the data an earlier, local-only version left in this browser
+ *       -> { status: nothing | busy | skipped | declined | discarded | failed | partial | migrated, deleted?: deleted | kept | changed, copied?, total?, tooLarge?, differs?, why?, again?, sandbox,
+ *            downloadBackup() }   // it resolves for every wrong option only; everything map or the old data cause is { status: "failed", why }
+ *       map gets copies of the old rows (it may change them; the old rows are never touched). h.skip(row) deletes the row with the old data: only for rows that are no user data.
+ *       old: rows(storeName) -> [{ key, value }], local, keys(prefix?), json(key); h: id(oldKey, ending?), ref(storeName, oldKey, ending?), blob(value, field?), created(x), skip(row, why), fail(row, why)
+ *       map returns { items: [{ col, id, value, meta?, created?, mime?, from }], records: [{ name, value, mime?, from }], settings: { record, value, from } }; "from" is the old row
+ *       (or localStorage key) an entry comes from: every old row must be claimed by an entry or skipped, or nothing is deleted. WDS.fillGaps(current, old).
  * Typed errors: WDS.errors.{ConflictError, OfflineError, QuotaError, AuthError, IntegrityError, VersionError}. An index write of a collection that
  * failed after the item was stored rejects with err.stored = true, err.id and err.record (the record name).
  *
- * Stable attributes: every button, input, select, textarea and summary inside .wds-root has data-wds="<name>", every dialog has
- * data-wds-view="<view>" (updated on every view switch), toasts have data-wds-toast="<key>" with buttons toast-action and toast-dismiss.
+ * Stable attributes: every button, input, select, textarea and summary inside .wds-root has data-wds="<name>", every dialog (a modal <dialog class="wds-root wds-dialog">
+ * in the top layer, above modal dialogs of the app) has data-wds-view="<view>", set when the view is rendered, and aria-busy="true" while it waits (loading, progress, a
+ * submit in flight): view present and no aria-busy = ready. Toasts have data-wds-toast="<key>" with buttons toast-action and toast-dismiss.
  *   all dialogs: close, form-error, sandbox-banner (sandbox only); page: sandbox-bar (sandbox only)
  *   loading, error: retry
  *   unlock: access-id-input, keyfile, keyfile-button, passphrase, show-passphrase, unlock-submit, to-create, to-redeem
@@ -2043,6 +2051,8 @@ return module.exports.argon2id;
  *          invite-another, me-keyfile, me-renew, me-lock, me-passphrase-toggle, passphrase, passphrase-repeat, show-passphrase, me-passphrase-submit,
  *          recovery-cancel, recovery-keep, recovered-ack, rekey-continue
  *   revoke: revoke-confirm, revoke-cancel, revoke-id;  notice: recovery-cancel, recovery-keep, recovered-ack
+ *   migrate: migrate-yes, migrate-backup, migrate-no, migrate-skip-ack (only with skipped rows), migrate-discard, close;  migrate-discard: migrate-discard-confirm, migrate-discard-back, close;  progress: (none);  migrate-differs: migrate-differs-keep-vault, migrate-differs-keep-both, migrate-differs-later, close
+ *   migrate-large: migrate-large-download (data-wds-index), migrate-large-ack, migrate-delete, migrate-keep, close;  toast key "migration" (toast-action: backup, on every notice that leaves the old data in place)
  * Dialogs use the class prefix "wds-" and CSS custom properties "--wds-*"; no Shadow DOM; nothing hands the passphrase
  * to app code. Never use innerHTML here: all text goes through textContent.
  */
@@ -2184,7 +2194,7 @@ return module.exports.argon2id;
       'pw.pwned': 'This passphrase appears {count} times in known data breaches. Choose another one.',
       'pw.hibp.unavailable': 'The breach check could not be reached, so this passphrase was not checked against known breaches.',
       'pw.hibp.checking': 'Checking against known data breaches…',
-      'pw.hibp.note': 'The breach check sends only the first 5 characters of a hash of your passphrase to api.pwnedpasswords.com, a US service. The passphrase itself never leaves this device.',
+      'pw.hibp.note': 'The breach check sends only the first 5 characters of a checksum of your passphrase to api.pwnedpasswords.com, a US service. The passphrase itself never leaves this device.',
       'pw.strength': 'Strength: {label}',
       'pw.label.0': 'very weak', 'pw.label.1': 'weak', 'pw.label.2': 'fair', 'pw.label.3': 'good', 'pw.label.4': 'strong',
       'pw.empty': 'Enter a passphrase.',
@@ -2365,6 +2375,51 @@ return module.exports.argon2id;
       'sandbox.sheet.note': 'No recovery in the sandbox; this vault is deleted tonight.',
       'sandbox.emptied': 'The sandbox was emptied on {date}. Create a new vault.',
       'sandbox.nightly': 'The sandbox is emptied every night.',
+      'migrate.title': 'Take over data from the earlier version',
+      'migrate.question': 'This browser holds {count} entries from an earlier version of this app. They are unencrypted and exist only on this device. Copy them into your vault (access ID ending in {vault}) and then delete them from this browser? Deleting cannot be undone.',
+      'migrate.question.sandbox': 'This browser holds {count} entries from an earlier version of this app. They are unencrypted and exist only on this device. Copy them into your vault (access ID ending in {vault})? Sandbox: the old data stays in this browser.',
+      'migrate.question.large': '{n} of them cannot be copied into the vault (too large or not enough space); you get them as downloads.',
+      'migrate.question.skipped': '{n} entries are not taken over because the app does not use them. They are deleted with the rest of the old data; the backup contains them.',
+      'migrate.skip.ack': 'I do not need these {n} entries (or I have downloaded the backup).',
+      'migrate.question.none': 'This browser holds data of an earlier version of this app, but nothing in it can be taken over: this app does not use {n} of the entries.',
+      'migrate.discard': 'Do not take over; delete the old data',
+      'migrate.discard.title': 'Delete the old data?',
+      'migrate.discard.text': 'The old data is deleted from this browser without being copied into your vault. This cannot be undone. Download the backup first if you may need it.',
+      'migrate.discard.text.sandbox': 'The old data would be deleted from this browser without being copied into your vault. Sandbox: it stays in this browser.',
+      'migrate.discard.back': 'Go back', 'migrate.discard.confirm': 'Delete the old data',
+      'migrate.done.discarded': 'The old data was deleted from this browser.',
+      'migrate.done.discarded.kept': 'Sandbox: the old data stays in this browser.',
+      'migrate.done.settings': 'The settings of the earlier version were taken over and its old data was deleted from this browser.',
+      'migrate.done.settings.kept': 'The settings of the earlier version were taken over. Sandbox: the old data stays in this browser.',
+      'migrate.backup.nofiles': 'The {n} files do not fit into one ZIP file. They were saved as separate downloads next to the data file.',
+      'migrate.backup.failed': 'The backup could not be created: {why}',
+      'migrate.backup.none': 'There is no old data left in this browser.',
+      'migrate.question.later': 'If you choose "Not now", the old data stays unencrypted in this browser and you are asked again next time.',
+      'migrate.backup': 'Download a backup (not encrypted)',
+      'migrate.backup.short': 'Download a backup',
+      'migrate.backup.hint': 'A ZIP file with all old entries and their files. It is not encrypted: keep it safe or delete it after use.',
+      'migrate.yes': 'Take over', 'migrate.no': 'Not now',
+      'migrate.progress': 'Taking over: {done} of {total}',
+      'migrate.progress.check': 'Checking the copy: {done} of {total}',
+      'migrate.differs.title': 'Entries that differ',
+      'migrate.differs.text': '{n} entries already exist in your vault with other content (for example because you changed them in the new version). The old versions were not copied. What should happen?',
+      'migrate.differs.keepVault': 'Keep the versions in the vault',
+      'migrate.differs.keepBoth': 'Keep both (old versions as copies)',
+      'migrate.differs.later': 'Decide later',
+      'migrate.differs.hint': 'The old versions are deleted from this browser with the rest of the old data. Download the backup first if you may need them.',
+      'migrate.large.title': 'Some entries cannot be copied',
+      'migrate.large.text': '{n} entries do not fit into your vault. They exist only in this browser: download them now. Entries that referred to them lose that link.',
+      'migrate.large.download': 'Download',
+      'migrate.large.ack': 'I have saved the files or do not need them',
+      'migrate.large.delete': 'Delete the old data anyway', 'migrate.large.keep': 'Keep the old data',
+      'migrate.done.deleted': '{n} entries are now in your vault and were deleted from this browser.',
+      'migrate.done.kept': '{n} entries were copied into your vault. Sandbox: the old data stays in this browser.',
+      'migrate.done.changed': 'The old data was used again in the meantime and is still here. Open the app again; the rest is taken over then.',
+      'migrate.done.again': 'The old data that was already copied has now been deleted from this browser.',
+      'migrate.partial': 'The old data was taken over, except entries that did not fit. The old data stays in this browser; you are asked again at the next start.',
+      'migrate.partial.differs': 'Some old entries differ from the vault and were not decided yet. The old data stays in this browser; you are asked again at the next start.',
+      'migrate.failed': 'Taking over the old data failed. Nothing was deleted: it stays in this browser. You can download a backup of it. If this happens again, tell the person who runs this app.',
+      'migrate.skipped': 'This browser still holds data of an earlier version of this app. It can only be taken over into a vault of your own; in this vault you are a member.',
       'err.sandboxDisabled': 'The sandbox is not available at the moment.',
       'note.unsavedDropped': 'Unsaved changes of the previously open vault could not be saved.'
     },
@@ -2417,7 +2472,7 @@ return module.exports.argon2id;
       'pw.pwned': 'Diese Passphrase kommt {count}-mal in bekannten Datenlecks vor. Wählen Sie eine andere.',
       'pw.hibp.unavailable': 'Die Prüfung auf Datenlecks war nicht erreichbar, daher wurde diese Passphrase nicht gegen bekannte Datenlecks geprüft.',
       'pw.hibp.checking': 'Prüfung auf bekannte Datenlecks …',
-      'pw.hibp.note': 'Die Prüfung auf Datenlecks sendet nur die ersten 5 Zeichen eines Hashwerts Ihrer Passphrase an api.pwnedpasswords.com, einen US-Dienst. Die Passphrase selbst verlässt dieses Gerät nie.',
+      'pw.hibp.note': 'Die Prüfung auf Datenlecks sendet nur die ersten 5 Zeichen einer Prüfsumme Ihrer Passphrase an api.pwnedpasswords.com, einen US-Dienst. Die Passphrase selbst verlässt dieses Gerät nie.',
       'pw.strength': 'Stärke: {label}',
       'pw.label.0': 'sehr schwach', 'pw.label.1': 'schwach', 'pw.label.2': 'mittel', 'pw.label.3': 'gut', 'pw.label.4': 'stark',
       'pw.empty': 'Geben Sie eine Passphrase ein.',
@@ -2598,6 +2653,51 @@ return module.exports.argon2id;
       'sandbox.sheet.note': 'Keine Wiederherstellung in der Testumgebung; dieser Tresor wird heute Nacht gelöscht.',
       'sandbox.emptied': 'Die Testumgebung wurde am {date} geleert. Legen Sie einen neuen Tresor an.',
       'sandbox.nightly': 'Die Testumgebung wird jede Nacht geleert.',
+      'migrate.title': 'Daten der früheren Version übernehmen',
+      'migrate.question': 'In diesem Browser liegen {count} Einträge aus einer früheren Version dieser App, unverschlüsselt und nur auf diesem Gerät. Sollen sie in Ihren Tresor (Zugangskennung endet auf {vault}) kopiert und danach aus diesem Browser gelöscht werden? Das Löschen lässt sich nicht rückgängig machen.',
+      'migrate.question.sandbox': 'In diesem Browser liegen {count} Einträge aus einer früheren Version dieser App, unverschlüsselt und nur auf diesem Gerät. Sollen sie in Ihren Tresor (Zugangskennung endet auf {vault}) kopiert werden? Testumgebung: Die alten Daten bleiben in diesem Browser.',
+      'migrate.question.large': '{n} davon passen nicht in den Tresor (zu groß oder zu wenig Platz); Sie bekommen sie als Download.',
+      'migrate.question.skipped': '{n} Einträge werden nicht übernommen, weil die App sie nicht verwendet. Sie werden mit den übrigen alten Daten gelöscht; die Sicherung enthält sie.',
+      'migrate.skip.ack': 'Ich brauche diese {n} Einträge nicht (oder habe die Sicherung heruntergeladen).',
+      'migrate.question.none': 'In diesem Browser liegen Daten einer früheren Version dieser App, von denen sich nichts übernehmen lässt: {n} der Einträge verwendet diese App nicht.',
+      'migrate.discard': 'Nicht übernehmen, alte Daten löschen',
+      'migrate.discard.title': 'Alte Daten löschen?',
+      'migrate.discard.text': 'Die alten Daten werden aus diesem Browser gelöscht, ohne in Ihren Tresor kopiert zu werden. Das lässt sich nicht rückgängig machen. Laden Sie vorher die Sicherung herunter, falls Sie sie brauchen könnten.',
+      'migrate.discard.text.sandbox': 'Die alten Daten würden aus diesem Browser gelöscht, ohne in Ihren Tresor kopiert zu werden. Testumgebung: Sie bleiben in diesem Browser.',
+      'migrate.discard.back': 'Zurück', 'migrate.discard.confirm': 'Alte Daten löschen',
+      'migrate.done.discarded': 'Die alten Daten wurden aus diesem Browser gelöscht.',
+      'migrate.done.discarded.kept': 'Testumgebung: Die alten Daten bleiben in diesem Browser.',
+      'migrate.done.settings': 'Die Einstellungen der früheren Version wurden übernommen, die alten Daten aus diesem Browser gelöscht.',
+      'migrate.done.settings.kept': 'Die Einstellungen der früheren Version wurden übernommen. Testumgebung: Die alten Daten bleiben in diesem Browser.',
+      'migrate.backup.nofiles': 'Die {n} Dateien passen nicht in eine ZIP-Datei. Sie wurden neben der Datendatei einzeln heruntergeladen.',
+      'migrate.backup.failed': 'Die Sicherung konnte nicht erstellt werden: {why}',
+      'migrate.backup.none': 'In diesem Browser liegen keine alten Daten mehr.',
+      'migrate.question.later': 'Wenn Sie „Später“ wählen, bleiben die alten Daten unverschlüsselt in diesem Browser und Sie werden beim nächsten Start wieder gefragt.',
+      'migrate.backup': 'Sicherung herunterladen (nicht verschlüsselt)',
+      'migrate.backup.short': 'Sicherung herunterladen',
+      'migrate.backup.hint': 'Eine ZIP-Datei mit allen alten Einträgen und ihren Dateien. Sie ist nicht verschlüsselt: Bewahren Sie sie sicher auf oder löschen Sie sie nach der Benutzung.',
+      'migrate.yes': 'Übernehmen', 'migrate.no': 'Später',
+      'migrate.progress': 'Wird übernommen: {done} von {total}',
+      'migrate.progress.check': 'Kopie wird geprüft: {done} von {total}',
+      'migrate.differs.title': 'Abweichende Einträge',
+      'migrate.differs.text': '{n} Einträge gibt es in Ihrem Tresor schon mit anderem Inhalt (zum Beispiel, weil Sie sie in der neuen Version geändert haben). Die alten Versionen wurden nicht kopiert. Was soll geschehen?',
+      'migrate.differs.keepVault': 'Versionen im Tresor behalten',
+      'migrate.differs.keepBoth': 'Beide behalten (alte Versionen als Kopien)',
+      'migrate.differs.later': 'Später entscheiden',
+      'migrate.differs.hint': 'Die alten Versionen werden mit den übrigen alten Daten aus diesem Browser gelöscht. Laden Sie vorher die Sicherung herunter, falls Sie sie brauchen könnten.',
+      'migrate.large.title': 'Einige Einträge lassen sich nicht kopieren',
+      'migrate.large.text': '{n} Einträge passen nicht in Ihren Tresor. Sie liegen nur in diesem Browser: Laden Sie sie jetzt herunter. Einträge, die auf sie verwiesen, verlieren diese Verknüpfung.',
+      'migrate.large.download': 'Herunterladen',
+      'migrate.large.ack': 'Ich habe die Dateien gespeichert oder brauche sie nicht',
+      'migrate.large.delete': 'Alte Daten trotzdem löschen', 'migrate.large.keep': 'Alte Daten behalten',
+      'migrate.done.deleted': '{n} Einträge sind jetzt in Ihrem Tresor und wurden aus diesem Browser gelöscht.',
+      'migrate.done.kept': '{n} Einträge wurden in Ihren Tresor kopiert. Testumgebung: Die alten Daten bleiben in diesem Browser.',
+      'migrate.done.changed': 'Die alten Daten wurden inzwischen wieder benutzt und sind noch da. Öffnen Sie die App erneut, dann wird der Rest übernommen.',
+      'migrate.done.again': 'Die bereits kopierten alten Daten wurden jetzt aus diesem Browser gelöscht.',
+      'migrate.partial': 'Die alten Daten wurden übernommen, außer den Einträgen, die nicht gepasst haben. Die alten Daten bleiben in diesem Browser; beim nächsten Start werden Sie erneut gefragt.',
+      'migrate.partial.differs': 'Einige alte Einträge weichen vom Tresor ab und sind noch nicht entschieden. Die alten Daten bleiben in diesem Browser; beim nächsten Start werden Sie erneut gefragt.',
+      'migrate.failed': 'Die Übernahme der alten Daten ist fehlgeschlagen. Es wurde nichts gelöscht: Die Daten bleiben in diesem Browser. Sie können eine Sicherung herunterladen. Wenn das wieder passiert, melden Sie sich bei der Person, die diese App betreibt.',
+      'migrate.skipped': 'In diesem Browser liegen noch Daten einer früheren Version dieser App. Sie lassen sich nur in einen eigenen Tresor übernehmen; in diesem Tresor sind Sie Mitglied.',
       'err.sandboxDisabled': 'Die Testumgebung ist im Moment nicht verfügbar.',
       'note.unsavedDropped': 'Nicht gespeicherte Änderungen des zuvor geöffneten Tresors konnten nicht gespeichert werden.'
     }
@@ -2969,11 +3069,19 @@ return module.exports.argon2id;
     '--_border:var(--wds-border,#434c59);--_accent:var(--wds-accent,#7db0ff);--_accent-fg:var(--wds-accent-fg,#0a1a33);--_danger:var(--wds-danger,#ff9a90);',
     '--_warn:var(--wds-warn,#f0c36a);--_ok:var(--wds-ok,#78d9a0);--_soft:var(--wds-soft,#272d36)}}',
     '.wds-root *,.wds-root *::before,.wds-root *::after{box-sizing:border-box}',
-    '.wds-overlay{position:fixed;inset:0;z-index:var(--wds-z,2147483000);display:flex;align-items:flex-start;justify-content:center;overflow:auto;overscroll-behavior:contain;',
-    'padding:max(1rem,6vh) 1rem 1rem;background:var(--_backdrop)}',
-    '.wds-dialog{width:100%;max-width:34rem;background:var(--_bg);color:var(--_fg);border-radius:var(--_radius);box-shadow:var(--_shadow);outline:0}',
-    '.wds-dialog-wide{max-width:46rem}',
-    '.wds-dragover .wds-dialog{outline:3px dashed var(--_accent);outline-offset:3px}',
+    // The dialog is a modal <dialog> (top layer). App CSS for "dialog" (padding, max-width, border, centring with transform, fade-in with
+    // opacity, display:flex ...) must not change the box: "all:initial" plus the explicit box below, the critical properties with !important.
+    '.wds-root.wds-dialog{all:initial;display:block!important;position:fixed!important;inset:0 0 auto 0!important;',
+    'margin:calc(max(1rem,6vh) + var(--wds-sandbox-bar,0px)) auto 1rem!important;padding:0!important;border:0!important;transform:none!important;translate:none!important;',
+    'opacity:1!important;visibility:visible!important;animation:none!important;transition:none!important;',
+    'width:min(34rem,calc(100vw - 2rem))!important;max-width:none!important;min-width:0!important;height:auto!important;min-height:0!important;',
+    'max-height:calc(100vh - 2rem - var(--wds-sandbox-bar,0px))!important;max-height:calc(100dvh - 2rem - var(--wds-sandbox-bar,0px))!important;',
+    'overflow:auto!important;overscroll-behavior:contain;box-sizing:border-box;font-family:var(--_font);font-size:var(--wds-font-size,16px);line-height:1.5;',
+    'color:var(--_fg);background:var(--_bg);border-radius:var(--_radius);box-shadow:var(--_shadow);outline:0}',
+    '.wds-root.wds-dialog:not([open]){display:none!important}',
+    '.wds-root.wds-dialog.wds-dialog-wide{width:min(46rem,calc(100vw - 2rem))!important}',
+    '.wds-root.wds-dialog::backdrop{background:var(--_backdrop,rgba(15,20,30,.55))!important;opacity:1!important;visibility:visible!important;display:block!important}',
+    '.wds-root.wds-dialog.wds-dragover{outline:3px dashed var(--_accent);outline-offset:3px}',
     '.wds-head{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;padding:1.15rem 1.4rem .3rem}',
     '.wds-title{margin:0;font-size:1.25rem;line-height:1.3;font-weight:650;color:inherit}',
     '.wds-sub{margin:.15rem 0 0;color:var(--_muted);font-size:.9rem}',
@@ -3032,11 +3140,13 @@ return module.exports.argon2id;
     '@keyframes wds-rot{to{transform:rotate(360deg)}}@media (prefers-reduced-motion:reduce){.wds-spin{animation:none}.wds-meter-bar{transition:none}}',
     '.wds-fs{border:0;margin:0;padding:0;min-width:0}',
     '.wds-details{margin:.9rem 0}.wds-details>summary{cursor:pointer;font-weight:600}',
-    '.wds-toasts{position:fixed;right:1rem;bottom:1rem;z-index:calc(var(--wds-z,2147483000) + 1);display:flex;flex-direction:column;gap:.5rem;width:min(26rem,calc(100vw - 2rem));pointer-events:none}',
+    // The toast region is a popover="manual" (top layer, above modal dialogs); without popover support the old fixed/z-index layout applies.
+    '.wds-toasts{position:fixed;right:1rem;bottom:1rem;z-index:2147483001;display:flex;flex-direction:column;gap:.5rem;width:min(26rem,calc(100vw - 2rem));pointer-events:none}',
+    '.wds-toasts[popover]{inset:auto 1rem 1rem auto;margin:0;padding:0;border:0;background:transparent;overflow:visible;color:var(--_fg);height:auto}',
     '.wds-toast{pointer-events:auto;background:var(--_bg);color:var(--_fg);border:1px solid var(--_border);border-left:5px solid var(--_accent);border-radius:calc(var(--_radius) - 2px);padding:.7rem .85rem;box-shadow:var(--_shadow)}',
     '.wds-toast-warn{border-left-color:var(--_warn)}.wds-toast-error{border-left-color:var(--_danger)}.wds-toast-ok{border-left-color:var(--_ok)}',
     '.wds-toast p{margin:0}.wds-toast-actions{display:flex;flex-wrap:wrap;gap:.5rem;margin-top:.5rem}',
-    '@media (max-width:36rem){.wds-toasts{left:.5rem;right:.5rem;bottom:.5rem;width:auto;max-height:40vh;overflow:auto}.wds-toast{padding:.5rem .7rem}}',
+    '@media (max-width:36rem){.wds-toasts{left:.5rem;right:.5rem;bottom:.5rem;width:auto;max-height:40vh;overflow:auto}.wds-toasts[popover]{inset:auto .5rem .5rem .5rem;overflow:auto}.wds-toast{padding:.5rem .7rem}}',
     '.wds-act{margin:.7rem 0}.wds-act .wds-hint{margin-top:.3rem}',
   ].join('');
 
@@ -3049,9 +3159,11 @@ return module.exports.argon2id;
   }
 
   var stack = [];
-  var inertChanged = [];
   var restoreFocusTo = null;
-  var focusGuard = null;
+  var toastRegionEl = null;
+  var barNodes = [];                      // sandbox bars (popover="manual"): shown again above every new backdrop
+  var layerTimer = null, layerListening = false, layerForeign = 0;
+  var HAS_POPOVER = typeof HTMLElement !== 'undefined' && typeof HTMLElement.prototype.showPopover === 'function';
 
   var FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]):not([type="hidden"]),select:not([disabled]),textarea:not([disabled]),summary,[tabindex]:not([tabindex="-1"])';
   function focusables(node) {
@@ -3059,25 +3171,109 @@ return module.exports.argon2id;
       return !n.hasAttribute('inert') && (n.offsetWidth > 0 || n.offsetHeight > 0 || n.getClientRects().length > 0);
     });
   }
-  function setPageInert(on) {
-    if (on) {
-      Array.prototype.forEach.call(document.body.children, function (c) {
-        if (c.classList.contains('wds-root') || c.hasAttribute('inert') || c.tagName === 'SCRIPT' || c.tagName === 'STYLE') return;
-        c.setAttribute('inert', '');
-        inertChanged.push(c);
-      });
-    } else {
-      inertChanged.forEach(function (c) { c.removeAttribute('inert'); });
-      inertChanged = [];
+
+  // ---- the top layer: library dialogs are modal <dialog>s; toasts and the sandbox bar are popovers that are kept above them ----
+  // The browser does stacking and inertness: the newest showModal() is on top, everything below it is inert, a popover="manual" that is
+  // shown after a modal dialog is inert as well unless it is a DOM descendant of that dialog. So the toast region is moved into the
+  // topmost modal dialog (ours, else the app's) and shown again (rehost).
+  function isLibDialog(n) { return !!(n && n.classList && n.classList.contains('wds-dialog')); }
+  function foreignModals() {   // the app's own dialogs that are open with showModal()
+    var out = [];
+    try { Array.prototype.forEach.call(document.querySelectorAll('dialog:modal'), function (n) { if (!isLibDialog(n)) out.push(n); }); } catch (e) { /* :modal not supported */ }
+    return out;
+  }
+  function popoverOpen(n) { try { return n.matches(':popover-open'); } catch (e) { return false; } }
+  function showPop(n) {
+    if (!HAS_POPOVER || !n || !n.hasAttribute('popover') || !n.isConnected) return;
+    try { if (popoverOpen(n)) n.hidePopover(); n.showPopover(); } catch (e) { /* cannot be shown right now */ }
+  }
+  function hidePop(n) { if (HAS_POPOVER && n && n.hasAttribute('popover') && popoverOpen(n)) { try { n.hidePopover(); } catch (e) { /* ignore */ } } }
+  // The browser or an app sweep closed a library dialog, or a re-render of the page removed it: show it again (the newest on top).
+  function raiseDialogs() {
+    stack.slice().forEach(function (d) {
+      if (d.closed) return;
+      try {
+        if (!d.dialog.isConnected) document.body.appendChild(d.dialog);
+        if (d.dialog.open) d.dialog.close();
+        d.dialog.showModal();
+      } catch (e) { /* ignore */ }
+    });
+    var top = stack[stack.length - 1];
+    if (top && !top.closed) top.refocus();
+  }
+  function hostRegion(foreign, raised) {
+    if (!toastRegionEl) return;
+    var host = null;
+    if (stack.length) host = stack[stack.length - 1].dialog;
+    else if (foreign.length) {
+      host = foreign[foreign.length - 1];
+      for (var i = 0; i < foreign.length; i++) if (foreign[i].contains(document.activeElement)) host = foreign[i];
+    }
+    if (!host || !host.isConnected) host = document.body;
+    var moved = toastRegionEl.parentNode !== host || !toastRegionEl.isConnected;
+    if (moved) { hidePop(toastRegionEl); host.appendChild(toastRegionEl); }
+    if (moved || raised || !popoverOpen(toastRegionEl)) showPop(toastRegionEl);
+  }
+  // The timer only runs while there is something to watch: a library dialog, or a modal dialog of the app.
+  function layerTick() {
+    var need = stack.length > 0 || layerForeign > 0;
+    if (need && !layerTimer) layerTimer = setInterval(syncLayers, 400);
+    else if (!need && layerTimer) { clearInterval(layerTimer); layerTimer = null; }
+  }
+  // Is the topmost library dialog covered by a modal dialog of the app? Then it is inert, and a point in its middle hits the app's dialog (or its
+  // backdrop). Decided by what is on top, not by which element opened: an app that reuses one dialog element is covered again each time.
+  function topCovered(foreign) {
+    if (!foreign.length || !stack.length || typeof document.elementFromPoint !== 'function') return false;
+    var top = stack[stack.length - 1];
+    if (top.closed || !top.dialog.isConnected || !top.dialog.open) return false;
+    var r = top.dialog.getBoundingClientRect();
+    if (!r.width || !r.height) return false;
+    var x = r.left + r.width / 2, y = r.top + r.height / 2;
+    if (x < 0 || y < 0 || x >= (window.innerWidth || 0) || y >= (window.innerHeight || 0)) return false;
+    var hit = document.elementFromPoint(x, y);
+    return !!hit && !top.dialog.contains(hit);
+  }
+  // fresh: a dialog of the app has just been opened (it is above ours, whatever the element is).
+  function syncLayers(fresh) {
+    var foreign = foreignModals(), raise = false;
+    fresh = fresh === true && foreign.length > 0;
+    layerForeign = foreign.length;
+    if (stack.length) {
+      stack.forEach(function (d) { if (!d.closed && !d.dialog.isConnected) raise = true; });
+      if (fresh || topCovered(foreign)) raise = true;   // an app dialog was opened with showModal() above ours: ours goes on top again
+      if (raise) raiseDialogs();
+    }
+    hostRegion(foreign, raise || fresh);
+    if (raise || fresh) barNodes.forEach(showPop);
+    layerTick();
+  }
+  function onLayerFocusIn(ev) {
+    if (ev.target && ev.target.closest && ev.target.closest('.wds-root')) return;
+    syncLayers();
+  }
+  function onLayerClose() { syncLayers(); }   // 'close' does not bubble but reaches a capture listener: an app dialog that closed takes its toasts with it
+  function onLayerKey(ev) {
+    if (ev.key !== 'Escape' || ev.isComposing || !stack.length) return;
+    var top = stack[stack.length - 1];
+    ev.preventDefault(); ev.stopPropagation();    // preventDefault on keydown stops the browser's own cancel/close; the library decides
+    if (top.cancelable) top.close(undefined);
+  }
+  function ensureLayerListeners() {
+    if (layerListening || typeof document === 'undefined') return;
+    layerListening = true;
+    document.addEventListener('focusin', onLayerFocusIn, true);
+    document.addEventListener('close', onLayerClose, true);
+    document.addEventListener('keydown', onLayerKey, true);
+    if (typeof MutationObserver === 'function') {   // a dialog of the app that gets its "open" attribute: showModal() or show(), also on an element that was open before
+      try {
+        new MutationObserver(function (recs) {
+          for (var i = 0; i < recs.length; i++) { var n = recs[i].target; if (n && n.localName === 'dialog' && !isLibDialog(n) && n.hasAttribute('open')) { syncLayers(true); return; } }
+        }).observe(document.documentElement, { attributes: true, attributeFilter: ['open'], subtree: true });
+      } catch (e) { /* no observer: the timer and the focus events still notice */ }
     }
   }
-  function onFocusIn(ev) {
-    var top = stack[stack.length - 1];
-    if (!top) return;
-    if (top.overlay.contains(ev.target)) return;
-    if (ev.target.closest && ev.target.closest('.wds-toasts')) return;
-    var f = focusables(top.dialog);
-    (f[0] || top.dialog).focus();
+  function closeAllDialogs() {
+    stack.slice().reverse().forEach(function (d) { d.close(undefined); });
   }
 
   // The banner of a sandbox scope: inline !important styles, so that CSS of the host page cannot hide it.
@@ -3118,29 +3314,29 @@ return module.exports.argon2id;
   }
 
   // o: {title, view, cancelable, wide, role, sandbox (scope info of a sandbox: title prefix + banner), onClose(result)}. Returns the dialog handle.
-  // Every dialog carries data-wds-view (its current view, see setView) and, in a sandbox, the banner.
+  // Every dialog is a modal <dialog class="wds-root wds-dialog"> with data-wds-view (its current view, see setView: set when the view is rendered)
+  // and aria-busy="true" while it waits (loading, progress, a submit in flight); in a sandbox it carries the banner.
   function openDialog(o) {
     ensureStyle();
+    ensureLayerListeners();
     var titleId = uid('wds-title');
-    var overlay = el('div', { class: 'wds-overlay wds-root', lang: o.lang });
-    var dialog = el('div', { class: 'wds-dialog' + (o.wide ? ' wds-dialog-wide' : ''), role: o.role || 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId, tabindex: '-1', 'data-wds-view': o.view });
+    var dialog = el('dialog', { class: 'wds-root wds-dialog' + (o.wide ? ' wds-dialog-wide' : ''), lang: o.lang, role: o.role === 'alertdialog' ? 'alertdialog' : null, 'aria-labelledby': titleId, tabindex: '-1', 'data-wds-view': o.view });
     var prefix = o.titlePrefix || '', rawTitle = o.title || '', bareTitle = false;
     var title = el('h2', { class: 'wds-title', id: titleId, text: prefix + rawTitle });
     var body = el('div', { class: 'wds-body' });
-    var d = { overlay: overlay, dialog: dialog, body: body, title: title, closed: false, cancelable: !!o.cancelable };
+    var d = { dialog: dialog, body: body, title: title, closed: false, cancelable: !!o.cancelable, lastFocused: null };
     var closeBtn = o.cancelable ? el('button', { type: 'button', class: 'wds-x', 'aria-label': o.closeLabel || 'Close', 'data-wds': 'close', onclick: function () { d.close(undefined); } }, '×') : null;
     append(dialog, [o.banner || null, el('div', { class: 'wds-head' }, [title, closeBtn]), body]);
-    overlay.appendChild(dialog);
-    overlay.addEventListener('keydown', function (ev) {
-      if (stack[stack.length - 1] !== d) return;
-      if (ev.key === 'Escape' && d.cancelable) { ev.stopPropagation(); d.close(undefined); return; }
-      if (ev.key !== 'Tab') return;
-      var f = focusables(dialog);
-      if (!f.length) { ev.preventDefault(); dialog.focus(); return; }
-      var first = f[0], lastEl = f[f.length - 1], active = document.activeElement;
-      if (ev.shiftKey && (active === first || active === dialog)) { ev.preventDefault(); lastEl.focus(); }
-      else if (!ev.shiftKey && active === lastEl) { ev.preventDefault(); first.focus(); }
+    if (o.view === 'loading' || o.view === 'progress') dialog.setAttribute('aria-busy', 'true');
+    // The library decides about closing: the browser's own cancel (Escape without a keydown we saw, a close watcher) is refused.
+    dialog.addEventListener('cancel', function (ev) { ev.preventDefault(); });
+    // The browser closed it anyway (form method=dialog, an app sweep over all dialogs): a mandatory dialog never vanishes, a cancelable one is cancelled.
+    dialog.addEventListener('close', function () {
+      if (d.closed || dialog.open) return;
+      if (d.cancelable) { d.close(undefined); return; }
+      try { if (!dialog.isConnected) document.body.appendChild(dialog); dialog.showModal(); } catch (e) { /* ignore */ }
     });
+    dialog.addEventListener('focusin', function (ev) { d.lastFocused = ev.target; });
     function paintTitle() { title.textContent = (bareTitle ? '' : prefix) + rawTitle; }
     d.setTitle = function (s, bare) { rawTitle = s; bareTitle = !!bare; paintTitle(); };
     // The scope turned out to be a sandbox after the dialog was opened (the first view loads the scope information).
@@ -3151,47 +3347,62 @@ return module.exports.argon2id;
       if (old) old.parentNode.removeChild(old);
       dialog.insertBefore(sandboxBanner(S), dialog.firstChild);
     };
-    d.setView = function (v) { dialog.setAttribute('data-wds-view', v); };
+    d.setView = function (v) {
+      dialog.setAttribute('data-wds-view', v);
+      if (v === 'loading' || v === 'progress') dialog.setAttribute('aria-busy', 'true'); else dialog.removeAttribute('aria-busy');
+      if (!dialog.contains(document.activeElement)) dialog.focus();   // a view without a control: keep the focus (and Escape) in the dialog
+    };
+    d.setBusy = function (on) { if (on) dialog.setAttribute('aria-busy', 'true'); else dialog.removeAttribute('aria-busy'); };
     d.setCancelable = function (on) { d.cancelable = !!on; if (closeBtn) closeBtn.disabled = !on; };
     d.focusFirst = function () {
       var f = focusables(body);
       (f[0] || dialog).focus();
+    };
+    d.refocus = function () {
+      var last = d.lastFocused;
+      if (last && last.isConnected && dialog.contains(last) && last.focus) { try { last.focus(); return; } catch (e) { /* fall through */ } }
+      d.focusFirst();
     };
     d.close = function (result) {
       if (d.closed) return;
       d.closed = true;
       var idx = stack.indexOf(d);
       if (idx >= 0) stack.splice(idx, 1);
-      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+      try { if (dialog.open) dialog.close(); } catch (e) { /* ignore */ }
+      if (dialog.parentNode) dialog.parentNode.removeChild(dialog);
       var top = stack[stack.length - 1];
-      if (top) top.overlay.removeAttribute('inert');
-      if (!stack.length) {
-        setPageInert(false);
-        document.removeEventListener('focusin', onFocusIn, true);
+      if (top) { if (!top.dialog.contains(document.activeElement)) top.refocus(); }
+      else {
         var back = restoreFocusTo;
         restoreFocusTo = null;
         if (back && back.focus && document.contains(back)) { try { back.focus(); } catch (e) { /* ignore */ } }
-      } else top.dialog.focus();
+      }
+      syncLayers();
       if (o.onClose) o.onClose(result);
     };
-    if (!stack.length) {
-      restoreFocusTo = document.activeElement;
-      document.addEventListener('focusin', onFocusIn, true);
-    } else stack[stack.length - 1].overlay.setAttribute('inert', '');
+    if (!stack.length) restoreFocusTo = document.activeElement;
     stack.push(d);
-    document.body.appendChild(overlay);
-    if (stack.length === 1) setPageInert(true);
+    document.body.appendChild(dialog);
+    if (typeof dialog.showModal === 'function') { try { dialog.showModal(); } catch (e) { dialog.setAttribute('open', ''); } } else dialog.setAttribute('open', '');
+    syncLayers();
+    barNodes.forEach(showPop);
     dialog.focus();
     return d;
   }
 
   // ---- notifications ----
-  var toastRegionEl = null;
+  // The region keeps its toasts in its own children; it is moved between hosts (see hostRegion) and is put back when an app removed it with
+  // a dialog it was hosted in. Events inside it do not reach the host's handlers (an app dialog that closes on a click outside its box).
   function toastRegion(label) {
     ensureStyle();
-    if (toastRegionEl && document.body.contains(toastRegionEl)) return toastRegionEl;
-    toastRegionEl = el('div', { class: 'wds-toasts wds-root', role: 'region', 'aria-label': label || 'Notifications' });
-    document.body.appendChild(toastRegionEl);
+    ensureLayerListeners();
+    if (!toastRegionEl) {
+      toastRegionEl = el('div', { class: 'wds-toasts wds-root', role: 'region', 'aria-label': label || 'Notifications' });
+      if (HAS_POPOVER) toastRegionEl.setAttribute('popover', 'manual');
+      ['click', 'mousedown', 'mouseup', 'pointerdown', 'pointerup', 'keydown', 'keyup', 'submit', 'focusin'].forEach(function (type) {
+        toastRegionEl.addEventListener(type, function (ev) { ev.stopPropagation(); });
+      });
+    }
     return toastRegionEl;
   }
   var toastKeys = {};
@@ -3199,11 +3410,12 @@ return module.exports.argon2id;
     Object.keys(toastKeys).forEach(function (k) { try { toastKeys[k].close(); } catch (e) { /* already gone */ } });
     toastKeys = {};
     if (toastRegionEl) while (toastRegionEl.firstChild) toastRegionEl.removeChild(toastRegionEl.firstChild);
+    layerTick();
   }
   // o: {kind: info|ok|warn|error, text, actions: [{label, onClick, primary}], sticky, key, regionLabel, dismissLabel}
   function showToast(o) {
     var region = toastRegion(o.regionLabel);
-    if (o.key && toastKeys[o.key] && toastKeys[o.key].node.parentNode) { toastKeys[o.key].update(o.text); return toastKeys[o.key]; }
+    if (o.key && toastKeys[o.key] && toastKeys[o.key].node.parentNode) { toastKeys[o.key].update(o.text); syncLayers(); return toastKeys[o.key]; }
     var kind = o.kind || 'info';
     var textEl = el('p', { text: o.text });
     var node = el('div', { lang: o.lang, class: 'wds-toast wds-toast-' + kind, role: kind === 'error' || kind === 'warn' ? 'alert' : 'status', 'data-wds-toast': o.key }, [textEl]);
@@ -3215,17 +3427,19 @@ return module.exports.argon2id;
         if (timer) clearTimeout(timer);
         if (node.parentNode) node.parentNode.removeChild(node);
         if (o.key && toastKeys[o.key] === h) delete toastKeys[o.key];
+        layerTick();
       },
     };
     var acts = (o.actions || []).map(function (a) {
       return el('button', { type: 'button', class: 'wds-btn wds-btn-small' + (a.primary ? ' wds-btn-primary' : ''), 'data-wds': 'toast-action', onclick: function () { if (a.close !== false) h.close(); a.onClick(h); } }, a.label);
     });
-    if (o.dismissLabel !== null) acts.push(el('button', { type: 'button', class: 'wds-btn wds-btn-small', 'data-wds': 'toast-dismiss', onclick: function () { h.close(); } }, o.dismissLabel || 'Dismiss'));
+    if (o.dismissLabel !== null) acts.push(el('button', { type: 'button', class: 'wds-btn wds-btn-small', 'data-wds': 'toast-dismiss', onclick: function () { h.close(); if (o.onDismiss) { try { o.onDismiss(); } catch (e) { /* ignore */ } } } }, o.dismissLabel || 'Dismiss'));
     node.appendChild(el('div', { class: 'wds-toast-actions' }, acts));
     region.appendChild(node);
     if (o.key) toastKeys[o.key] = h;
     var sticky = o.sticky !== undefined ? o.sticky : kind !== 'info' && kind !== 'ok';
     if (!sticky) timer = setTimeout(h.close, o.timeoutMs || 9000);
+    syncLayers();
     return h;
   }
 
@@ -3411,7 +3625,7 @@ return module.exports.argon2id;
       dl,
       el('div', { class: 'wds-actions' }, [
         btn(t('sheet.keyfile'), { wds: 'sheet-keyfile', onClick: function () { downloadText(o.keyFile.text, keyFileName(S, o.keyFile), 'application/json'); } }),
-        btn(t('sheet.print'), { wds: 'sheet-print', onClick: function () { printHtml(dlg.overlay, buildSheetHtml(data, t, S.lang)); } }),
+        btn(t('sheet.print'), { wds: 'sheet-print', onClick: function () { printHtml(dlg.dialog, buildSheetHtml(data, t, S.lang)); } }),
         btn(t('sheet.download'), { wds: 'sheet-download', onClick: function () { downloadText(buildSheetHtml(data, t, S.lang), S.client.scope + '-access-sheet.html', 'text/html;charset=utf-8'); } }),
       ]),
       el('p', { class: 'wds-hint', text: t('sheet.keyfile.hint') }),
@@ -3450,17 +3664,18 @@ return module.exports.argon2id;
           else { st.notice = { kind: 'error', text: explainError(S, e, 'unlock') }; viewUnlock(); }
         }
       }
-      dlg.overlay.addEventListener('dragover', function (ev) { ev.preventDefault(); dlg.overlay.classList.add('wds-dragover'); });
-      dlg.overlay.addEventListener('dragleave', function (ev) { if (ev.target === dlg.overlay) dlg.overlay.classList.remove('wds-dragover'); });
-      dlg.overlay.addEventListener('drop', function (ev) {
-        ev.preventDefault(); dlg.overlay.classList.remove('wds-dragover');
+      dlg.dialog.addEventListener('dragover', function (ev) { ev.preventDefault(); dlg.dialog.classList.add('wds-dragover'); });
+      dlg.dialog.addEventListener('dragleave', function (ev) { if (ev.target === dlg.dialog) dlg.dialog.classList.remove('wds-dragover'); });
+      dlg.dialog.addEventListener('drop', function (ev) {
+        ev.preventDefault(); dlg.dialog.classList.remove('wds-dragover');
         var files = ev.dataTransfer && ev.dataTransfer.files;
         if (files && files[0]) loadKeyFile(files[0]);
       });
 
       function frame(view, title, children) {
-        clear(dlg.body); dlg.setTitle(title); dlg.setView(view);
+        clear(dlg.body); dlg.setTitle(title);
         append(dlg.body, children);
+        dlg.setView(view);   // set when the controls are in place
       }
 
       // A sandbox is emptied every night: an access ID remembered from before the last wipe belongs to a vault that is gone.
@@ -3519,13 +3734,13 @@ return module.exports.argon2id;
           var checked = await pw.validate();
           if (!checked) return;
           var accessId = Core.normalizeCode(raw);
-          fs.disabled = true; showBusy(busy, t('unlock.busy'));
+          fs.disabled = true; dlg.setBusy(true); showBusy(busy, t('unlock.busy'));
           await nextPaint();
           try {
             await client.unlock({ accessId: accessId, passphrase: checked.passphrase, vaultId: st.vaultId && accessId === st.accessId ? st.vaultId : undefined, maintain: false });
             done({ created: false });
           } catch (e) {
-            fs.disabled = false; showBusy(busy, '');
+            fs.disabled = false; dlg.setBusy(false); showBusy(busy, '');
             if (e && e.code === 'invite_not_redeemed') { st.inviteCode = raw; viewRedeem(); return; }
             // The dialog may have been open across a nightly wipe of a sandbox: ask again whether the remembered vault is gone.
             if (isSandbox(S) && client.rememberedAccessId() === accessId && !(e instanceof Core.OfflineError)) {
@@ -3581,7 +3796,7 @@ return module.exports.argon2id;
           if (contact && !/^[^\s@]+@[^\s@]+$/.test(contact)) { contactField.setError(t('err.contact.invalid')); contactInput.closest('details').open = true; contactInput.focus(); return; }
           var checked = await pw.validate();
           if (!checked) return;
-          fs.disabled = true; showBusy(busy, t('create.busy'));
+          fs.disabled = true; dlg.setBusy(true); showBusy(busy, t('create.busy'));
           await nextPaint();
           try {
             var res = await client.createVault({ passphrase: checked.passphrase, joinCode: joinField ? joinInput.value.trim() : undefined, recoveryContact: contact || undefined });
@@ -3591,7 +3806,7 @@ return module.exports.argon2id;
               role: 'owner', hibpSkipped: checked.hibp && checked.hibp.status === 'unavailable',
             }, function () { done({ created: true }); });
           } catch (e) {
-            fs.disabled = false; showBusy(busy, '');
+            fs.disabled = false; dlg.setBusy(false); showBusy(busy, '');
             if (joinField && e && e.code === 'join_code_invalid') {   // next to the field, which is far above the button on a long form
               joinField.setError(explainError(S, e, 'create')); joinInput.focus(); joinInput.select();
               if (joinInput.scrollIntoView) joinInput.scrollIntoView({ block: 'center' });
@@ -3624,7 +3839,7 @@ return module.exports.argon2id;
           if (Core.classifyCode(raw) !== 'invite') { fCode.setError(t('err.invite.invalid')); codeInput.focus(); return; }
           var checked = await pw.validate();
           if (!checked) return;
-          fs.disabled = true; showBusy(busy, t('redeem.busy'));
+          fs.disabled = true; dlg.setBusy(true); showBusy(busy, t('redeem.busy'));
           await nextPaint();
           try {
             var res = await client.redeemInvite({ inviteCode: raw, passphrase: checked.passphrase, maintain: false });
@@ -3635,7 +3850,7 @@ return module.exports.argon2id;
             dlg.setTitle(t('redeem.done'));
             dlg.body.insertBefore(msg('ok', res.role === 'read' ? t('redeem.role.read') : t('redeem.role.write')), dlg.body.firstChild);
           } catch (e) {
-            fs.disabled = false; showBusy(busy, '');
+            fs.disabled = false; dlg.setBusy(false); showBusy(busy, '');
             append(formErr, msg('error', explainError(S, e, 'redeem')));
           }
         } }, fs);
@@ -3681,9 +3896,12 @@ return module.exports.argon2id;
   // c: {name, mine: {value, kind, mime, deleted}, theirs: {version, deleted, kind, mime, time, value}|null}. -> 'mine' | 'theirs'
   function conflictDialog(S, c) {
     var t = S.t, isDelete = !!(c.mine && c.mine.deleted);
-    return new Promise(function (resolve) {
-      var dlg = dialogFor(S, { title: t(isDelete ? 'conflict.delete.title' : 'conflict.title'), view: 'conflict', wide: true });
-      function choose(which) { dlg.close(); resolve(which); }
+    return new Promise(function (resolve, reject) {
+      var chosen = false;
+      // A lock (the session ended while the question was open) closes the dialog: the write that asked fails like any write after a lock.
+      var dlg = dialogFor(S, { title: t(isDelete ? 'conflict.delete.title' : 'conflict.title'), view: 'conflict', wide: true,
+        onClose: function () { if (!chosen) reject(new Core.UsageError('the session ended while a conflict was waiting for a decision', { code: 'locked' })); } });
+      function choose(which) { chosen = true; dlg.close(); resolve(which); }
       var theirs = c.theirs ? Object.assign({ who: 'theirs' }, c.theirs) : null;
       var mine = Object.assign({ who: 'mine' }, c.mine);
       var paneTheirs = el('section', { class: 'wds-pane', 'aria-labelledby': 'wds-c-theirs' }, [
@@ -3998,11 +4216,11 @@ return module.exports.argon2id;
             ev.preventDefault(); clear(out);
             var checked = await pw.validate();
             if (!checked) return;
-            fs.disabled = true; showBusy(busy, t('unlock.busy'));
+            fs.disabled = true; dlg.setBusy(true); showBusy(busy, t('unlock.busy'));
             await nextPaint();
             try { await client.changePassphrase(checked.passphrase); pw.reset(); out.appendChild(msg('ok', t('share.me.passphrase.done'))); }
             catch (e) { out.appendChild(msg('error', explain(e))); }
-            fs.disabled = false; showBusy(busy, '');
+            fs.disabled = false; dlg.setBusy(false); showBusy(busy, '');
           } }, fs), out]));
         return el('div', { class: 'wds-section' }, parts);
       }
@@ -4052,6 +4270,319 @@ return module.exports.argon2id;
         client.maintain().then(function () { if (!dlg.closed && !locked && st.view === 'main' && !st.invite) render(); }, function () { /* the banners explain what is needed */ });
       }
     });
+  }
+
+  // ------------------------------------------------------------------------------------------------------------
+  // 10b. store.migrateLocal, pure parts: ids, values, hashes, reading the old browser storage
+  // ------------------------------------------------------------------------------------------------------------
+  var MIGRATE_ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
+  var MIGRATE_ENDING_RE = /^(\.[A-Za-z0-9]{1,8})?$/;
+  var MIGRATE_OPTIONS = ['id', 'indexedDB', 'localStorage', 'tagged', 'map', 'texts'];
+  var MIGRATION_RECORD = INTERNAL_PREFIX + 'migration/';
+
+  // A run that ends without an exception but not as a success: { stopStatus, why }. Thrown inside the run, turned into the result.
+  function MigrateStop(why, extra) { var e = new Error(why); e.isMigrateStop = true; e.why = why; e.extra = extra || {}; return e; }
+
+  function hexLower(bytes) { var s = ''; for (var i = 0; i < bytes.length; i++) s += (bytes[i] < 16 ? '0' : '') + bytes[i].toString(16); return s; }
+  async function sha256Hex(data) {
+    var d = await crypto.subtle.digest('SHA-256', typeof data === 'string' ? utf8(data) : data);
+    return hexLower(new Uint8Array(d));
+  }
+  function fnv1a(s) { var h = 0x811c9dc5; for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; } return ('0000000' + h.toString(16)).slice(-8); }
+  function isBlobValue(v) { return typeof Blob !== 'undefined' && v instanceof Blob; }
+  function isBinaryValue(v) { return v instanceof ArrayBuffer || ArrayBuffer.isView(v); }
+  function bytesOf(v) { return v instanceof ArrayBuffer ? new Uint8Array(v) : new Uint8Array(v.buffer, v.byteOffset, v.byteLength); }
+  function isPlainLike(v) { return v !== null && typeof v === 'object' && !isBlobValue(v) && !isBinaryValue(v) && !(v instanceof Date) && !(v instanceof Map) && !(v instanceof Set); }
+
+  // The id part for an old key: "s" + the string, "b" + hex for binary keys, "j" + the JSON text for everything else (numbers, arrays, dates).
+  // Different keys never give the same token (1 and "1" differ), and a token never contains "/".
+  function migrateKeyToken(key) {
+    try {
+      if (typeof key === 'string') return 's' + encodeURIComponent(key);
+      if (isBinaryValue(key)) return 'b' + hexLower(bytesOf(key));
+      var text = JSON.stringify(key);
+      if (text === undefined) throw new Error('no JSON form');
+      return 'j' + encodeURIComponent(text);
+    } catch (e) { throw MigrateStop('this key cannot be turned into an id: ' + String(key).slice(0, 60)); }
+  }
+  // tag: the browser's tag (tagged ids) or null. Same input, same id, on every side: a reference computes its target's id with the same call.
+  function migrateBuildId(tag, key, ending) {
+    ending = ending === undefined || ending === null ? '' : ending;
+    if (typeof ending !== 'string' || !MIGRATE_ENDING_RE.test(ending)) throw new Core.UsageError('h.id: the ending must look like ".pdf" (a dot and 1 to 8 letters or digits)');
+    var id = (tag ? tag + '-' : '') + migrateKeyToken(key);
+    if (id.length + ending.length > 200) id = id.slice(0, 180) + '~' + fnv1a(id);
+    return id + ending;
+  }
+  function dataUrlToBlob(s) {
+    var m = /^data:([^,]*?),([\s\S]*)$/.exec(s);
+    if (!m) return null;
+    var params = m[1].split(';'), type = params[0] || '', isB64 = params.slice(1).indexOf('base64') >= 0, bytes;
+    try {
+      if (isB64) { var bin = atob(m[2].replace(/\s+/g, '')); bytes = new Uint8Array(bin.length); for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i); }
+      else bytes = utf8(decodeURIComponent(m[2]));
+    } catch (e) { return null; }
+    return new Blob([bytes], { type: type });
+  }
+  function migrateToBlob(value, field) {
+    function from(x, hint) {
+      if (isBlobValue(x)) return x;
+      if (isBinaryValue(x)) return new Blob([x], { type: hint || '' });
+      if (typeof x === 'string' && x.slice(0, 5) === 'data:') return dataUrlToBlob(x);
+      return null;
+    }
+    var hint = value && typeof value === 'object' && typeof value.type === 'string' ? value.type : '', b = null;
+    if (field !== undefined) b = from(value === null || value === undefined ? undefined : value[field], hint);
+    else {
+      b = from(value, '');
+      if (!b && value && typeof value === 'object') b = isBlobValue(value.blob) ? value.blob : from(value.data, hint);
+    }
+    if (!b) throw MigrateStop('h.blob: found no Blob, ArrayBuffer or data: URL' + (field !== undefined ? ' in the field "' + field + '"' : ' (looked at the value itself, .blob and .data)') + '; pass the field name as the second argument');
+    return b;
+  }
+  function migrateCreated(x) {
+    if (x instanceof Date) { var t0 = x.getTime(); return Number.isFinite(t0) ? t0 : undefined; }
+    if (typeof x === 'number') return Number.isFinite(x) ? x : undefined;
+    if (typeof x === 'string') { var t1 = Date.parse(x); return Number.isFinite(t1) ? t1 : undefined; }
+    return undefined;
+  }
+  // Fills the keys the old settings have and the current ones lack. Only absent keys (undefined) count as gaps: a setting that was cleared
+  // (null, "", false, 0) stays as it is.
+  function fillGaps(current, old) {
+    var out = {};
+    if (current && typeof current === 'object') Object.keys(current).forEach(function (k) { out[k] = current[k]; });
+    if (old && typeof old === 'object') Object.keys(old).forEach(function (k) { if (out[k] === undefined && old[k] !== undefined) out[k] = old[k]; });
+    return out;
+  }
+
+  // A JSON-able, key-sorted picture of an old value; blobs and binary data by size, type, name and (with bytes) their SHA-256, which
+  // shaOf(). Same picture = same data. Throws for what cannot be copied (functions, cycles).
+  function canonValue(v, st, depth) {
+    if (depth > 80) throw new Error('nested too deeply');
+    var t = typeof v;
+    if (v === null || t === 'string' || t === 'boolean') return v;
+    if (t === 'number') return Number.isFinite(v) ? v : { $: 'num', v: String(v) };
+    if (t === 'undefined') return { $: 'undefined' };
+    if (t === 'bigint') return { $: 'bigint', v: v.toString() };
+    if (t !== 'object') throw new Error('a ' + t + ' cannot be copied');
+    if (st.seen.indexOf(v) >= 0) throw new Error('a value that contains itself cannot be copied');
+    st.seen.push(v);
+    try {
+      if (isBlobValue(v)) return { $: 'blob', size: v.size, type: v.type, name: v.name === undefined ? null : v.name, lastModified: v.lastModified === undefined ? null : v.lastModified, sha: st.bytes ? st.sha.get(v) || null : undefined };
+      if (isBinaryValue(v)) return { $: 'bytes', kind: Object.prototype.toString.call(v), size: v.byteLength, sha: st.bytes ? st.sha.get(v) || null : undefined };
+      if (v instanceof Date) return { $: 'date', v: isNaN(v.getTime()) ? 'invalid' : v.toISOString() };
+      if (Array.isArray(v)) return v.map(function (x) { return canonValue(x, st, depth + 1); });
+      if (v instanceof Map) return { $: 'map', v: Array.from(v.entries()).map(function (e) { return [canonValue(e[0], st, depth + 1), canonValue(e[1], st, depth + 1)]; }) };
+      if (v instanceof Set) return { $: 'set', v: Array.from(v.values()).map(function (x) { return canonValue(x, st, depth + 1); }) };
+      var out = {};
+      Object.keys(v).sort().forEach(function (k) { out[k] = canonValue(v[k], st, depth + 1); });
+      return out;
+    } finally { st.seen.pop(); }
+  }
+  function canonText(v, sha, bytes) { return JSON.stringify(canonValue(v, { sha: sha, bytes: bytes, seen: [] }, 0)); }
+  // Checks a value that is to be stored as JSON: Blobs, binary data, Maps and Sets inside would silently become {}; BigInt and cycles throw.
+  function migrateCheckJson(v, where, seen, depth) {
+    if (v === null || typeof v !== 'object') {
+      if (typeof v === 'bigint' || typeof v === 'function' || typeof v === 'symbol') throw MigrateStop(where + ' contains a ' + typeof v + ', which JSON cannot hold');
+      return;
+    }
+    if (depth > 80) throw MigrateStop(where + ' is nested too deeply');
+    if (isBlobValue(v) || isBinaryValue(v) || v instanceof Map || v instanceof Set) {
+      throw MigrateStop(where + ' contains a ' + (isBlobValue(v) ? 'Blob/File' : isBinaryValue(v) ? 'binary buffer' : v instanceof Map ? 'Map' : 'Set') + ' inside a JSON value; JSON would write {}. Store files as their own item (h.blob) and refer to them by id');
+    }
+    if (seen.indexOf(v) >= 0) throw MigrateStop(where + ' contains itself');
+    seen.push(v);
+    if (Array.isArray(v)) v.forEach(function (x) { migrateCheckJson(x, where, seen, depth + 1); });
+    else if (!(v instanceof Date)) Object.keys(v).forEach(function (k) { migrateCheckJson(v[k], where, seen, depth + 1); });
+    seen.pop();
+  }
+  function migrateSizeOf(v) { return isBlobValue(v) ? v.size : isBinaryValue(v) ? v.byteLength : utf8(JSON.stringify(v)).length; }
+  async function bytesEqual(a, b) {   // Blob/binary against Blob/binary
+    var x = isBlobValue(a) ? new Uint8Array(await a.arrayBuffer()) : bytesOf(a), y = isBlobValue(b) ? new Uint8Array(await b.arrayBuffer()) : bytesOf(b);
+    if (x.length !== y.length) return false;
+    for (var i = 0; i < x.length; i++) if (x[i] !== y[i]) return false;
+    return true;
+  }
+  // The stored record (core getRecord / ConflictError.theirs) against a value of the migration.
+  async function storedEquals(stored, value, mime) {
+    if (!stored || stored.deleted) return false;
+    if (isBlobValue(value) || isBinaryValue(value)) return stored.kind === 'bytes' && await bytesEqual(stored.value, value);
+    return stored.kind === 'json' && JSON.stringify(stored.value) === JSON.stringify(value);
+  }
+
+  // The helpers h of a map call. ctx: { tag, tagged, hasRow(storeName, key) -> bool, refs: Set, skipped: Map(row or key -> why), unknownRow(x) }.
+  function makeMigrateHelpers(ctx) {
+    var h = {
+      id: function (oldKey, ending) { return migrateBuildId(ctx.tagged ? ctx.tag : null, oldKey, ending); },
+      // The id of the row with this key in another store, or null (a reference to a row that does not exist any more).
+      ref: function (storeName, oldKey, ending) {
+        if (oldKey === null || oldKey === undefined) return null;
+        if (!ctx.hasRow(storeName, oldKey)) return null;
+        var id = h.id(oldKey, ending);
+        ctx.refs.add(id);
+        return id;
+      },
+      blob: migrateToBlob,
+      created: migrateCreated,
+      // Leaves out a row on purpose: it is deleted with the rest of the old data, so only for a row that is no user data (a cache). The person is told how many rows
+      // are left out and must confirm (or download the backup) before anything is copied.
+      skip: function (rowOrKey, why) { var id = ctx.unknownRow(rowOrKey); if (id !== null) ctx.skipped.set(id, String(why || 'skipped')); },
+      // Stops the run: nothing is written, the old data stays.
+      fail: function (rowOrKey, why) { var r = ctx.describe ? ctx.describe(rowOrKey) : ''; throw MigrateStop((r ? r + ': ' : '') + String(why || 'cannot be mapped')); },
+    };
+    return h;
+  }
+
+  // The options of migrateLocal (UsageError for anything that is wrong before the run starts).
+  function migrateParse(o) {
+    if (!o || typeof o !== 'object') throw new Core.UsageError('migrateLocal needs an options object { id, indexedDB?, localStorage?, map }');
+    Object.keys(o).forEach(function (k) {
+      if (MIGRATE_OPTIONS.indexOf(k) < 0) throw new Core.UsageError('migrateLocal: unknown option "' + k + '"' + (k === 'applySettings' ? ' (settings are returned by map as settings: { record, value, from }; the library writes them)' : '') + '; known options: ' + MIGRATE_OPTIONS.join(', '));
+    });
+    if (typeof o.id !== 'string' || !MIGRATE_ID_RE.test(o.id)) throw new Core.UsageError('migrateLocal: id must be 1 to 40 characters: lowercase letters, digits and "-", starting with a letter or digit');
+    if (typeof o.map !== 'function') throw new Core.UsageError('migrateLocal: map must be a function (old, h) => ({ items, records, settings })');
+    if (o.tagged !== undefined && typeof o.tagged !== 'boolean') throw new Core.UsageError('migrateLocal: tagged must be true or false');
+    if (o.texts !== undefined && (o.texts === null || typeof o.texts !== 'object')) throw new Core.UsageError('migrateLocal: texts must be an object');
+    var cfg = { id: o.id, map: o.map, tagged: o.tagged !== false, texts: o.texts, dbs: [], localKeys: [], localPrefixes: [] };
+    var idb = o.indexedDB === undefined || o.indexedDB === null ? [] : Array.isArray(o.indexedDB) ? o.indexedDB : [o.indexedDB];
+    var dbNames = {};
+    idb.forEach(function (d) {
+      if (!d || typeof d.name !== 'string' || !d.name) throw new Core.UsageError('migrateLocal: every indexedDB entry needs a name');
+      if (!Array.isArray(d.stores) || !d.stores.length || d.stores.some(function (s) { return typeof s !== 'string' || !s; })) throw new Core.UsageError('migrateLocal: indexedDB "' + d.name + '" needs stores: ["storeName", ...]');
+      if (dbNames[d.name]) throw new Core.UsageError('migrateLocal: the database "' + d.name + '" is listed twice');
+      dbNames[d.name] = true;
+      var seen = {};
+      d.stores.forEach(function (s) { if (seen[s]) throw new Core.UsageError('migrateLocal: the store "' + s + '" of "' + d.name + '" is listed twice'); seen[s] = true; });
+      cfg.dbs.push({ name: d.name, stores: d.stores.slice() });
+    });
+    var ls = o.localStorage;
+    if (ls !== undefined && ls !== null) {
+      if (typeof ls !== 'object') throw new Core.UsageError('migrateLocal: localStorage must be { keys: [...], prefixes: [...] }');
+      Object.keys(ls).forEach(function (k) { if (k !== 'keys' && k !== 'prefixes') throw new Core.UsageError('migrateLocal: unknown localStorage option "' + k + '"'); });
+      (ls.keys || []).forEach(function (k) {
+        if (typeof k !== 'string' || !k) throw new Core.UsageError('migrateLocal: localStorage keys are non-empty strings');
+        if (k.indexOf('wds:') === 0) throw new Core.UsageError('migrateLocal: localStorage keys starting with "wds:" belong to the library');
+        cfg.localKeys.push(k);
+      });
+      (ls.prefixes || []).forEach(function (p) {
+        if (typeof p !== 'string' || !p) throw new Core.UsageError('migrateLocal: a localStorage prefix must not be empty (it would match every key)');
+        if (p.indexOf('wds:') === 0) throw new Core.UsageError('migrateLocal: localStorage prefixes starting with "wds:" belong to the library');
+        cfg.localPrefixes.push(p);
+      });
+    }
+    if (!cfg.dbs.length && !cfg.localKeys.length && !cfg.localPrefixes.length) throw new Core.UsageError('migrateLocal: name a source: indexedDB: { name, stores: [...] } and/or localStorage: { keys: [...] }');
+    return cfg;
+  }
+
+  function idbRequest(req) { return new Promise(function (resolve, reject) { req.onsuccess = function () { resolve(req.result); }; req.onerror = function () { reject(req.error); }; }); }
+  // Opens an existing database without creating it (a missing one: null). A database that stays blocked (an upgrade in another tab) fails after 5 s.
+  function idbOpenExisting(name, timeoutMs) {
+    return new Promise(function (resolve, reject) {
+      var req, existed = true, settled = false;
+      try { req = indexedDB.open(name); } catch (e) { reject(e); return; }
+      var timer = setTimeout(function () { if (settled) return; settled = true; reject(MigrateStop('the old database "' + name + '" is busy (another tab is upgrading it)')); }, timeoutMs || 5000);
+      function end(fn, v) { if (settled) { if (fn === resolve && v) { try { v.close(); } catch (e) { /* ignore */ } } return; } settled = true; clearTimeout(timer); fn(v); }
+      req.onupgradeneeded = function () { existed = false; try { req.transaction.abort(); } catch (e) { /* ignore */ } };
+      req.onsuccess = function () {
+        var db = req.result;
+        db.onversionchange = function () { try { db.close(); } catch (e) { /* ignore */ } };
+        if (!existed) { try { db.close(); } catch (e) { /* ignore */ } end(resolve, null); } else end(resolve, db);
+      };
+      req.onerror = function () { if (!existed) end(resolve, null); else end(reject, req.error); };
+    });
+  }
+  async function idbReadStore(db, storeName) {
+    if (!db.objectStoreNames.contains(storeName)) return [];
+    var tx = db.transaction(storeName, 'readonly'), os = tx.objectStore(storeName);
+    var pk = idbRequest(os.getAllKeys()), pv = idbRequest(os.getAll());
+    var keys = await pk, vals = await pv;
+    return keys.map(function (k, i) { return { key: k, value: vals[i] }; });
+  }
+  // Is there anything at all in the configured old storage? (keys and counts only: no data is read)
+  async function migrateAnyData(cfg) {
+    try {
+      for (var k = 0; k < localStorage.length; k++) {
+        var key = localStorage.key(k);
+        if (key === null || key.indexOf('wds:') === 0) continue;
+        if (cfg.localKeys.indexOf(key) >= 0 || cfg.localPrefixes.some(function (p) { return key.indexOf(p) === 0; })) return true;
+      }
+    } catch (e) { /* storage not readable */ }
+    if (typeof indexedDB === 'undefined' || !indexedDB) return false;
+    for (var i = 0; i < cfg.dbs.length; i++) {
+      var d = cfg.dbs[i], db = null;
+      try { db = await idbOpenExisting(d.name); } catch (e) { if (e && e.isMigrateStop) throw e; continue; }
+      if (!db) continue;
+      try {
+        for (var j = 0; j < d.stores.length; j++) {
+          if (!db.objectStoreNames.contains(d.stores[j])) continue;
+          var n = await idbRequest(db.transaction(d.stores[j], 'readonly').objectStore(d.stores[j]).count());
+          if (n > 0) return true;
+        }
+      } catch (e) { throw MigrateStop('could not read the old database "' + d.name + '": ' + ((e && e.message) || e)); }
+      finally { try { db.close(); } catch (e) { /* ignore */ } }
+    }
+    return false;
+  }
+  // Reads the configured old storage without changing it. -> { rows: { "<db>/<store>": [row] }, local: Map key -> value, list: [row] }; a row is
+  // { key, value } (IndexedDB) or { key, value: "text", local: true } (localStorage). Every configured store has an entry in rows (empty when the
+  // database or the store does not exist in this browser), so that old.rows(name) works for every user. Nothing found: list is empty.
+  async function migrateRead(cfg) {
+    var out = { rows: {}, local: new Map(), list: [], dbs: {} };
+    cfg.dbs.forEach(function (d) { d.stores.forEach(function (s) { out.rows[d.name + '/' + s] = []; }); });
+    for (var i = 0; i < cfg.dbs.length; i++) {
+      var d = cfg.dbs[i], db = null;
+      if (typeof indexedDB === 'undefined' || !indexedDB) continue;
+      try { db = await idbOpenExisting(d.name); } catch (e) { if (e && e.isMigrateStop) throw e; console.warn('wds: could not open the old database "' + d.name + '": ' + ((e && e.message) || e)); continue; }
+      if (!db) continue;
+      try {
+        for (var j = 0; j < d.stores.length; j++) {
+          var rows = await idbReadStore(db, d.stores[j]);
+          rows.forEach(function (r) { r.db = d.name; r.store = d.stores[j]; });
+          out.rows[d.name + '/' + d.stores[j]] = rows;
+          rows.forEach(function (r) { out.list.push(r); });
+        }
+      } catch (e) { throw MigrateStop('could not read the old database "' + d.name + '": ' + ((e && e.message) || e)); }
+      finally { try { db.close(); } catch (e) { /* ignore */ } }
+    }
+    try {
+      for (var k = 0; k < localStorage.length; k++) {
+        var key = localStorage.key(k);
+        if (key === null || key.indexOf('wds:') === 0) continue;
+        if (cfg.localKeys.indexOf(key) >= 0 || cfg.localPrefixes.some(function (p) { return key.indexOf(p) === 0; })) {
+          var val = localStorage.getItem(key);
+          if (val !== null) out.local.set(key, val);
+        }
+      }
+    } catch (e) { /* storage not readable: nothing to take over from it */ }
+    out.local.forEach(function (val, key) { out.list.push({ key: key, value: val, local: true }); });
+    return out;
+  }
+  function migrateRowLabel(r) { return r.local ? 'localStorage "' + r.key + '"' : r.db + '/' + r.store + ' key ' + (isBinaryValue(r.key) ? '(binary)' : JSON.stringify(r.key)); }
+  // Sets r.id (where the row lives) and r.hash (what it holds), 16 hex characters each. The hash is a cheap picture: a file counts by size, type, name and
+  // date, not by its bytes (that would read every file on every start). The bytes are compared once, right before the old data is deleted (migrateDelete),
+  // and every copy is checked byte by byte against the vault.
+  var NO_SHA = new WeakMap();
+  async function migrateRowIds(rows) {
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i], idText = r.local ? 'local/' + r.key : 'idb/' + r.db + '/' + r.store + '/' + migrateKeyToken(r.key);
+      var h;
+      if (r.local) h = await sha256Hex(r.value);
+      else { try { h = await sha256Hex(canonText(r.value, NO_SHA, false)); } catch (e) { throw MigrateStop(migrateRowLabel(r) + ' cannot be copied: ' + ((e && e.message) || e)); } }
+      r.id = (await sha256Hex(idText)).slice(0, 16); r.hash = h.slice(0, 16);
+    }
+  }
+  // The same bytes? Walks two copies of one value (the snapshot and a fresh read) and compares every Blob and binary buffer byte by byte.
+  async function deepBytesEqual(a, b, depth) {
+    if (isBlobValue(a) || isBinaryValue(a)) return (isBlobValue(b) || isBinaryValue(b)) && await bytesEqual(a, b);
+    if (a === null || typeof a !== 'object' || b === null || typeof b !== 'object' || a instanceof Date || a instanceof Set || (depth || 0) > 80) return true;
+    var va = a instanceof Map ? Array.from(a.values()) : Object.keys(a).map(function (k) { return a[k]; });
+    var vb = b instanceof Map ? Array.from(b.values()) : Object.keys(a).map(function (k) { return b[k]; });
+    for (var i = 0; i < va.length; i++) if (!(await deepBytesEqual(va[i], vb[i], (depth || 0) + 1))) return false;
+    return true;
+  }
+  // A cheap picture of what a store holds (no bytes of blobs): compared inside the delete transaction.
+  function migrateStoreFingerprint(pairs) {
+    var empty = new WeakMap();
+    return pairs.map(function (p) { return migrateKeyToken(p.key) + ':' + canonText(p.value, empty, false); }).sort().join('\n');
   }
 
   // ------------------------------------------------------------------------------------------------------------
@@ -4130,7 +4661,7 @@ return module.exports.argon2id;
     function toast(kind, text, o) {
       if (!notify) return null;
       o = o || {};
-      return showToast({ lang: lang, kind: kind, text: text, actions: o.actions, sticky: o.sticky, key: o.key, regionLabel: t('common.notifications'), dismissLabel: t('common.dismiss'), timeoutMs: o.timeoutMs });
+      return showToast({ lang: lang, kind: kind, text: text, actions: o.actions, sticky: o.sticky, key: o.key, regionLabel: t('common.notifications'), dismissLabel: t('common.dismiss'), timeoutMs: o.timeoutMs, onDismiss: o.onDismiss });
     }
     function storageGet(suffix) {
       try { return client.storage.getItem('wds:' + client.scope + ':' + client.status().accessId + ':' + suffix); } catch (e) { return null; }
@@ -4147,11 +4678,15 @@ return module.exports.argon2id;
     function showSandboxBar() {
       if (!isSandbox(S) || (sandboxBar && sandboxBar.parentNode)) return;
       ensureStyle();
-      sandboxBar = pinVisible(el('div', { class: 'wds-root', role: 'status', lang: lang, 'data-wds': 'sandbox-bar', text: t('sandbox.bar') }), {
-        position: 'fixed', top: '0', left: '0', right: '0', 'z-index': '2147483001', 'text-align': 'center', padding: '.2rem .5rem', 'font-size': '.8125rem', 'line-height': '1.4',
+      // A popover="manual" (top layer, shown again whenever a modal dialog opens), so that a modal of the app or of the library does not hide it.
+      // The UA popover style (inset 0, margin auto, border, width/height fit-content) is reset explicitly.
+      sandboxBar = pinVisible(el('div', { class: 'wds-root', role: 'status', lang: lang, 'data-wds': 'sandbox-bar', text: t('sandbox.bar'), popover: HAS_POPOVER ? 'manual' : null }), {
+        position: 'fixed', top: '0', left: '0', right: '0', bottom: 'auto', margin: '0', width: 'auto', height: 'auto', overflow: 'visible', border: '0', 'z-index': '2147483001', 'text-align': 'center', padding: '.2rem .5rem', 'font-size': '.8125rem', 'line-height': '1.4',
         'font-weight': '600', 'background-color': '#fff4cc', color: '#3d2b00', 'border-bottom': '2px solid #b58100', 'pointer-events': 'none',
       });
+      ensureLayerListeners();
       document.body.appendChild(sandboxBar);
+      barNodes.push(sandboxBar); showPop(sandboxBar);
       document.documentElement.style.setProperty('--wds-sandbox-bar', sandboxBar.offsetHeight + 'px');   // for sticky headers: top: var(--wds-sandbox-bar, 0)
       // The bar is fixed at the top: the page moves down by its height, so that it does not cover the app's own header.
       var root = document.documentElement, cs = window.getComputedStyle ? window.getComputedStyle(root) : null;
@@ -4160,6 +4695,7 @@ return module.exports.argon2id;
     }
     function hideSandboxBar() {
       if (sandboxBar && sandboxBar.parentNode) sandboxBar.parentNode.removeChild(sandboxBar);
+      barNodes = barNodes.filter(function (n) { return n !== sandboxBar; });
       sandboxBar = null;
       document.documentElement.style.removeProperty('--wds-sandbox-bar');
       if (barPad) { document.documentElement.style.setProperty('padding-top', barPad[0], barPad[1]); barPad = null; }
@@ -4473,7 +5009,9 @@ return module.exports.argon2id;
     function timeout(ms) { return new Promise(function (resolve) { setTimeout(function () { resolve('timeout'); }, ms); }); }
     function lockSession(reason, emptied) {
       if (lockPromise) return lockPromise;
-      lockPromise = (async function () {
+      // A lock that has nothing to wait for (expired, revoked, nothing unsaved) runs to its end synchronously, before this assignment: the
+      // flag keeps such a finished lock from being remembered as "running" for ever.
+      var finished = false, p = (async function () {
         try {
           var vault = client.status().vaultId || lastVaultId;
           var live = Array.from(allHandles), saveable = reason === 'user' && client.status().unlocked;
@@ -4492,15 +5030,17 @@ return module.exports.argon2id;
           collections.forEach(function (c) { c._onLock(vault); });
           lastVaultId = vault || lastVaultId;
           client.lock(); cache.clear(); labels = {};
+          closeAllDialogs();   // library dialogs of the ended session (also above an app modal); pending questions settle as cancelled
           closeAllToasts();   // a notice about the session that just ended (an export, a warning) must not stay on the lock screen
           hideSandboxBar();
           if (reason === 'revoked') { var lost = held.size > 0 || Array.from(collections.values()).some(function (c) { return c._hasOps(); }); held.clear(); collections.forEach(function (c) { c._dropOps(); }); if (lost) toast('warn', t('note.unsavedDropped'), { key: 'unsaved' }); }
           if (reason === 'revoked') toast('error', t('note.revoked'), { key: 'session' });
           else if (reason === 'expired') toast('error', emptied ? t('sandbox.emptied', { date: formatDate(S.sandboxWipe, S.lang) }) : t('note.sessionExpired'), { key: 'session' });
           lockHandlers.slice().forEach(function (h) { try { h(reason); } catch (e) { /* app handler failed */ } });
-        } finally { lockPromise = null; }
+        } finally { finished = true; if (lockPromise === p) lockPromise = null; }
       })();
-      return lockPromise;
+      if (!finished) lockPromise = p;
+      return p;
     }
     // After the unlock of the same vault the saved snapshots are written (before onUnlock handlers run); of another vault they are dropped.
     async function replayHeld() {
@@ -4703,9 +5243,9 @@ return module.exports.argon2id;
       };
       col.items = function () { needLoaded(); return listOf(view()); };
       col.has = function (id) { needLoaded(); return !!view()[id]; };
-      col.get = async function (id) {
+      col.get = async function (id, o) {
         checkId(id);
-        var v = await store.get(prefix + id);
+        var v = await store.get(prefix + id, o);
         if (v === undefined && loaded && canWrite() && view()[id]) queueOp({ t: 'remove', id: id }, { lazy: true });
         return v;
       };
@@ -4796,6 +5336,21 @@ return module.exports.argon2id;
 
       // ---- internals for the store ----
       col._setOptions = setOptions;
+      // For migrateLocal: the meta an item gets (throws UsageError when it is invalid), and the index entries of copied items. _migrateIndex adds the
+      // entries the index lacks or has with other meta, writes the index once and returns the ids that the fresh index still does not list.
+      col._migrateMeta = function (value, id, explicit) { return metaFor(value, id, explicit); };
+      col._migrateIndex = async function (list) {
+        await col.refresh();
+        var mem = view(), n = 0;
+        list.forEach(function (e) {
+          var m = mem[e.id];
+          if (!m || !sameJson(m.m, e.meta || {})) { queueOp(upsertOp(e.id, e.meta || {}, e.created, e.version), { lazy: true }); n++; }
+        });
+        if (n) await col.flush();
+        await col.refresh();
+        var after = view();
+        return list.filter(function (e) { return !after[e.id]; }).map(function (e) { return e.id; });
+      };
       col._hasOps = function (strict) { return ops.some(function (op) { return !strict || !op.lazy; }); };
       col._dropOps = function () { ops = []; opsVault = null; loaded = false; base = null; clearTimeout(debounceTimer); debounceTimer = null; };
       col._onLock = function (vault) { loaded = false; base = null; loading = null; clearTimeout(debounceTimer); debounceTimer = null; if (ops.length) opsVault = vault || opsVault; };
@@ -4823,6 +5378,649 @@ return module.exports.argon2id;
       col._staleIndex = function () { if (loaded) col.refresh().catch(function () {}); };
       setOptions(options);
       return col;
+    }
+
+    // ---- store.migrateLocal: take over what an earlier, local-only version left in this browser ----
+    var migrateSkippedShown = {}, migrateInformed = {}, migrateWarnedTest = false;
+    function migrateTexts(cfg) {
+      return function (key, params) {
+        var o = cfg.texts, s;
+        if (o) { var per = o[S.lang]; if (per && typeof per === 'object' && typeof per[key] === 'string') s = per[key]; else if (typeof o[key] === 'string') s = o[key]; }
+        return s !== undefined ? fmt(s, params) : S.t(key, params);
+      };
+    }
+    function migrateNeedUnlocked() { if (!client.status().unlocked) throw MigrateStop('locked: the session ended during the run; the next start continues'); }
+    function migrateGuarded(fn) { return fn().catch(function (e) { if (e instanceof Core.AuthError) reportError(e); throw e; }); }
+    function migrateFresh(name) { migrateNeedUnlocked(); return migrateGuarded(function () { return client.getRecord(name, { fresh: true }); }); }
+    async function migratePool(list, n, fn) {
+      var next = 0, firstErr = null;
+      async function worker() { while (!firstErr) { var i = next++; if (i >= list.length) return; try { await fn(list[i], i); } catch (e) { if (!firstErr) firstErr = e; } } }
+      var ws = []; for (var k = 0; k < Math.min(n, list.length); k++) ws.push(worker());
+      await Promise.all(ws);
+      if (firstErr) throw firstErr;
+    }
+    // A create-only write (If-None-Match): never the conflict dialog, never an onConflict handler. -> { state: 'written', version } | { state: 'exists', stored }
+    function migratePutNew(name, value, mime) {
+      return enqueue(name, async function () {
+        for (var round = 0; round < 3; round++) {
+          migrateNeedUnlocked();
+          try { var r = await migrateGuarded(function () { return client.put(name, value, { base: null, mime: mime }); }); return { state: 'written', version: r.version }; }
+          catch (e) {
+            if (!(e instanceof Core.ConflictError)) throw e;
+            var th = e.theirs;
+            if (th && th.deleted) {   // a deleted record: the name is free again
+              try { var r2 = await migrateGuarded(function () { return client.put(name, value, { base: th.version, mime: mime }); }); return { state: 'written', version: r2.version }; }
+              catch (e2) { if (e2 instanceof Core.ConflictError) continue; throw e2; }
+            }
+            return { state: 'exists', stored: th };
+          }
+        }
+        throw MigrateStop('"' + name + '" keeps changing');
+      });
+    }
+    // The settings: keys the vault's record lacks are filled in from the old settings (never overwritten), with retries instead of any dialog.
+    function migrateApplySettings(e) {
+      return enqueue(e.name, async function () {
+        for (var round = 0; round < 6; round++) {
+          var rec = await migrateFresh(e.name);
+          try {
+            if (!rec) { await migrateGuarded(function () { return client.put(e.name, e.value, { base: null }); }); return 'ok'; }
+            if (rec.kind !== 'json' || !rec.value || typeof rec.value !== 'object' || Array.isArray(rec.value)) return 'differs';
+            var merged = fillGaps(rec.value, e.value);
+            if (JSON.stringify(merged) === JSON.stringify(rec.value)) return 'ok';
+            await migrateGuarded(function () { return client.put(e.name, merged, { base: rec.version }); });
+            return 'ok';
+          } catch (x) { if (!(x instanceof Core.ConflictError)) throw x; }
+        }
+        throw MigrateStop('"' + e.name + '" keeps changing');
+      });
+    }
+    async function migrateReadMarker(name) {
+      var r = await migrateFresh(name);
+      if (!r || r.kind !== 'json' || !r.value || typeof r.value !== 'object' || !r.value.entries || typeof r.value.entries !== 'object') return null;
+      return { version: r.version, value: r.value };
+    }
+    // The marker: which entries (name -> picture of what map made of them) and which skipped rows (row id -> hash) are verified in the vault.
+    async function migrateWriteMarker(name, cfg, tag, entriesOk, skippedOk, info) {
+      for (var round = 0; round < 5; round++) {
+        var cur = await migrateReadMarker(name), mEntries = {}, mSkipped = {};
+        if (cur) { Object.keys(cur.value.entries).forEach(function (k) { mEntries[k] = cur.value.entries[k]; }); Object.keys(cur.value.skipped || {}).forEach(function (k) { mSkipped[k] = cur.value.skipped[k]; }); }
+        Object.keys(entriesOk).forEach(function (k) { mEntries[k] = entriesOk[k]; });
+        Object.keys(skippedOk).forEach(function (k) { mSkipped[k] = skippedOk[k]; });
+        var value = { v: 2, id: cfg.id, tag: tag, date: new Date().toISOString(), entries: mEntries, skipped: mSkipped, items: info.items, skippedCount: info.skipped };
+        try { await migrateGuarded(function () { return client.put(name, value, { base: cur ? cur.version : null }); }); return; }
+        catch (e) { if (!(e instanceof Core.ConflictError)) throw e; }
+      }
+      throw MigrateStop('could not write the migration marker "' + name + '"');
+    }
+
+    // The backup: a ZIP file with data.json (all rows; files replaced by references) and every Blob/binary value under files/.
+    async function migrateBackupBlob(cfg, src) {
+      var files = [], n = 0;
+      async function conv(v, seen) {
+        if (v === undefined || typeof v === 'function' || typeof v === 'symbol') return null;
+        if (typeof v === 'bigint') return { $bigint: v.toString() };
+        if (v === null || typeof v !== 'object') return v;
+        if (isBlobValue(v) || isBinaryValue(v)) {
+          n++;
+          var nm = 'files/' + ('0000' + n).slice(-4) + '-' + fileSafe(isBlobValue(v) && v.name ? v.name : 'data'), data = isBlobValue(v) ? new Uint8Array(await v.arrayBuffer()) : new Uint8Array(bytesOf(v));
+          files.push({ name: nm, data: data });
+          return { $file: nm, size: data.length, type: isBlobValue(v) && v.type ? v.type : undefined, name: isBlobValue(v) && v.name ? v.name : undefined };
+        }
+        if (v instanceof Date) return { $date: isNaN(v.getTime()) ? null : v.toISOString() };
+        if (seen.indexOf(v) >= 0) return { $cycle: true };
+        seen.push(v);
+        var out;
+        if (Array.isArray(v)) { out = []; for (var i = 0; i < v.length; i++) out.push(await conv(v[i], seen)); }
+        else if (v instanceof Map) { out = { $map: [] }; var es = Array.from(v.entries()); for (var j = 0; j < es.length; j++) out.$map.push([await conv(es[j][0], seen), await conv(es[j][1], seen)]); }
+        else if (v instanceof Set) { out = { $set: [] }; var vs = Array.from(v.values()); for (var m = 0; m < vs.length; m++) out.$set.push(await conv(vs[m], seen)); }
+        else { out = {}; var ks = Object.keys(v); for (var q = 0; q < ks.length; q++) out[ks[q]] = await conv(v[ks[q]], seen); }
+        seen.pop();
+        return out;
+      }
+      var doc = { app: cfg.id, date: new Date().toISOString(), note: 'Not encrypted. Values of files are in the folder files/.', local: {}, indexedDB: {} };
+      src.local.forEach(function (val, key) { doc.local[key] = val; });
+      var names = Object.keys(src.rows);
+      for (var a = 0; a < names.length; a++) {
+        var parts = names[a].split('/'), dbn = parts[0], sn = parts.slice(1).join('/');
+        doc.indexedDB[dbn] = doc.indexedDB[dbn] || {};
+        var arr = [];
+        for (var b = 0; b < src.rows[names[a]].length; b++) { var r = src.rows[names[a]][b]; arr.push({ key: await conv(r.key, []), value: await conv(r.value, []) }); }
+        doc.indexedDB[dbn][sn] = arr;
+      }
+      var entries = [{ name: 'data.json', data: JSON.stringify(doc, null, 1) }].concat(files);
+      try { return { blob: makeZip(entries), files: [], name: '.zip' }; }
+      catch (e) { return { blob: new Blob([JSON.stringify(doc, null, 1)], { type: 'application/json' }), files: files, name: '.json' }; }   // beyond what a ZIP file holds: the data file, then every file on its own
+    }
+    // Saves the backup; the person is told when it does not contain the files (errEl: the dialog's message line, else a toast).
+    async function migrateDownloadBackup(cfg, tt, src, errEl) {
+      var b = await migrateBackupBlob(cfg, src);
+      downloadBlob(b.blob, cfg.id + '-old-data-' + new Date().toISOString().slice(0, 10) + b.name);
+      if (b.files.length) {
+        b.files.forEach(function (f) { downloadBlob(new Blob([f.data]), f.name.replace(/^files\//, '')); });
+        var msg = tt('migrate.backup.nofiles', { n: b.files.length });
+        if (errEl) errEl.textContent = msg; else toast('warn', msg, { key: 'migration-backup', sticky: true });
+      } else if (errEl) errEl.textContent = '';
+      return b;
+    }
+    // The backup from a fresh read (the old data as it is now): for toasts and for result.downloadBackup().
+    function migrateBackupNow(cfg, tt) {
+      return migrateRead(cfg).then(function (src) {
+        if (!src.list.length) { toast('info', tt('migrate.backup.none'), { key: 'migration-backup' }); return null; }
+        return migrateDownloadBackup(cfg, tt, src, null);
+      }).catch(function (e) { logError('backup failed', e); toast('warn', tt('migrate.backup.failed', { why: (e && e.message) || String(e) }), { key: 'migration-backup', sticky: true }); return null; });
+    }
+    function migrateBackupActions(cfg, tt) { return [{ label: tt('migrate.backup.short'), close: false, onClick: function () { migrateBackupNow(cfg, tt); } }]; }
+    function migrateWithBackup(out, cfg, tt) { Object.defineProperty(out, 'downloadBackup', { value: function () { return migrateBackupNow(cfg, tt); }, enumerable: false }); return out; }
+    function leftBlob(e) { return isBlobValue(e.value) ? e.value : isBinaryValue(e.value) ? new Blob([e.value]) : new Blob([JSON.stringify(e.value, null, 1)], { type: 'application/json' }); }
+    function leftLabel(e) { return e.meta && typeof e.meta.name === 'string' && e.meta.name ? e.meta.name : isBlobValue(e.value) && e.value.name ? e.value.name : S.label(e.name); }
+    function leftFileName(e) {
+      var base = fileSafe(leftLabel(e) === S.label(e.name) ? String(e.name).split('/').pop() || 'file' : leftLabel(e));
+      return /\.[A-Za-z0-9]{1,8}$/.test(base) ? base : base + (isBlobValue(e.value) ? extForMime(e.value.type) : '.json');
+    }
+
+    // One dialog for the whole run; each view is a promise that the buttons (or closing) settle.
+    function migrateView(run, view, title, build, fallback) {
+      return new Promise(function (resolve) {
+        var dlg = run.dlg;
+        if (!dlg || dlg.closed) { resolve(fallback); return; }
+        run.onClose = function () { resolve(fallback); };
+        clear(dlg.body); dlg.setTitle(title); dlg.setCancelable(true);
+        append(dlg.body, build(resolve));
+        dlg.setView(view);
+        dlg.focusFirst();
+      });
+    }
+    function migrateProgressView(run, tt) {
+      var dlg = run.dlg;
+      if (!dlg || dlg.closed) return function () {};
+      run.onClose = null;
+      clear(dlg.body); dlg.setTitle(tt('migrate.title')); dlg.setCancelable(false);
+      var bar = el('progress', { class: 'wds-progress', 'aria-label': tt('migrate.title') }), line = el('p', { role: 'status', 'aria-live': 'polite', text: '' });
+      append(dlg.body, [bar, line]);
+      dlg.setView('progress');
+      return function (key, done, total) { bar.max = total || 1; bar.value = done; line.textContent = tt(key, { done: done, total: total }); };
+    }
+
+    // A copy of an old value for map: containers (objects, arrays, Maps, Sets, Dates) are copied, files and binary buffers are shared. map may change what
+    // it is given (also in a classic, non-strict script, where writing to a frozen object would fail silently): it never reaches the old rows.
+    function migrateClone(v, memo) {
+      if (v === null || typeof v !== 'object' || isBlobValue(v) || isBinaryValue(v)) return v;
+      if (memo.has(v)) return memo.get(v);
+      var out;
+      if (v instanceof Date) out = new Date(v.getTime());
+      else if (Array.isArray(v)) { out = []; memo.set(v, out); v.forEach(function (x, i) { out[i] = migrateClone(x, memo); }); return out; }
+      else if (v instanceof Map) { out = new Map(); memo.set(v, out); v.forEach(function (x, k) { out.set(migrateClone(k, memo), migrateClone(x, memo)); }); return out; }
+      else if (v instanceof Set) { out = new Set(); memo.set(v, out); v.forEach(function (x) { out.add(migrateClone(x, memo)); }); return out; }
+      else { out = {}; memo.set(v, out); Object.keys(v).forEach(function (k) { out[k] = migrateClone(v[k], memo); }); return out; }
+      memo.set(v, out);
+      return out;
+    }
+    // A picture of what map made of one entry (what is written: name, value, meta, date, type); the files by size, type, name and date.
+    async function migrateEntrySig(e) {
+      var text = canonText({ k: e.kind, n: e.name, v: e.value, m: e.meta || null, c: e.created === undefined ? null : e.created, t: e.mime || null }, NO_SHA, false);
+      if (isBinaryValue(e.value)) text += ':' + await sha256Hex(bytesOf(e.value));
+      return (await sha256Hex(text)).slice(0, 16);
+    }
+    var MEMBER_NOTICE_KEY = function (id) { return 'wds:migrate:' + id + ':member'; };
+
+    async function migrateBody(cfg, tt, run) {
+      var sbx = function () { return isSandbox(S); };
+      if (!(await migrateAnyData(cfg))) return { status: 'nothing', sandbox: sbx() };
+      await ensureUnlocked();
+      var sandbox = sbx();
+      function res(o) { return migrateWithBackup(Object.assign({ sandbox: sandbox }, o), cfg, tt); }
+      if (client.status().role !== 'owner') {
+        var dismissed = false;
+        try { dismissed = localStorage.getItem(MEMBER_NOTICE_KEY(cfg.id)) === 'dismissed'; } catch (e) { dismissed = false; }
+        if (!migrateSkippedShown[cfg.id] && !dismissed) {
+          migrateSkippedShown[cfg.id] = true;
+          toast('warn', tt('migrate.skipped'), { key: 'migration', sticky: true, actions: migrateBackupActions(cfg, tt), onDismiss: function () { try { localStorage.setItem(MEMBER_NOTICE_KEY(cfg.id), 'dismissed'); } catch (e) { /* ignore */ } } });
+        }
+        return res({ status: 'skipped', why: 'not-owner' });
+      }
+      // The snapshot of the old data is taken now (after the unlock, which can take minutes), the marker comes from the vault.
+      var src = await migrateRead(cfg);
+      if (!src.list.length) return { status: 'nothing', sandbox: sandbox };
+      await migrateRowIds(src.list);
+      var rowById = {};
+      src.list.forEach(function (r) { rowById[r.id] = r; });
+      // The tag of this browser (the only write to the old storage), the marker in the vault.
+      var tagKey = 'wds:migrate:' + cfg.id + ':tag', tag = null, tagExisted = false;
+      try { tag = localStorage.getItem(tagKey); } catch (e) { tag = null; }
+      if (tag && /^[0-9a-f]{8}$/.test(tag)) tagExisted = true;
+      else {
+        var rb = new Uint8Array(4); crypto.getRandomValues(rb); tag = hexLower(rb);
+        try { localStorage.setItem(tagKey, tag); } catch (e) { throw MigrateStop('could not write the tag of this browser to localStorage (full or disabled)'); }
+      }
+      var markerName = MIGRATION_RECORD + cfg.id + '/' + tag;
+      var marker = tagExisted ? await migrateReadMarker(markerName) : null;
+      var doneEntries = marker ? marker.value.entries : {}, doneSkipped = marker && marker.value.skipped || {};
+      var keep = sandbox && !(typeof window !== 'undefined' && window.__WDS_MIGRATION_TEST__ === true && typeof navigator !== 'undefined' && navigator.webdriver === true);
+      if (sandbox && !keep && !migrateWarnedTest) { migrateWarnedTest = true; if (typeof console !== 'undefined' && console.warn) console.warn('wds: __WDS_MIGRATION_TEST__ is honoured: the old data is deleted although this is a sandbox'); }
+      if (marker && sandbox && keep && typeof console !== 'undefined' && console.warn && !migrateInformed[cfg.id]) { migrateInformed[cfg.id] = true; console.warn('wds: migrateLocal "' + cfg.id + '": the marker of an earlier run was found; entries that map made the same way are not copied again. To test a changed map, use a new id, a fresh browser profile or wait for the sandbox to be wiped.'); }
+
+      // ---- map (twice: the results must be identical), validation ----
+      var colSet = Array.from(collections.values());
+      var storeKeys = Object.keys(src.rows);
+      function resolveStore(name) {
+        if (src.rows[name]) return name;
+        var hits = storeKeys.filter(function (k) { return k.slice(k.indexOf('/') + 1) === name; });
+        if (hits.length === 1) return hits[0];
+        if (hits.length > 1) throw new Core.UsageError('old.rows("' + name + '") is ambiguous: ' + hits.join(', ') + '; write "database/store"');
+        throw new Core.UsageError('old.rows("' + name + '"): not a configured store; configured: ' + (storeKeys.join(', ') || 'none'));
+      }
+      var keySets = {};
+      function hasRow(storeName, key) {
+        var k = resolveStore(storeName);
+        if (!keySets[k]) { keySets[k] = new Set(); src.rows[k].forEach(function (r) { keySets[k].add(migrateKeyToken(r.key)); }); }
+        return keySets[k].has(migrateKeyToken(key));
+      }
+      var rowOf = new Map();   // the copies of one map run -> the id of the old row
+      function rowId(x) {
+        if (x && typeof x === 'object' && rowOf.has(x)) return rowOf.get(x);
+        if (typeof x === 'string' && src.local.has(x)) { var lr = src.list.filter(function (r) { return r.local && r.key === x; })[0]; return lr.id; }
+        // a configured key that does not exist in this browser: nothing to claim
+        if (typeof x === 'string' && (cfg.localKeys.indexOf(x) >= 0 || cfg.localPrefixes.some(function (p) { return x.indexOf(p) === 0; }))) return null;
+        throw new Core.UsageError('from/skip/fail: expected a row of old.rows(...) or a localStorage key that was read (old.local), got ' + (typeof x === 'string' ? '"' + x + '"' : typeof x));
+      }
+      function fromRows(from, where) {
+        if (from === undefined || from === null) throw new Core.UsageError(where + ': "from" is missing: name the old row (or localStorage key) this entry comes from, so that nothing is deleted that was not copied');
+        var arr = Array.isArray(from) ? from : [from], ids = [];
+        if (!arr.length) throw new Core.UsageError(where + ': "from" is empty');
+        arr.forEach(function (x) { var id = rowId(x); if (id !== null && ids.indexOf(id) < 0) ids.push(id); });
+        return ids;   // empty when every key is absent: such an entry has no old data behind it and is not processed
+      }
+      async function mapOnce() {
+        rowOf = new Map();
+        var views = {};
+        storeKeys.forEach(function (k) { views[k] = src.rows[k].map(function (r) { var c = { key: migrateClone(r.key, new Map()), value: migrateClone(r.value, new Map()) }; rowOf.set(c, r.id); return c; }); });
+        var ctx = { tag: tag, tagged: cfg.tagged, refs: new Set(), skipped: new Map(), hasRow: hasRow, unknownRow: rowId, describe: function (x) { try { var id = rowId(x); return id === null ? '' : migrateRowLabel(rowById[id]); } catch (e) { return ''; } } };
+        var old = {
+          rows: function (name) { return views[resolveStore(name)]; },
+          local: (function () { var o = {}; src.local.forEach(function (v, k) { o[k] = v; }); return Object.freeze(o); })(),
+          keys: function (prefix) { return Array.from(src.local.keys()).filter(function (k) { return !prefix || k.indexOf(prefix) === 0; }); },
+          json: function (key) {
+            if (!src.local.has(key)) return undefined;
+            try { return JSON.parse(src.local.get(key)); } catch (e) { throw MigrateStop('localStorage "' + key + '" is not JSON: ' + ((e && e.message) || e)); }
+          },
+        };
+        var h = makeMigrateHelpers(ctx), ret;
+        try { ret = await cfg.map(old, h); }
+        catch (e) { if (e && (e.isMigrateStop || e instanceof Core.UsageError)) throw e; throw MigrateStop('map threw: ' + ((e && e.message) || e)); }
+        if (ret === undefined || ret === null) ret = {};
+        if (typeof ret !== 'object' || Array.isArray(ret)) throw new Core.UsageError('map must return { items, records, settings }');
+        Object.keys(ret).forEach(function (k) { if (k !== 'items' && k !== 'records' && k !== 'settings') throw new Core.UsageError('map returned an unknown field "' + k + '"; known: items, records, settings'); });
+        var entries = [], names = {};
+        function add(e) {
+          e.rowsText = e.rows.map(function (id) { return migrateRowLabel(rowById[id]); }).join(', ');
+          if (names[e.name]) throw MigrateStop('two entries would get the same name "' + e.name + '" (rows: ' + names[e.name].rowsText + ' and ' + e.rowsText + '). If two stores share keys (both count 1, 2, 3) and go into one collection, use one collection per store, or put the store into the key on both sides: h.id(["notes", row.key]) (h.ref builds h.id(oldKey) only, so write such a reference yourself with the same call)');
+          names[e.name] = e; entries.push(e);
+        }
+        function jsonValue(v, where) {
+          if (isBlobValue(v) || isBinaryValue(v)) return v;
+          migrateCheckJson(v, where, [], 0);
+          var text; try { text = JSON.stringify(v); } catch (e) { throw MigrateStop(where + ' cannot be written as JSON: ' + e.message); }
+          if (text === undefined) throw new Core.UsageError(where + ': the value is undefined');
+          return JSON.parse(text);
+        }
+        if (ret.items !== undefined && !Array.isArray(ret.items)) throw new Core.UsageError('map: items must be an array');
+        (ret.items || []).forEach(function (it, i) {
+          var where = 'items[' + i + ']';
+          if (!it || typeof it !== 'object') throw new Core.UsageError(where + ' must be an object { col, id, value, from }');
+          if (colSet.indexOf(it.col) < 0) throw new Core.UsageError(where + ': col must be a collection made with store.collection(...) on this store');
+          if (typeof it.id !== 'string' || it.id.length < 1 || it.id.length > 200 || it.id.indexOf('/') >= 0) throw new Core.UsageError(where + ': id must be a string of 1 to 200 characters without "/" (use h.id(oldKey))');
+          var name = it.col.prefix + it.id;
+          checkAppName(name);
+          var created = it.created;
+          if (created !== undefined && created !== null && !Number.isFinite(created)) throw new Core.UsageError(where + ': created must be a number of milliseconds (use h.created(...))');
+          if (it.mime !== undefined && typeof it.mime !== 'string') throw new Core.UsageError(where + ': mime must be a string');
+          var value = jsonValue(it.value, where + ' ("' + name + '")');
+          add({ kind: 'item', col: it.col, id: it.id, name: name, value: value, meta: it.col._migrateMeta(value, it.id, it.meta), created: created === null ? undefined : created, mime: it.mime, rows: fromRows(it.from, where + ' ("' + name + '")') });
+        });
+        if (ret.records !== undefined && !Array.isArray(ret.records)) throw new Core.UsageError('map: records must be an array');
+        function checkRecordName(name, where) {
+          checkAppName(name);
+          colSet.forEach(function (c) { if (name.indexOf(c.prefix) === 0 || name === c.indexName) throw new Core.UsageError(where + ': "' + name + '" lies inside the collection "' + c.prefix + '"; use items for entries of a collection'); });
+        }
+        (ret.records || []).forEach(function (rc, i) {
+          var where = 'records[' + i + ']';
+          if (!rc || typeof rc !== 'object') throw new Core.UsageError(where + ' must be an object { name, value, from }');
+          checkRecordName(rc.name, where);
+          if (rc.mime !== undefined && typeof rc.mime !== 'string') throw new Core.UsageError(where + ': mime must be a string');
+          add({ kind: 'record', name: rc.name, value: jsonValue(rc.value, where + ' ("' + rc.name + '")'), mime: rc.mime, rows: fromRows(rc.from, where + ' ("' + rc.name + '")') });
+        });
+        if (ret.settings !== undefined && ret.settings !== null) {
+          var s = ret.settings;
+          if (typeof s !== 'object' || typeof s.record !== 'string' || !s.value || typeof s.value !== 'object' || Array.isArray(s.value)) throw new Core.UsageError('map: settings must be { record: "settings", value: { ... }, from: ... } (a JSON object)');
+          checkRecordName(s.record, 'settings');
+          add({ kind: 'settings', name: s.record, value: jsonValue(s.value, 'settings'), rows: fromRows(s.from, 'settings') });
+        }
+        // every h.ref result must be the id of an item of this run
+        var ids = new Set(entries.filter(function (e) { return e.kind === 'item'; }).map(function (e) { return e.id; }));
+        ctx.refs.forEach(function (id) { if (!ids.has(id)) throw MigrateStop('h.ref returned "' + id + '", but no item has this id; the item that is referred to must be built with the same h.id call (same old key, same ending)'); });
+        var skipped = Array.from(ctx.skipped.entries());
+        var claimed = new Set();
+        entries.forEach(function (e) { e.rows.forEach(function (id) { claimed.add(id); }); });
+        skipped.forEach(function (p) { claimed.add(p[0]); });
+        var loose = src.list.filter(function (r) { return !claimed.has(r.id); });
+        if (loose.length) throw MigrateStop(loose.length + ' old row(s) were neither copied nor skipped: ' + loose.slice(0, 5).map(migrateRowLabel).join('; ') + (loose.length > 5 ? '; and ' + (loose.length - 5) + ' more' : '') + '; give each entry "from: row" or call h.skip(row, why)', { unclaimed: loose.length });
+        for (var ei = 0; ei < entries.length; ei++) entries[ei].sig = await migrateEntrySig(entries[ei]);
+        var sig = JSON.stringify([entries.map(function (e) { return [e.sig, e.rows.slice().sort()]; }), skipped.map(function (p) { return p[0]; }).sort(), Array.from(ctx.refs).sort()]);
+        return { entries: entries, skipped: skipped, sig: sig, refs: ctx.refs };
+      }
+      var m1 = await mapOnce(), m2 = await mapOnce();
+      if (m1.sig !== m2.sig) throw new Core.UsageError('map gave different results when it ran twice. Build ids with h.id(oldKey) and take every value from the old rows: no random ids, no Date.now(), no counters');
+      var entries = m1.entries, skippedRows = m1.skipped;
+      // An entry is new when map makes something else of it than what the marker holds (a changed row, a changed map). One without rows (absent keys) is never new.
+      var isNew = function (e) { return e.rows.length > 0 && doneEntries[e.name] !== e.sig; };
+      var todo = entries.filter(isNew);
+      todo.forEach(function (e) { e.state = e.kind === 'settings' ? 'settings' : 'absent'; });
+      var newSkipped = skippedRows.filter(function (p) { return doneSkipped[p[0]] !== rowById[p[0]].hash; });
+      var dataEntries = todo.filter(function (e) { return e.kind !== 'settings'; });
+      // Nothing new since the last verified copy: no question, no comparing with the vault (what the person did since stays as it is).
+      if (!todo.length && !newSkipped.length) {
+        var gone = await migrateDelete(cfg, src, keep);
+        if (gone === 'deleted') toast('ok', tt('migrate.done.again'), { key: 'migration' });
+        return res({ status: 'migrated', again: true, deleted: gone, copied: 0, total: marker && marker.value.items || 0 });
+      }
+
+      // ---- what the vault holds already; room for the rest ----
+      if (tagExisted || !cfg.tagged) {
+        await migratePool(dataEntries, 6, async function (e) {
+          var rec = await migrateFresh(e.name);
+          if (!rec) e.state = 'absent';
+          else if (await storedEquals(rec, e.value)) { e.state = 'equal'; e.version = rec.version; }
+          else { e.state = 'differs'; e.stored = rec; }
+        });
+      }
+      var usage = await migrateGuarded(function () { return client.usage(); });
+      var lim = usage && usage.limits || {}, left = [];
+      var cand = dataEntries.filter(function (e) { return e.state === 'absent'; });
+      cand.forEach(function (e) { e.size = migrateSizeOf(e.value); });
+      if (Number.isFinite(lim.max_value_bytes)) cand.filter(function (e) { return e.size > lim.max_value_bytes; }).forEach(function (e) { left.push(e); e.left = 'too-large'; });
+      if (Number.isFinite(lim.vault_bytes) && Number.isFinite(usage.bytes)) {
+        var rest = cand.filter(function (e) { return !e.left; }).sort(function (a, b) { return b.size - a.size; }), need = rest.reduce(function (n, e) { return n + e.size + 600; }, 0) * 1.3, free = lim.vault_bytes - usage.bytes;
+        while (rest.length && need > free) { var big = rest.shift(); big.left = 'space'; left.push(big); need -= (big.size + 600) * 1.3; }
+      }
+      // a reference to an entry that is left out becomes null (the id was made by h.ref)
+      var leftIds = new Set(left.filter(function (e) { return e.kind === 'item'; }).map(function (e) { return e.id; }));
+      if (leftIds.size) {
+        var nullRefs = function (v) {
+          if (typeof v === 'string') return leftIds.has(v) && m1.refs.has(v) ? null : v;
+          if (Array.isArray(v)) return v.map(nullRefs);
+          if (v && typeof v === 'object' && !isBlobValue(v) && !isBinaryValue(v)) { var o = {}; Object.keys(v).forEach(function (k) { o[k] = nullRefs(v[k]); }); return o; }
+          return v;
+        };
+        todo.forEach(function (e) { if (!e.left && !isBlobValue(e.value) && !isBinaryValue(e.value)) { e.value = nullRefs(e.value); if (e.meta) e.meta = nullRefs(e.meta); } });
+      }
+
+      // ---- ask ----
+      var count = dataEntries.length, vaultEnd = Core.displayCode(client.status().accessId).slice(-4);
+      run.dlg = dialogFor(S, { title: tt('migrate.title'), view: 'progress', cancelable: true, closeLabel: t('common.close'), onClose: function (r) { if (run.onClose) run.onClose(r); } });
+      var answer = 'yes';
+      while (count || newSkipped.length) {
+        answer = await migrateView(run, 'migrate', tt('migrate.title'), function (resolve) {
+          var err = el('div', { 'data-wds': 'form-error', 'aria-live': 'polite' }), yesBtn = null, ack = null, backedUp = false;
+          function refresh() { if (yesBtn && newSkipped.length) yesBtn.disabled = !(backedUp || (ack && ack.checked)); }
+          if (newSkipped.length) ack = el('input', { type: 'checkbox', id: uid('wds-ack'), 'data-wds': 'migrate-skip-ack', onchange: refresh });
+          yesBtn = btn(tt('migrate.yes'), { primary: true, wds: 'migrate-yes', disabled: newSkipped.length > 0, onClick: function () { resolve('yes'); } });
+          var q = count ? tt(sandbox ? 'migrate.question.sandbox' : 'migrate.question', { count: count, vault: vaultEnd }) : tt('migrate.question.none', { n: newSkipped.length });
+          return [
+            err,
+            el('p', { text: q }),
+            left.length ? el('p', { text: tt('migrate.question.large', { n: left.length }) }) : null,
+            newSkipped.length ? el('p', { text: tt('migrate.question.skipped', { n: newSkipped.length }) }) : null,
+            ack ? el('div', { class: 'wds-check' }, [ack, el('label', { for: ack.id, text: tt('migrate.skip.ack', { n: newSkipped.length }) })]) : null,
+            el('div', { class: 'wds-actions' }, [
+              yesBtn,
+              btn(tt('migrate.backup'), { wds: 'migrate-backup', onClick: function () { migrateDownloadBackup(cfg, tt, src, err).then(function () { backedUp = true; refresh(); }).catch(function (e) { logError('backup failed', e); err.textContent = tt('migrate.backup.failed', { why: (e && e.message) || String(e) }); }); } }),
+              el('span', { class: 'wds-spacer' }),
+              btn(tt('migrate.no'), { wds: 'migrate-no', onClick: function () { resolve('no'); } }),
+            ]),
+            el('p', { class: 'wds-hint', text: tt('migrate.backup.hint') }),
+            el('p', { class: 'wds-hint', text: tt('migrate.question.later') }),
+            el('p', { class: 'wds-hint' }, [btn(tt('migrate.discard'), { small: true, danger: true, wds: 'migrate-discard', onClick: function () { resolve('discard'); } })]),
+          ];
+        }, 'no');
+        if (answer !== 'discard') break;
+        var sure = await migrateView(run, 'migrate-discard', tt('migrate.discard.title'), function (resolve) {
+          return [
+            el('div', { 'data-wds': 'form-error', 'aria-live': 'polite' }),
+            el('p', { text: tt(sandbox ? 'migrate.discard.text.sandbox' : 'migrate.discard.text') }),
+            el('div', { class: 'wds-actions' }, [
+              btn(tt('migrate.discard.back'), { primary: true, wds: 'migrate-discard-back', onClick: function () { resolve('back'); } }),
+              el('span', { class: 'wds-spacer' }),
+              btn(tt('migrate.discard.confirm'), { danger: true, wds: 'migrate-discard-confirm', onClick: function () { resolve('delete'); } }),
+            ]),
+          ];
+        }, 'back');
+        if (sure === 'delete') {
+          migrateProgressView(run, tt);
+          var gone2 = await migrateDelete(cfg, src, keep);
+          closeRunDialog(run);
+          toast(gone2 === 'deleted' ? 'ok' : gone2 === 'kept' ? 'info' : 'warn', tt(gone2 === 'deleted' ? 'migrate.done.discarded' : gone2 === 'kept' ? 'migrate.done.discarded.kept' : 'migrate.done.changed'), { key: 'migration', sticky: gone2 === 'changed', actions: gone2 === 'changed' ? migrateBackupActions(cfg, tt) : undefined });
+          return res({ status: 'discarded', deleted: gone2 });
+        }
+      }
+      if (answer !== 'yes') return res({ status: 'declined' });
+
+      // ---- copy ----
+      var progress = migrateProgressView(run, tt);
+      var work = todo.filter(function (e) { return e.kind !== 'settings' && e.state === 'absent' && !e.left; });
+      var finished = 0;
+      progress('migrate.progress', 0, work.length);
+      await migratePool(work, 4, async function (e) {
+        var r = await migratePutNew(e.name, e.value, e.mime);
+        if (r.state === 'written') { e.state = 'written'; e.version = r.version; }
+        else if (await storedEquals(r.stored, e.value)) { e.state = 'equal'; e.version = r.stored.version; }
+        else { e.state = 'differs'; e.stored = r.stored; }
+        finished++; progress('migrate.progress', finished, work.length);
+      });
+      for (var si = 0; si < todo.length; si++) {
+        if (todo[si].kind !== 'settings') continue;
+        var sres = await migrateApplySettings(todo[si]);
+        todo[si].state = sres === 'ok' ? 'written' : 'differs';
+      }
+
+      // ---- entries that differ from what the vault holds ----
+      var differs = todo.filter(function (e) { return e.state === 'differs'; }), copiedBoth = [];
+      if (differs.length) {
+        var choice = await migrateView(run, 'migrate-differs', tt('migrate.differs.title'), function (resolve) {
+          return [
+            el('div', { 'data-wds': 'form-error', 'aria-live': 'polite' }),
+            el('p', { text: tt('migrate.differs.text', { n: differs.length }) }),
+            el('ul', null, differs.slice(0, 8).map(function (e) { return el('li', { text: S.label(e.name) }); }).concat(differs.length > 8 ? [el('li', { text: '…' })] : [])),
+            el('div', { class: 'wds-actions' }, [
+              btn(tt('migrate.differs.keepVault'), { primary: true, wds: 'migrate-differs-keep-vault', onClick: function () { resolve('vault'); } }),
+              btn(tt('migrate.differs.keepBoth'), { wds: 'migrate-differs-keep-both', onClick: function () { resolve('both'); } }),
+              el('span', { class: 'wds-spacer' }),
+              btn(tt('migrate.differs.later'), { wds: 'migrate-differs-later', onClick: function () { resolve('later'); } }),
+            ]),
+            el('p', { class: 'wds-hint', text: tt('migrate.differs.hint') }),
+          ];
+        }, 'later');
+        progress = migrateProgressView(run, tt);
+        if (choice === 'vault') differs.forEach(function (e) { e.state = 'vault'; });
+        else if (choice === 'both') {
+          for (var di = 0; di < differs.length; di++) {
+            var e0 = differs[di], tail = '~' + tag, copy;
+            if (e0.kind === 'item') { var id2 = e0.id.slice(0, 190) + tail; copy = Object.assign({}, e0, { id: id2, name: e0.col.prefix + id2, state: 'absent', meta: e0.col._migrateMeta(e0.value, id2, undefined) || e0.meta }); }
+            else copy = Object.assign({}, e0, { name: e0.name.slice(0, 900) + tail, state: 'absent' });
+            var w2 = await migratePutNew(copy.name, copy.value, copy.mime);
+            if (w2.state === 'written') { copy.state = 'written'; copy.version = w2.version; }
+            else if (await storedEquals(w2.stored, copy.value)) { copy.state = 'equal'; copy.version = w2.stored.version; }
+            else throw MigrateStop('could not keep both versions of "' + e0.name + '": "' + copy.name + '" exists with other content');
+            copiedBoth.push(copy); e0.state = 'both';
+          }
+        }
+      }
+      var unsettled = todo.some(function (e) { return e.state === 'differs'; });
+
+      // ---- index, then check everything that was copied ----
+      var verifyList = todo.concat(copiedBoth).filter(function (e) { return e.kind !== 'settings' && (e.state === 'written' || e.state === 'equal'); });
+      var byCol = new Map();
+      verifyList.forEach(function (e) { if (e.kind === 'item') { if (!byCol.has(e.col)) byCol.set(e.col, []); byCol.get(e.col).push(e); } });
+      var cols = Array.from(byCol.keys());
+      for (var ci = 0; ci < cols.length; ci++) {
+        migrateNeedUnlocked();
+        var list = byCol.get(cols[ci]).map(function (e) { return { id: e.id, meta: e.meta, created: e.created, version: e.version }; });
+        var missing = await cols[ci]._migrateIndex(list);
+        if (missing.length) { await cols[ci].rebuild(); missing = await cols[ci]._migrateIndex(list.filter(function (x) { return missing.indexOf(x.id) >= 0; })); }
+        if (missing.length) throw MigrateStop('the list "' + cols[ci].prefix + '" does not show ' + missing.length + ' copied entries');
+      }
+      var checked = 0;
+      progress('migrate.progress.check', 0, verifyList.length);
+      await migratePool(verifyList, 4, async function (e) {
+        var rec = await migrateFresh(e.name);
+        if (!(await storedEquals(rec, e.value))) throw MigrateStop('the copy of "' + e.name + '" differs from the old entry after writing');
+        checked++; progress('migrate.progress.check', checked, verifyList.length);
+      });
+      for (var vi = 0; vi < todo.length; vi++) {
+        if (todo[vi].kind !== 'settings' || todo[vi].state !== 'written') continue;
+        var fin = await migrateFresh(todo[vi].name);
+        Object.keys(todo[vi].value).forEach(function (k) { if (todo[vi].value[k] !== undefined && (!fin || !fin.value || fin.value[k] === undefined)) throw MigrateStop('the setting "' + k + '" is missing in "' + todo[vi].name + '" after writing'); });
+      }
+
+      // ---- the marker: which entries are in the vault (an entry that is left out or unsettled is not) ----
+      var entriesOk = {}, skippedOk = {};
+      entries.forEach(function (e) { if (!isNew(e) || e.state === 'written' || e.state === 'equal' || e.state === 'vault' || e.state === 'both') { if (e.rows.length) entriesOk[e.name] = e.sig; } });
+      skippedRows.forEach(function (p) { skippedOk[p[0]] = rowById[p[0]].hash; });
+      var copied = todo.concat(copiedBoth).filter(function (e) { return e.kind !== 'settings' && e.state === 'written'; }).length;
+      var total = entries.filter(function (e) { return e.kind !== 'settings'; }).length;
+      await migrateWriteMarker(markerName, cfg, tag, entriesOk, skippedOk, { items: total, skipped: skippedRows.length });
+      var leftInfo = left.map(function (e) { return { name: e.name, size: e.size, why: e.left }; });
+
+      if (unsettled) {
+        closeRunDialog(run);
+        toast('warn', tt('migrate.partial.differs'), { key: 'migration', sticky: true, actions: migrateBackupActions(cfg, tt) });
+        return res({ status: 'partial', why: 'differs', differs: differs.map(function (e) { return e.name; }), copied: copied, total: total, deleted: 'kept' });
+      }
+      // ---- entries that did not fit ----
+      if (left.length) {
+        var fate = await migrateView(run, 'migrate-large', tt('migrate.large.title'), function (resolve) {
+          var downloaded = {}, ack = null, del = null;
+          function refresh() { if (del) del.disabled = !(ack.checked || left.every(function (e, i) { return downloaded[i]; })); }
+          ack = el('input', { type: 'checkbox', id: uid('wds-ack'), 'data-wds': 'migrate-large-ack', onchange: refresh });
+          del = btn(tt('migrate.large.delete'), { danger: true, wds: 'migrate-delete', disabled: true, onClick: function () { resolve('delete'); } });
+          var rows = left.map(function (e, i) {
+            return el('li', { class: 'wds-person' }, [
+              el('div', { class: 'wds-person-main' }, [el('div', { class: 'wds-person-name', text: leftLabel(e) }), el('div', { class: 'wds-person-info', text: formatBytes(e.size) })]),
+              btn(tt('migrate.large.download'), { small: true, wds: 'migrate-large-download', onClick: function () { downloadBlob(leftBlob(e), leftFileName(e)); downloaded[i] = true; refresh(); } }),
+            ]);
+          });
+          rows.forEach(function (li, i) { li.querySelector('[data-wds="migrate-large-download"]').setAttribute('data-wds-index', String(i)); });
+          return [
+            el('div', { 'data-wds': 'form-error', 'aria-live': 'polite' }),
+            el('p', { text: tt('migrate.large.text', { n: left.length }) }),
+            el('ul', { class: 'wds-people' }, rows),
+            el('div', { class: 'wds-check' }, [ack, el('label', { for: ack.id, text: tt('migrate.large.ack') })]),
+            el('div', { class: 'wds-actions' }, [btn(tt('migrate.large.keep'), { primary: true, wds: 'migrate-keep', onClick: function () { resolve('keep'); } }), del]),
+          ];
+        }, 'keep');
+        if (fate !== 'delete') {
+          closeRunDialog(run);
+          toast('warn', tt('migrate.partial'), { key: 'migration', sticky: true, actions: migrateBackupActions(cfg, tt) });
+          return res({ status: 'partial', tooLarge: leftInfo, copied: copied, total: total, deleted: 'kept' });
+        }
+        migrateProgressView(run, tt);
+      }
+
+      // ---- delete the old data (never in the sandbox) ----
+      var deleted = await migrateDelete(cfg, src, keep);
+      closeRunDialog(run);
+      toast(deleted === 'deleted' ? 'ok' : deleted === 'kept' ? 'info' : 'warn', tt(deleted === 'deleted' ? (total ? 'migrate.done.deleted' : 'migrate.done.settings') : deleted === 'kept' ? (total ? 'migrate.done.kept' : 'migrate.done.settings.kept') : 'migrate.done.changed', { n: total }), { key: 'migration', sticky: deleted === 'changed', actions: deleted === 'changed' ? migrateBackupActions(cfg, tt) : undefined });
+      var out = { status: 'migrated', deleted: deleted, copied: copied, total: total };
+      if (leftInfo.length) out.tooLarge = leftInfo;
+      return res(out);
+    }
+    function closeRunDialog(run) { if (run.dlg && !run.dlg.closed) { run.onClose = null; run.dlg.close(); } }
+
+    // Deletes exactly what was verified: everything is read again; one changed row (also a blob with the same size but other bytes) and nothing is
+    // deleted ("changed"). IndexedDB: per database one readwrite transaction that compares the stores with the fresh read and clears them, or aborts.
+    // Never localStorage.clear(), never the tag, never deleteDatabase.
+    async function migrateDelete(cfg, src, keep) {
+      if (keep) return 'kept';
+      var again = await migrateRead(cfg);
+      await migrateRowIds(again.list);
+      if (again.list.length !== src.list.length) return 'changed';
+      var now = {}, nowRow = {};
+      again.list.forEach(function (r) { now[r.id] = r.hash; nowRow[r.id] = r; });
+      for (var i = 0; i < src.list.length; i++) if (now[src.list[i].id] !== src.list[i].hash) return 'changed';
+      // the bytes of every file, once, right before the delete (the copies were checked against the snapshot)
+      for (var bi = 0; bi < src.list.length; bi++) if (!src.list[bi].local && !(await deepBytesEqual(src.list[bi].value, nowRow[src.list[bi].id].value))) return 'changed';
+      var changed = false;
+      for (var d = 0; d < cfg.dbs.length; d++) {
+        var db = await idbOpenExisting(cfg.dbs[d].name);
+        if (!db) continue;
+        try {
+          var names = cfg.dbs[d].stores.filter(function (s) { return db.objectStoreNames.contains(s); });
+          if (!names.length) continue;
+          var expected = {};
+          names.forEach(function (s) { expected[s] = migrateStoreFingerprint(again.rows[cfg.dbs[d].name + '/' + s] || []); });
+          if (!(await idbClearIfSame(db, names, expected))) changed = true;
+        } finally { try { db.close(); } catch (e) { /* ignore */ } }
+      }
+      again.local.forEach(function (val, key) {
+        try { if (localStorage.getItem(key) === val) localStorage.removeItem(key); else changed = true; } catch (e) { changed = true; }
+      });
+      return changed ? 'changed' : 'deleted';
+    }
+    function idbClearIfSame(db, names, expected) {
+      return new Promise(function (resolve) {
+        var tx, got = {}, pending = names.length * 2;
+        try { tx = db.transaction(names, 'readwrite'); } catch (e) { resolve(false); return; }
+        tx.oncomplete = function () { resolve(true); };
+        tx.onabort = function () { resolve(false); };
+        tx.onerror = function () { /* the abort handler answers */ };
+        function after() {
+          pending--;
+          if (pending > 0) return;
+          try {
+            var same = names.every(function (s) { return migrateStoreFingerprint(got[s].keys.map(function (k, i) { return { key: k, value: got[s].vals[i] }; })) === expected[s]; });
+            if (!same) { tx.abort(); return; }
+            names.forEach(function (s) { tx.objectStore(s).clear(); });
+          } catch (e) { try { tx.abort(); } catch (e2) { /* ignore */ } }
+        }
+        names.forEach(function (s) {
+          var os = tx.objectStore(s); got[s] = {};
+          os.getAllKeys().onsuccess = function (ev) { got[s].keys = ev.target.result; after(); };
+          os.getAll().onsuccess = function (ev) { got[s].vals = ev.target.result; after(); };
+        });
+      });
+    }
+    function migrateWhy(e) {
+      if (e && e.isMigrateStop) return e.why;
+      if (e instanceof Core.OfflineError) return 'offline: ' + e.message;
+      if (e instanceof Core.QuotaError) return 'quota: ' + e.message;
+      if (e instanceof Core.AuthError) return 'locked: ' + e.message;
+      if (e instanceof Core.UsageError && e.code === 'locked') return 'locked';
+      if (typeof DOMException !== 'undefined' && e instanceof DOMException) return 'the old browser storage changed or could not be read while it was copied (' + (e.name || 'DOMException') + ')';
+      return String((e && e.message) || e);
+    }
+    async function migrateRun(cfg) {
+      var tt = migrateTexts(cfg), run = { dlg: null, onClose: null };
+      try { return await migrateBody(cfg, tt, run); }
+      catch (e) {
+        closeRunDialog(run);
+        // Only wrong options reject (before anything is read). Everything that map or the old data cause is a result: a mistake in one user's data must not
+        // stop the page from starting for that user, so the developer's message goes to the console and the person gets the notice with the backup.
+        var mistake = !(e && e.isMigrateStop) && e instanceof Core.UsageError && e.code !== 'locked';
+        var why = migrateWhy(e);
+        if (!/^locked/.test(why) && !client.status().unlocked) why = 'locked: ' + why;   // a request that was in flight when the session ended fails in odd ways
+        if (typeof console !== 'undefined') { if (mistake && console.error) console.error('wds: migrateLocal "' + cfg.id + '" stopped (a mistake in map or in the old data; nothing was deleted): ' + why); else if (console.warn) console.warn('wds: migrateLocal "' + cfg.id + '" stopped: ' + why); }
+        if (!/^locked/.test(why)) toast('warn', tt('migrate.failed'), { key: 'migration', sticky: true, actions: migrateBackupActions(cfg, tt) });
+        return migrateWithBackup({ status: 'failed', why: why, deleted: 'kept', sandbox: isSandbox(S) }, cfg, tt);
+      } finally { closeRunDialog(run); }
+    }
+    async function migrateLocal(opts) {
+      var cfg = migrateParse(opts);
+      var locks = typeof navigator !== 'undefined' && navigator.locks;
+      if (!locks || typeof locks.request !== 'function') return migrateRun(cfg);
+      return locks.request('wds:migrate:' + cfg.id, { ifAvailable: true }, function (lock) {
+        if (!lock) return { status: 'busy', sandbox: isSandbox(S) };
+        return migrateRun(cfg);
+      });
     }
 
     // ---- the API ----
@@ -4941,6 +6139,8 @@ return module.exports.argon2id;
         }, o);
       },
       usage: async function () { await ensureUnlocked(); return guarded(function () { return client.usage(); }); },
+      // Takes over the data an earlier, local-only version of the app left in this browser (IndexedDB, localStorage): see the header comment and docs/site/porting.md.
+      migrateLocal: migrateLocal,
 
       // Statuses: idle, dirty, saving, saved, error, replaced, stopped. One live handle per name: a new one flushes and stops the old one.
       autosave: function (name, getState, o) { checkAppName(name); return makeAutosave(name, getState, o, null); },
@@ -5147,13 +6347,15 @@ return module.exports.argon2id;
     version: UI_VERSION,
     connect: connect,
     errors: Core.errors,
+    fillGaps: fillGaps,
     ConflictError: Core.ConflictError, OfflineError: Core.OfflineError, QuotaError: Core.QuotaError, AuthError: Core.AuthError,
     IntegrityError: Core.IntegrityError, VersionError: Core.VersionError, UsageError: Core.UsageError,
     // pure helpers and texts; used by the unit tests and tools, not part of the app API
     internals: {
       TEXT: TEXT, makeT: makeT, detectLang: detectLang, estimate: estimate, checkLocal: checkLocal, checkPassphrase: checkPassphrase, hibpCheck: hibpCheck,
       crc32: crc32, makeZip: makeZip, buildArchive: buildArchive, archivePaths: archivePaths, buildSheetHtml: buildSheetHtml, markedName: markedName,
-      applyCollectionOps: applyCollectionOps, fileSafe: fileSafe, formatBytes: formatBytes, formatTime: formatTime, MIN_PASSPHRASE: MIN_PASSPHRASE, WORD_COUNT: WORD_COUNT, COMMON_COUNT: COMMON_EXACT.length,
+      applyCollectionOps: applyCollectionOps, fileSafe: fileSafe,
+      migrate: { buildId: migrateBuildId, keyToken: migrateKeyToken, makeHelpers: makeMigrateHelpers, toBlob: migrateToBlob, created: migrateCreated, parse: migrateParse, canonText: canonText, checkJson: migrateCheckJson, MigrateStop: MigrateStop, dataUrlToBlob: dataUrlToBlob, fnv1a: fnv1a }, formatBytes: formatBytes, formatTime: formatTime, MIN_PASSPHRASE: MIN_PASSPHRASE, WORD_COUNT: WORD_COUNT, COMMON_COUNT: COMMON_EXACT.length,
     },
   };
   return api;

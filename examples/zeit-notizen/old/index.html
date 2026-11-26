@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zeit &amp; Notizen (alte Version, nur lokal)</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; max-width: 44rem; margin: 1.5rem auto; padding: 0 1rem; }
+  section { border: 1px solid #ccc; border-radius: 6px; padding: .5rem 1rem 1rem; margin: 1rem 0; }
+  input, select, textarea, button { font: inherit; margin: .15rem 0; }
+  textarea { width: 100%; box-sizing: border-box; }
+  small { color: #555; font-weight: normal; }
+</style>
+</head>
+<body>
+<h1>Zeit &amp; Notizen <small>(alte Version: speichert nur in diesem Browser)</small></h1>
+<p><label>Sprache <select id="lang"><option value="de">Deutsch</option><option value="en">English</option></select></label></p>
+
+<section>
+  <h2>Projekte</h2>
+  <input id="project-name" aria-label="Projektname" placeholder="Projektname"> <button id="project-add" type="button">Projekt anlegen</button>
+  <ul id="project-list"></ul>
+</section>
+
+<section>
+  <h2>Zeit erfassen</h2>
+  <select id="entry-project" aria-label="Projekt"></select>
+  <input id="entry-date" type="date" aria-label="Datum">
+  <input id="entry-minutes" type="number" min="1" value="60" aria-label="Minuten">
+  <input id="entry-desc" aria-label="Beschreibung" placeholder="Beschreibung">
+  <button id="entry-add" type="button">Eintrag speichern</button>
+  <ul id="entry-list"></ul>
+  <p><select id="timer-project" aria-label="Projekt des Timers"></select> <input id="timer-desc" aria-label="Beschreibung des Timers" placeholder="Woran arbeiten Sie?"> <button id="timer-start" type="button">Timer starten</button> <span id="timer-info"></span></p>
+</section>
+
+<section>
+  <h2>Notizen</h2>
+  <input id="note-title" aria-label="Titel" placeholder="Titel"><br>
+  <textarea id="note-text" rows="4" aria-label="Text"></textarea><br>
+  <input id="note-tags" aria-label="Schlagwörter" placeholder="Schlagwörter, mit Komma getrennt">
+  <input id="note-file" type="file" multiple aria-label="Anhänge"><br>
+  <button id="note-add" type="button">Notiz speichern</button>
+  <ul id="note-list"></ul>
+</section>
+
+<script>
+"use strict";
+// The older, local-only version of examples/zeit-notizen, kept here so that the migration of the new app can be tried and tested (wds-verify.json, "seed"):
+// projects and time entries are one JSON text in localStorage ("zeitnotizen.daten": { projects: [{ id, name }], entries: [{ id, project, date, minutes, desc }] }, counters as ids),
+// notes and their attachments are in the IndexedDB database "zeitnotizen" (stores "notes" and "files", auto-increment keys), and the running timer and the language
+// are rows of the key-value store "meta" ("timer", "lang"). Nothing leaves the browser.
+const KEY = "zeitnotizen.daten";
+const $ = (id) => document.getElementById(id);
+const read = () => { try { return JSON.parse(localStorage.getItem(KEY)) || { projects: [], entries: [] }; } catch (e) { return { projects: [], entries: [] }; } };
+const write = (data) => localStorage.setItem(KEY, JSON.stringify(data));
+const nextId = (list) => list.reduce((m, x) => Math.max(m, x.id), 0) + 1;
+
+function openDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open("zeitnotizen", 1);
+    req.onupgradeneeded = () => {
+      req.result.createObjectStore("notes", { autoIncrement: true });
+      req.result.createObjectStore("files", { autoIncrement: true });
+      req.result.createObjectStore("meta");
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function inStore(name, fn) {         // runs fn(objectStore) in a readwrite transaction and resolves its request's result
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(name, "readwrite");
+    const req = fn(tx.objectStore(name));
+    tx.oncomplete = () => { db.close(); resolve(req && req.result); };
+    tx.onerror = () => { db.close(); reject(tx.error); };
+  });
+}
+const li = (text) => { const el = document.createElement("li"); el.textContent = text; return el; };
+
+function render() {
+  const data = read();
+  $("project-list").replaceChildren(...data.projects.map((p) => li(p.name)));
+  for (const id of ["entry-project", "timer-project"]) {
+    $(id).replaceChildren(...data.projects.map((p) => { const o = document.createElement("option"); o.value = p.id; o.textContent = p.name; return o; }));
+  }
+  $("entry-list").replaceChildren(...data.entries.map((e) => li(e.date + ": " + e.minutes + " min, " + e.desc)));
+}
+async function renderNotes() {
+  const db = await openDb();
+  const titles = await new Promise((resolve) => { const r = db.transaction("notes").objectStore("notes").getAll(); r.onsuccess = () => resolve(r.result.map((n) => n.title)); });
+  db.close();
+  $("note-list").replaceChildren(...titles.map(li));
+}
+
+$("project-add").onclick = () => {
+  const name = $("project-name").value.trim();
+  if (!name) return;
+  const data = read();
+  data.projects.push({ id: nextId(data.projects), name });
+  write(data); $("project-name").value = ""; render();
+};
+$("entry-add").onclick = () => {
+  const data = read(), project = Number($("entry-project").value);
+  if (!project) return;
+  data.entries.push({ id: nextId(data.entries), project, date: $("entry-date").value, minutes: Number($("entry-minutes").value) || 0, desc: $("entry-desc").value });
+  write(data); $("entry-desc").value = ""; render();
+};
+$("note-add").onclick = async () => {
+  const tags = $("note-tags").value.split(",").map((s) => s.trim()).filter(Boolean);
+  const noteId = await inStore("notes", (os) => os.add({ title: $("note-title").value, text: $("note-text").value, tags, created: Date.now() }));
+  for (const file of $("note-file").files) await inStore("files", (os) => os.add({ noteId, name: file.name, blob: file }));
+  $("note-title").value = ""; $("note-text").value = ""; $("note-tags").value = ""; $("note-file").value = "";
+  await renderNotes();
+};
+$("timer-start").onclick = async () => {
+  const project = Number($("timer-project").value);
+  if (!project) return;
+  await inStore("meta", (os) => os.put({ project, desc: $("timer-desc").value, start: Date.now() }, "timer"));
+  $("timer-info").textContent = "Timer läuft";
+};
+$("lang").onchange = () => inStore("meta", (os) => os.put($("lang").value, "lang"));
+
+$("entry-date").value = new Date().toISOString().slice(0, 10);
+render();
+renderNotes();
+</script>
+</body>
+</html>

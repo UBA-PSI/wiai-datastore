@@ -156,6 +156,8 @@ Eine Matrikelnummer wird nur zur Prüfung ausgewertet (Beschäftigte haben keine
 (technisch notwendig, keine Einwilligung erforderlich). Die Sitzung endet bei der Abmeldung, nach {idle_h} Stunden ohne Aktivität oder spätestens nach {abs_h} Stunden.</li>
 <li><strong>Anmeldecookie:</strong> Während der Anmeldung setzen wir zehn Minuten lang das Cookie <code>__Host-wds_login</code>, das die Anmeldung an Ihren Browser bindet
 (technisch notwendig, keine Einwilligung erforderlich). Danach wird es gelöscht.</li>
+<li><strong>Anzeigewunsch:</strong> Wenn Sie im Dashboard „Experteneinstellungen immer aufgeklappt zeigen“ wählen, setzen wir ein Jahr lang das Cookie <code>wds_expert</code> mit dem Wert 1
+(von Ihnen ausdrücklich gewünscht, keine Einwilligung erforderlich; keine Angaben zu Ihrer Person). Mit „Experteneinstellungen wieder zuklappen“ wird es gelöscht.</li>
 <li><strong>Angaben zu Ihren Apps:</strong> Name, Beschreibung, Kontakt-E-Mail-Adresse der App, Mit-Administratoren (Kennung oder E-Mail-Adresse), Einstellungen.</li>
 <li><strong>Protokoll der Dashboard-Aktionen:</strong> Wer hat wann was geändert (zum Beispiel Einstellungen mit alter und neuer Kontakt-E-Mail-Adresse, Löschungen),
 dazu Anmeldungen und abgewiesene Anmeldungsversuche (diese sieht nur der Betrieb). Ohne IP-Adressen.</li>
@@ -269,6 +271,8 @@ A matriculation number is only checked (staff have none) and is not stored.</p>
 (technically necessary, no consent needed). The session ends at logout, after {idle_h} hours without activity, or after {abs_h} hours at the latest.</li>
 <li><strong>Login cookie:</strong> While you log in we set the cookie <code>__Host-wds_login</code> for ten minutes; it ties the login to your browser
 (technically necessary, no consent needed). It is deleted afterwards.</li>
+<li><strong>Display preference:</strong> If you choose "Always show the expert settings" in the dashboard we set the cookie <code>wds_expert</code> with the value 1 for one year
+(requested by you, no consent needed; it holds no personal data). "Collapse the expert settings again" deletes it.</li>
 <li><strong>Details of your apps:</strong> name, description, contact e-mail address of the app, co-admins (ID or e-mail address), settings.</li>
 <li><strong>Log of dashboard actions:</strong> who changed what and when (for example settings with the old and new contact e-mail address, deletions),
 plus logins and refused login attempts (only the operator sees these). No IP addresses.</li>

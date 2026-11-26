@@ -112,6 +112,7 @@ class Config:
     read_only_threshold: float = 0.85
     sweep_interval: int = 3600
     privacy_url: str | None = None
+    help_contact: str = ""  # shown in the dashboard help box ("Questions? ..."): an e-mail address or a short text; empty = no line
     # login.psi and the dashboard (PLAN 6, 10)
     loginpsi_key_file: str | None = None
     loginpsi_app: str = "wiai-datastore"
@@ -230,6 +231,7 @@ def load_config(path: str | Path | None) -> Config:
     cfg.read_only_threshold = float(get(s, "read_only_threshold", cfg.read_only_threshold))
     cfg.sweep_interval = int(get(s, "sweep_interval", cfg.sweep_interval))
     cfg.privacy_url = get(s, "privacy_url", cfg.privacy_url)
+    cfg.help_contact = (get(s, "help_contact", "") or "").strip()[:200]
     cfg.library_latest = get(s, "library_latest", cfg.library_latest)
     deprecated = get(s, "library_deprecated", "")
     cfg.library_deprecated = [v for v in deprecated.replace(",", " ").split() if v]

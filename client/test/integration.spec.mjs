@@ -1174,3 +1174,105 @@ test('no canary plaintext in any request body the browsers sent, and none in the
   for (const cn of CANARIES) expect(log.includes(cn)).toBe(false);
   expect(log).not.toMatch(/GET \/datastore|PUT \/datastore/);
 });
+
+// Library dialogs, toasts and the sandbox bar are in the top layer: they work above a modal <dialog> of the app, in every engine.
+test('library dialogs above app modals: conflict, toast action, Escape, expired session with a re-unlock, and app CSS that styles every dialog', async ({ browser, stack }) => {
+  const ctx = await newContext(browser);
+  const page = await openApp(ctx, stack, { ui: true });
+  const passphrase = 'purple elephants marching slowly ' + PASS_CANARY;
+  const accessId = await uiCreate(page, stack, passphrase);
+  const other = await unlockElsewhere(browser, stack, { accessId: accessId.replace(/-/g, '') }, passphrase);
+  expect(other.status.err).toBeUndefined();
+  const lib = page.locator('dialog.wds-dialog');
+  const openModal = (id) => page.evaluate((id) => {
+    const d = document.createElement('dialog');
+    d.id = id;
+    d.innerHTML = '<p>App dialog</p><input id="' + id + '-in"><button id="' + id + '-ok" type="button">App OK</button>';
+    d.addEventListener('click', (ev) => { const r = d.getBoundingClientRect(); if (ev.clientX < r.left || ev.clientX > r.right || ev.clientY < r.top || ev.clientY > r.bottom) { d.close(); window.outsideClosed = true; } });
+    document.body.appendChild(d); d.showModal();
+  }, id);
+
+  // (1) a conflict above an app modal
+  await page.evaluate(() => store.set('note', { text: 'v1' }));
+  await other.page.evaluate(() => c.get('note').then(() => c.put('note', { text: 'theirs' })));
+  await openModal('m1');
+  await page.evaluate(() => { window.setP = store.set('note', { text: 'mine' }); });
+  await expect(lib.getByRole('heading', { name: 'Another device or person saved a newer version' })).toBeVisible();
+  await lib.getByRole('button', { name: 'Keep mine' }).click();             // no force
+  expect((await page.evaluate(() => window.setP)).resolution).toBe('mine');
+  await page.locator('#m1-ok').click();                                   // the app modal is usable again
+  await page.evaluate(() => document.getElementById('m1').close());
+
+  // (3) a toast with an action above an app modal; a click on it does not reach the modal's click-outside handler
+  await openModal('m3');
+  await page.route(/\/records\//, (route) => route.abort('failed'));
+  expect(await page.evaluate(() => store.set('draft', { text: 'unsaved' }).then(() => null, (e) => e.name))).toBe('OfflineError');
+  const dl = page.waitForEvent('download');
+  await page.locator('[data-wds-toast=offline] [data-wds=toast-action]').click();
+  await dl;
+  expect(await page.evaluate(() => window.outsideClosed)).toBeUndefined();
+  await page.locator('[data-wds-toast=offline] [data-wds=toast-dismiss]').click();
+  await page.unroute(/\/records\//);
+  await page.evaluate(() => document.getElementById('m3').close());
+
+  // (5) Escape three times: a mandatory dialog stays, a cancelable one closes and rejects with "cancelled"
+  await page.evaluate(() => store.lock());
+  await page.evaluate(() => { window.unlockP = store.unlock().then(() => 'unlocked', (e) => e.code); });
+  await expect(lib.getByRole('heading', { name: 'Unlock your data' })).toBeVisible();
+  for (let i = 0; i < 3; i++) await page.keyboard.press('Escape');
+  await expect(lib).toHaveCount(1);
+  await expect(lib).toHaveAttribute('data-wds-view', 'unlock');
+  await page.evaluate(() => { document.activeElement && document.activeElement.blur(); });
+  for (let i = 0; i < 3; i++) await page.keyboard.press('Escape');
+  await expect(lib).toHaveCount(1);
+  await lib.getByLabel('Access ID').fill(accessId);
+  await lib.getByLabel('Passphrase', { exact: true }).fill(passphrase);
+  await lib.getByRole('button', { name: 'Unlock' }).click();
+  expect(await page.evaluate(() => window.unlockP)).toBe('unlocked');
+  await page.evaluate(() => store.lock());
+  await page.evaluate(() => { window.cancelP = store.unlock({ cancelable: true }).then(() => 'unlocked', (e) => e.code); });
+  await expect(lib).toHaveCount(1);
+  await page.keyboard.press('Escape');
+  expect(await page.evaluate(() => window.cancelP)).toBe('cancelled');
+  await expect(lib).toHaveCount(0);
+
+  // (7) the session expires while an app modal and the share dialog are open: the library dialogs close, onLock runs, the unlock dialog is on top and usable
+  await page.evaluate(() => { window.unlockP = store.unlock(); });
+  await lib.getByLabel('Access ID').fill(accessId);
+  await lib.getByLabel('Passphrase', { exact: true }).fill(passphrase);
+  await lib.getByRole('button', { name: 'Unlock' }).click();
+  await page.evaluate(() => window.unlockP);
+  await page.evaluate(() => { window.locks = []; store.onLock((r) => { window.locks.push(r); window.relock = store.unlock().then(() => 'unlocked', (e) => e.code); }); window.shareP = store.share(); });
+  await expect(lib.getByRole('heading', { name: 'Sharing and access' })).toBeVisible();
+  await openModal('m7');
+  await page.route(/\/records\//, (route) => route.fulfill({ status: 401, contentType: 'application/json', headers: { 'access-control-allow-origin': '*', 'www-authenticate': 'Bearer realm="wds"' }, body: '{"error":"unauthorized"}' }));
+  expect(await page.evaluate(() => store.get('x').then(() => null, (e) => e.name))).toBe('AuthError');
+  expect(await page.evaluate(() => window.locks)).toEqual(['expired']);
+  await page.evaluate(() => window.shareP);
+  await expect(lib).toHaveCount(1);
+  await expect(lib.getByRole('heading', { name: 'Unlock your data' })).toBeVisible();
+  await expect(page.locator('[data-wds-toast=session]')).toBeVisible();
+  await page.unroute(/\/records\//);
+  await lib.getByLabel('Passphrase', { exact: true }).fill(passphrase);
+  await lib.getByRole('button', { name: 'Unlock' }).click();              // no force: above the app modal
+  expect(await page.evaluate(() => window.relock)).toBe('unlocked');
+  await page.evaluate(() => document.getElementById('m7').close());
+
+  // (9) app CSS for "dialog" (centring with a transform, opacity pattern, padding, max-width, a transparent backdrop) does not change our box
+  await page.addStyleTag({ content: 'dialog{padding:3rem;max-width:200px;border:5px solid red;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);display:flex;opacity:0;transition:opacity .5s;overflow:hidden;width:200px;height:100px;margin:0}dialog[open]{opacity:0}dialog::backdrop{background:transparent}' });
+  await page.evaluate(() => store.lock());
+  await page.evaluate(() => { window.unlockP = store.unlock(); });
+  await expect(lib.getByRole('heading', { name: 'Unlock your data' })).toBeVisible();
+  const box = await page.evaluate(() => {
+    const el = document.querySelector('dialog.wds-dialog'), cs = getComputedStyle(el), b = el.getBoundingClientRect();
+    return { opacity: cs.opacity, padding: cs.padding, border: cs.borderTopWidth, transform: cs.transform, display: cs.display, width: b.width, left: b.left, top: b.top, right: b.right, bottom: b.bottom, vw: innerWidth, vh: innerHeight };
+  });
+  expect(box.opacity).toBe('1'); expect(box.padding).toBe('0px'); expect(box.border).toBe('0px'); expect(box.transform).toBe('none'); expect(box.display).toBe('block');
+  expect(box.width).toBeGreaterThan(400);
+  expect(box.left).toBeGreaterThanOrEqual(0); expect(box.top).toBeGreaterThanOrEqual(0); expect(box.right).toBeLessThanOrEqual(box.vw); expect(box.bottom).toBeLessThanOrEqual(box.vh + 1);
+  await lib.getByLabel('Access ID').fill(accessId);
+  await lib.getByLabel('Passphrase', { exact: true }).fill(passphrase);
+  await lib.getByRole('button', { name: 'Unlock' }).click();
+  await page.evaluate(() => window.unlockP);
+  expect(page.errors).toEqual([]);
+});

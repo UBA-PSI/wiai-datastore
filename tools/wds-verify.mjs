@@ -5,7 +5,8 @@
 //
 // Static checks: the script tag (published version, integrity hash from the service's hashes.json, or the local clone), the CSP (not
 // broader than the recommended one), no other scripts, no direct access to the datastore host, no sandbox scope ID or label-hiding CSS
-// in the app, and the real scope's settings (breach check against the CSP). Dynamic checks: the app runs in Chromium from a file://
+// in the app, old browser data (store.migrateLocal recognised; a hand-made migration and a deletion without a sandbox guard are warnings), modal
+// dialogs of the app (information), and the real scope's settings (breach check against the CSP, the sentence about it for the privacy text). Dynamic checks: the app runs in Chromium from a file://
 // URL against a local copy of the real server (target mock) or the public sandbox (target sandbox); every field is filled with
 // canary strings, save buttons are pressed (plus the steps in wds-verify.json next to the app), the page is reloaded and unlocked
 // again, and the canaries are searched for in every request, in the browser storage, the console, downloads and (mock) the database.
@@ -25,20 +26,22 @@
 //   --hashes <file>     published library hashes (default: <service>/client/hashes.json, then client/dist/hashes.json of the clone)
 //   --out <file>        also write the report to a file
 //   --migration-delete  with a "seed" in wds-verify.json (a test of the migration of old local data), sandbox target: set window.__WDS_MIGRATION_TEST__ = true
-//                       (and navigator.webdriver) in the app's page, so that a migration that keeps the old data in the sandbox deletes it (as in production) and
+//                       (and navigator.webdriver) in the app's page, so that store.migrateLocal, which keeps the old data in the sandbox, deletes it (as in production) and
 //                       the tool checks that the old storage is empty afterwards. Without the flag the sandbox run checks that it was kept. No effect on the mock
 //                       target (it deletes anyway); the report names the flag.
 //   --strict            warnings fail too
 //   --headed            show the browser
 //   --wait-ms <n>       time to wait for debounced saves at the end (default 2800)
-//   --script-tag [ver]  print the script tag for a version (default: newest) and exit
+//   --script-tag [ver]  print the complete script tag (with the onerror handler) and the CSP meta tag for a version (default: newest) and exit. For an unreleased
+//                       library build: --script-tag --hashes client/dist/hashes.json (the integrity of your own build; the service publishes another one)
+//   --scope-check off   do not ask the service for the scope's settings (an app whose scope is not registered yet, a mock run of an unreleased library)
 //   --json              print the findings as JSON instead of Markdown
 // Exit codes: 0 all checks passed, 1 a check failed, 2 the tool could not run (usage, missing Python or browser),
 // 3 the sandbox is unavailable (full, rate limited, switched off): not an app finding, try again later.
 import { readFileSync, writeFileSync, existsSync, statSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { staticChecks, scanHtml, CSP_TEMPLATE } from './lib/static-checks.mjs';
+import { staticChecks, scanHtml, CSP_TEMPLATE, ONERROR } from './lib/static-checks.mjs';
 import { parseConfig, MIGRATION_TEST_GLOBAL } from './lib/config.mjs';
 import { scopeCheck } from './lib/scope-check.mjs';
 import { UsageError, TargetUnavailable, REPO_URL, loadKnownHashes, sandboxInfo, serviceBase, offline, rewriteScopes } from './lib/targets.mjs';
@@ -47,7 +50,7 @@ export { UsageError };
 
 export function parseArgs(argv) {
   const o = { positional: [], flags: {} };
-  const withValue = new Set(['hashes', 'out', 'wait-ms', 'target', 'locale', 'sandbox-copy']);
+  const withValue = new Set(['hashes', 'out', 'wait-ms', 'target', 'locale', 'sandbox-copy', 'scope-check']);
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a.startsWith('--')) {
@@ -66,7 +69,7 @@ function semver(v) { return v.split('.').map((n) => String(Number(n)).padStart(6
 export function scriptTag(known, version) {
   const v = version || Object.keys(known).sort((a, b) => (semver(a) < semver(b) ? 1 : -1))[0];
   if (!known[v]) throw new UsageError('unknown library version ' + v + ' (known: ' + Object.keys(known).join(', ') + ')');
-  return '<script src="https://wiai.uni-bamberg.de/datastore/client/wds-' + v + '.js"\n        integrity="' + known[v].sri + '" crossorigin="anonymous"></script>';
+  return '<script src="https://wiai.uni-bamberg.de/datastore/client/wds-' + v + '.js"\n        integrity="' + known[v].sri + '" crossorigin="anonymous"\n        onerror="' + ONERROR + '"></script>';
 }
 
 function findApp(p) {
@@ -127,15 +130,15 @@ export function notTested({ info = {}, config = {}, html = '', target = {} }) {
   if (target.name === 'static') out.push('Everything the dynamic part checks was not run (no browser): the canary search in requests, storage and console, saving, and the reload. Run wds-verify without --static-only (or with --target sandbox) before you finish.');
   out.push('A second device and conflicts: open the app in two browsers with the same vault, change the same record in both, and look at what a person sees (the conflict dialog or your onConflict handler; no entry may get lost).');
   out.push('A read-only member: invite a member with the role "read", and check that every control that writes is disabled or hidden for them and that no error shows.');
-  out.push('Lock and unlock again in one page: lock the vault (store.lock(), or wait for the timeout) and unlock without reloading; the screen must be empty on lock and filled again on unlock, and nothing may be registered twice (register onLock and onUnlock once, outside start).');
+  out.push('Lock and unlock again in one page: lock the vault (store.lock(), or wait for the timeout) and unlock without reloading; the screen must be empty on lock and filled again on unlock, and nothing may be registered twice (register onLock and onUnlock once, outside start). Close your own modal dialogs in onLock: the library locks with its dialogs above yours, and the unlock dialog that comes next must not find one of yours open.');
   const unpressed = info.unpressed && info.unpressed.length ? ' This run saw: ' + info.unpressed.map((t) => '"' + t + '"').join(', ') + '.' : '';
   out.push('Buttons the tool does not press: delete, export, download, import, lock, and everything that the save word list, data-wds-verify="save" or a click step does not match. Press each by hand.' + unpressed);
   if (info.fileInputs && !(info.stepCount && info.stepCount.upload)) out.push('File inputs (' + info.fileInputs + ') without an upload step were not used: add {"upload": [selector]} steps, or try the upload by hand.');
   if (!info.stepCount || info.hiddenFields) out.push('Fields in views no step opens (tabs, panels, dialogs of the app)' + (info.hiddenFields ? ': ' + info.hiddenFields + ' hidden field(s) were seen but not filled' : '') + '. Fill them by hand, or add steps (click the tab, fill the field, click save) and afterReload steps.');
   if (config.seed) {
-    if (target.name === 'sandbox' && !info.migrationDelete) out.push('The deletion of the old data was not exercised: the sandbox keeps it by design. Run again with --migration-delete (the migration must then honour window.__WDS_MIGRATION_TEST__ === true, docs section 16), and test the deletion with real-size data against a test vault in the app\'s own scope.');
-    else out.push('The migration with real-size old data (attachments, many items) and the "old app was used meanwhile" case (nothing is deleted, the result is "changed"): try both by hand against a test vault in the app\'s own scope.');
-    out.push('The old data is found only when the new app is opened from the same origin as the old one (Chromium: any file:// page shares storage with any other; Firefox: only the same file; a web server: the same scheme, host and port). The tool opens both in one Chromium and cannot show this: replace the old file in place and tell the users to open the new one the same way.');
+    if (target.name === 'sandbox' && !info.migrationDelete) out.push('The deletion of the old data was not exercised: the sandbox keeps it by design. Run again with --migration-delete (store.migrateLocal then deletes in the sandbox too, porting.md), and test the deletion with real-size data against a test vault in the app\'s own scope (optional: the sandbox run with --migration-delete covers the deletion path).');
+    else out.push('The migration with real-size old data (attachments, many items) and the "old app was used meanwhile" case (nothing is deleted, the result is "changed"): try both by hand against a test vault in the app\'s own scope, in a fresh browser profile (the migration moves the data of your everyday browser, and deletes it there).');
+    out.push('The old data is found only when the new app is opened from the same origin as the old one (Chromium: any file:// page shares storage with any other; Firefox and Safari: only the same file, so the new file needs the same name in the same folder; a web server: the same scheme, host and port). The tool opens both in one Chromium and cannot show this: replace the old file in place and tell the users to open the new one the same way.');
   } else if (/migrat|oldData|old data/i.test(html)) out.push('The migration of old local data was not tested: the page mentions a migration, but wds-verify.json has no "seed". Add {"seed": {"page": "old-app.html", "steps": [...]}} (the old local-only app and the steps that fill it), see tools/README.md.');
   if ((info.appDialogs || /<dialog\b|role\s*=\s*["']dialog|aria-modal/i.test(html)) && !(config.steps && config.steps.length)) out.push('The app has dialogs of its own and wds-verify.json has no steps for them: the tool finds no stable selectors in them. Add steps that open them and fill their fields, or test them by hand.');
   return out;
@@ -196,11 +199,13 @@ export async function verify(target, flags = {}) {
     flags = { ...flags, locale: ok };
   }
   const readmeFile = ['README.md', 'readme.md', 'README.txt', 'README'].map((f) => join(dirname(appPath), f)).find((f) => existsSync(f));
-  const st = staticChecks(html, hashes.known, { readme: readmeFile ? readFileSync(readmeFile, 'utf8') : '' });
+  const readme = readmeFile ? readFileSync(readmeFile, 'utf8') : '';
+  const st = staticChecks(html, hashes.known, { readme });
   const tg = await resolveTarget(flags);
   const add = (id, level, title, detail) => ({ id, level, title, detail: detail || '' });
   let findings = [add('hashes', hashes.differs ? 'warn' : 'info', 'Library hashes', 'Published hashes from ' + hashes.source + '.' + (hashes.note ? ' ' + hashes.note : ''))].concat(st.findings);
-  findings = findings.concat(await scopeCheck(st.scope, st.csp, st.baseUrl));
+  if (flags['scope-check'] === 'off') findings.push(add('scope-settings', 'info', 'Current scope settings', 'Scope settings not checked (--scope-check off): neither whether the scope exists nor its breach check, enrollment and limits.'));
+  else findings = findings.concat(await scopeCheck(st.scope, st.csp, st.baseUrl, { html, readme }));
   if (tg.degraded) findings.push(add('dynamic-skipped', 'warn', 'Dynamic checks did not run', 'Only the static checks ran: ' + tg.reason + '. Install Python 3.13 with the server packages (tools/README.md) to run the app against a local mock, or try again when the sandbox is reachable.'));
   let info = {};
   if (tg.name === 'mock' || tg.name === 'sandbox') {
@@ -247,7 +252,7 @@ async function main(argv) {
     if (args.flags['script-tag'] !== undefined) {
       const h = await loadKnownHashes(args.flags);
       console.log(scriptTag(h.known, args.flags['script-tag'] === true ? null : args.flags['script-tag']));
-      console.log('\nCSP meta tag (first element of <head>):\n<meta http-equiv="Content-Security-Policy" content="' + CSP_TEMPLATE + '">');
+      console.log('\nCSP meta tag (in the head, right after <meta charset>, before any script):\n<meta http-equiv="Content-Security-Policy" content="' + CSP_TEMPLATE + '">');
       return 0;
     }
     if (args.positional.length !== 1) throw new UsageError('give exactly one app file or directory');

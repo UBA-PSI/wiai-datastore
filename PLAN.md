@@ -269,7 +269,7 @@ Record AAD: the 10 header bytes (magic, type, flags, epoch) `‖ lp(scope_id) �
 - `POST /vaults/{v}/roster` is compare-and-swap on the previous version's hash, so two owner sessions cannot fork it.
 - Growth is bounded: at most 64 slots and 64 KiB per version; per vault at most 1000 ordinary versions, and *protective*
   versions (removing a slot, dropping an epoch, adopting a renewal, switching escrow) up to 1100; the bytes of all versions
-  are capped at 16 MiB and count toward the vault and scope quotas, but protective versions are never refused for quota.
+  are capped at 16 MB (2^20 bytes each) and count toward the vault and scope quotas, but protective versions are never refused for quota.
 - Server and clients reject a roster without a slot for the pinned escrow keys. The content of the escrow keyring entry
   cannot be verified by anyone except the escrow holder; documented.
 - The roster lists, per slot: slot ID, kind (`passphrase`, `invite`, `escrow`), role, `E.pub`, `S.pub` and the invite
@@ -581,8 +581,7 @@ await store.lock(); store.setLocale("de"); store.status() /* incl. sandbox: bool
   unsaved backups stay downloadable. `onLock`, `onUnlock` and `onChange` registrations are idempotent per function.
 - Dialogs: German/English by `navigator.language` (German formal "Sie"), themeable via CSS custom properties (`--wds-bg`, `--wds-fg`,
   `--wds-accent`, `--wds-font`, `--wds-radius`, …) and the `wds-` class prefix, no Shadow DOM, light and dark by `prefers-color-scheme`.
-  Accessibility: `role="dialog"`, `aria-modal`, labelled by the title, focus trap, the rest of the page is `inert` while a dialog is open, focus
-  returns to the previous element, every input has a label, errors are `role="alert"`. The API offers no hook that hands over
+  Every dialog is a modal `<dialog>` opened with `showModal()` (round F): it lives in the browser's top layer, so it opens above the modal dialogs of the app, the browser makes everything below it inert, draws the backdrop and returns the focus, and Escape closes only a dialog that has a close button; toasts and the sandbox bar are `popover="manual"` elements that the library keeps inside the topmost modal dialog while one is open. The box is reset with `all: initial` so that app CSS for `dialog` cannot change it. Accessibility: labelled by the title, focus returns to the previous element, every input has a label, errors are `role="alert"`, a dialog that waits has `aria-busy="true"`. The API offers no hook that hands over
   the passphrase. (The dialogs run in the app's JavaScript realm, so a malicious app could still read the input; this
   protects against careless code, not hostile code.)
 
@@ -661,12 +660,13 @@ interferes nor receives passphrases).
   `/` in names are kept, collisions get " (2)"), plus `wds-export.json` (name → file, kind, MIME, version, time, size) and `README.txt`.
   `list()` has to download every record once to learn its name, so an export reads every record twice (open point: an
   encrypted index record would avoid it).
+- **Taking over old local data** (`store.migrateLocal`, round F; replaces the hand recipe of round E). One call with `{ id, indexedDB?, localStorage?, tagged?, map(old, h), texts? }`. The library reads the old browser storage (databases opened without creating them, only the named stores; localStorage keys and prefixes, never `wds:` keys), runs `map` twice (the results must be identical, so no random ids and no clock), checks the result before the first write (ids, names, duplicates, references, every old row claimed by an entry's `from` or by `h.skip`: otherwise nothing is deleted), asks the owner once (a backup ZIP with the files is offered, not encrypted), copies with create-only writes (4 in parallel), writes the collection indexes in one batch each, reads everything back and compares it byte for byte, writes a marker `.wds/migration/<id>/<tag>` (entry name to a short hash of what `map` made of it, and the ids of skipped rows to a cheap fingerprint of the row; hidden from `list()`, collections and `exportAll`), and only then deletes: it reads the old rows again, compares every Blob byte for byte with the snapshot (rows are otherwise compared by a cheap fingerprint without reading files) and clears the stores in one transaction per database that compares first. A start with the marker never compares the vault again, so what the person edited or deleted since stays. Per browser a random tag (kept in localStorage under `wds:migrate:<id>:tag`) makes `h.id` unique (`tagged`, default) or, with `tagged: false`, identical data of two browsers is one copy and different data goes to the view `migrate-differs`. Entries that do not fit (above `max_value_bytes`, or no room) go to the view `migrate-large` with one download each; deleting needs every download or an acknowledgement. Tab lock `ifAvailable` (`busy`), members are `skipped` with a notice and a backup button, sandboxes keep the old data unless `window.__WDS_MIGRATION_TEST__ === true` and `navigator.webdriver === true` (an automated browser; a console warning). Settings are filled into one record with `WDS.fillGaps` (only absent keys). Rows that `map` leaves out with `h.skip` are deleted with the old data, so the question waits for a confirmation (box or backup download); `map` gets copies of the rows; the person can also choose "delete the old data without taking it over" (`discarded`). Every notice that leaves the old data has a backup button, and the result has `downloadBackup()`. Result: `{ status: nothing | busy | skipped | declined | discarded | failed | partial | migrated, deleted?, copied?, total?, tooLarge?, differs?, why?, again?, sandbox }`. It rejects only with `UsageError` for wrong options (before anything is read) and a cancelled unlock; a mistake of `map` or of one user's data is `failed` (console message, notice, nothing deleted), so the page still starts. docs/site/porting.md is the guide.
 - **Stable attributes.** Every button, input, select, textarea and summary inside `.wds-root` carries `data-wds="<name>"`, every
-  dialog `data-wds-view="<view>"` (updated on every view switch), toasts `data-wds-toast="<key>"`. The names are listed in the header
+  dialog `data-wds-view="<view>"` (set when the view is rendered, updated on every switch; `aria-busy` while it waits: view and no `aria-busy` = ready), toasts `data-wds-toast="<key>"`. The names are listed in the header
   of `wds-ui.js`; a unit test walks every view and fails on a control without a name. Tests and wds-verify click these, so they work
   in any locale. integration.md (section 12, "Driving the library's dialogs") lists every view with its controls (a test compares the table with
   the header of `wds-ui.js`), and `tools/lib/drive-library.mjs` (`createVault`, `unlock`, `confirmSheet` and the single steps) drives them for
-  wds-verify and for a developer's own Playwright tests; it reads a join code only from `WDS_JOIN_CODE`, never prints it, and no error contains it.
+  wds-verify and for a developer's own Playwright tests; it reads a join code only from a file that the person creates in their own terminal (`~/.wds/join-code`, or the file named by `WDS_JOIN_CODE_FILE`; it must exist, be a regular file, not be readable by others and lie outside the repository), never prints it, and no error contains it.
 - **Sandbox** (§17): when the scope document has a `sandbox` field, every dialog title is prefixed ("Sandbox: " / "Testumgebung: "),
   every dialog shows a banner and, after unlocking, a fixed bar at the top of the page says that the data is deleted tonight (both with
   inline `!important` styles; while the bar is shown the library adds its height to the inline `padding-top` of `<html>` and restores
@@ -684,7 +684,9 @@ bundler) into `client/dist/wds-<version>.js` (version from `client/package.json`
 (protocol, vectors, UI helpers, build) and the Playwright UI tests (`client/test/ui.spec.mjs`, Chromium only, `file://` page,
 in-memory fake server over HTTP): create,
 passphrase rules, unlock, key file, records, conflict, autosave, share/redeem/revoke, export, offline, history, recovery notices,
-German texts, accessibility, SRI.
+German texts, accessibility, SRI, the top layer (`ui-layers.spec.mjs`: library dialogs above app modals, also a reused app `<dialog>`, toasts inside
+the topmost modal) and `store.migrateLocal` (`migrate.spec.mjs`, 32 cases served over `http://127.0.0.1` in Chromium, Firefox and WebKit; WebKit runs
+in a persistent profile because an ephemeral context aborts Blob writes to IndexedDB; `migrate-unit.test.mjs` for the pure parts).
 
 **Integration tests** (`scripts/test-integration.sh`, `client/test/integration.spec.mjs`, config `client/playwright.integration.config.mjs`).
 They start the REAL server (project venv, temporary database, scope made with the dev CLI, escrow keys generated for the run) and
@@ -764,14 +766,24 @@ The alternative that was rejected: last-writer-wins with timestamps and tombston
      "Migration: old data visible" (only screens after reload and unlock count; nothing written fails), "Migration: old data only encrypted"
      (seed values only in a JSON backup download or in an old place that did not grow), "Migration: old data deleted / kept in the sandbox"
      (mock: everything gone, leftovers fail when the migration visibly ran, `seed.keep` names what may stay; sandbox: kept). `--migration-delete`
-     sets `window.__WDS_MIGRATION_TEST__` and `navigator.webdriver` so that the recipe deletes in the sandbox too (the recipe checks both); an
+     sets `window.__WDS_MIGRATION_TEST__` (its browser is automated, so `navigator.webdriver` is true) so that `store.migrateLocal` deletes in the sandbox too (the library checks both); the tool answers the library's migration dialogs itself (`migrate-backup`, `migrate-yes`, the downloads of `migrate-large`, `migrate-differs-later`); a developer's own automated test may set the global in its own browser; an
      app that assigns the global fails statically, a page that has it set without the flag fails dynamically. The sandbox run cannot prove that
      visible values came from the vault (the old data stays there); the mock or `--migration-delete` run is that proof;
    - "Library version released" (version not frozen) is information, not a warning; "Privacy sentence" (info) says when neither the page nor
      the README next to it has the official sentence;
    - scope check: the app's own scope document is fetched; breach check on without `https://api.pwnedpasswords.com` in
      `connect-src` fails; the report prints enrollment, breach check and limits;
-   - output: Markdown report for the app's README, ending with a "Not tested" section.
+   - robust dialog handling (round F, after the flaky "dialog handling failed" warning of the second clean-room trial): a library dialog without a
+     view, with `aria-busy` or in `loading`/`progress` is "not ready" (wait), not unexpected; fields are filled through `fillWhenReady` (waits
+     for an editable field, retries, checks the value), an error caused by the page changing under the call is retried, and a note keeps
+     several lines of Playwright's call log (`briefError`). A click that a library notice covers is retried after dismissing the notice and
+     noted (the notice sits bottom right above dialogs); another cover is named in the error. "Typed values neither shown nor written" names
+     the fields (at most five). The static "Deleting local data" check looks at the nearest enclosing named function (an anonymous callback
+     inside a guarded function counts as guarded), masks comments, follows aliases and also catches `objectStore().clear()`;
+     storage calls next to `store.migrateLocal` and a JSON download outside the library's dialog are findings. When the migration question
+     names rows that `map` leaves out (`h.skip`), the tool ticks `migrate-skip-ack` and warns (`migration-skipped-rows`);
+   - output: Markdown report for the app's README, ending with a "Not tested" section (which now says to close own modal dialogs in `onLock`
+     and that Firefox and Safari find old data only under the same file name in the same folder).
 
    Implementation (`tools/wds-verify.mjs`, `tools/lib/`): the "mock" is the real server (`.venv` or `WDS_PYTHON`; without Python 3.13
    and its packages the tool stops with a message, `--static-only` skips the dynamic part). The mock gets fresh escrow keys, so
@@ -789,7 +801,8 @@ The alternative that was rejected: last-writer-wins with timestamps and tombston
    Targets: `--target auto|mock|sandbox` (auto: mock when Python is there, else the sandbox if reachable, else static checks only);
    `--sandbox-copy <out.html>` writes a copy whose `WDS.connect` scope is the sandbox, for trying the app by hand. Static checks also fail
    the sandbox ID in an app file and CSS that hides library elements, and warn about deleting old local data without a sandbox guard.
-   Further options: `--migration-delete` (needs a `seed`; no effect on the mock, which deletes anyway; the report names it in its first lines), `--strict` (warnings fail), `--out`, `--json`, `--script-tag` (prints the current tag and CSP).
+   Further options: `--migration-delete` (needs a `seed`; no effect on the mock, which deletes anyway; the report names it in its first lines), `--strict` (warnings fail), `--out`, `--json`, `--script-tag` (prints the complete tag with its `onerror` handler, the text of `docs.py`, and the CSP meta tag; with `--hashes client/dist/hashes.json` the tag of an unreleased build), `--scope-check off` (no scope lookup, for a scope that is not registered yet). A clone whose library is newer than the service is reported as "clone is newer than the service", not as outdated.
+   `tools/lib/drive-library.mjs` is the API for a developer's own Playwright tests too: `createVault`, `redeemInvite`, `unlock`, `deleteVault`, `waitForView`, `confirmSheet`, `answerMigration`, `enableMigrationDelete`, `newPassphrase`, `readJoinCode` (the join-code file of §8.5).
    Exit codes: 0 passed, 1 a check failed, 2 the tool could not run, 3 the sandbox is unavailable (not an app finding). Tests: `scripts/test-tools.sh` with a correct and a
    deliberately leaky example app (`tools/test-apps/good`, `bad`).
 
@@ -802,10 +815,9 @@ per-response CSP nonce). Built in `server/wds_server/dashboard.py` (routes and p
 `access.py` (sessions, staff rule, roles), `scopes.py` (scope logic shared with the operator API), `ui.py` and `texts.py`
 (layout, bilingual texts), `prompt.py` (the prompt for Claude and the CLAUDE.md / AGENTS.md section), `privacy.py`.
 
-- **Staff (scope admins):** "My scopes" (name, scope ID, status, vaults, size) and the form to create a scope (name,
-  optional slug, description, contact e-mail (required), enrollment mode, HIBP check on/off). Per scope: overview, the
-  script tag, a ready-made prompt for Claude and a section for the app's own CLAUDE.md and AGENTS.md (each copyable; see below), settings (name, description, contact, HIBP), enrollment
-  mode and join code (rotate), limits within the ceilings (byte limits entered in MiB, empty = default), co-admins (up
+- **Staff (scope admins):** "My apps" (name, app ID, status, vaults, size) and the form to create an app. The dashboard has a **default view for lay staff** and an **expert view** (round F; the home page explains what an app and a vault are, the terms are explained where they first appear, and a link into the folded expert area opens it): the create form asks for the name, the contact e-mail (prefilled with the person's own) and an optional description, and says which standard variant it applies (vaults only with the join code, breach check on, the default limits, a short name made from the name); the slug, enrollment mode and breach check sit in a folded "More settings (for experts)". The page of an app shows "Next steps" (copy the text for Claude; hand the join code to the users; what the users need to know), the usage (vaults, storage), a help box and the app ID, then a folded `<details>` with the expert settings; "Always show the expert settings" is remembered per browser in the cookie `wds_expert` (no profile on the server); the operator sees the expert area open. The glossary is not a separate page: every term of the lay view is explained in plain words where it first appears (`texts.py`): app (a small program in the browser that stores its data encrypted on the faculty's server), vault (one person's encrypted storage), app ID (not secret, Claude writes it into the app), join code (handed on by the admin, never part of the app), passphrase, recovery code and access sheet, breach check (Pwned Passwords in the USA; receives the IP address and part of a checksum, never the passphrase), checksum, the operator ("der Betrieb", the team that runs the datastore), versions (instead of "Fassungen"). The lay view gives no terminal instructions (one sentence: Claude may ask for help with an optional test and explains every step; never write the code into the conversation); the help box says which documents are written for Claude (English) and links the guide for users; a test vault is deleted by Claude, the person deletes only the ID Claude names. Sizes are in MB (§10.1). Per scope (expert area): facts, the
+  script tag, the CLAUDE.md / AGENTS.md section (each copyable; the prompt is in the next steps), settings (name, description, contact, HIBP), enrollment
+  mode and join code (rotate), limits within the ceilings (byte limits entered in MB, 1 MB = 1,048,576 bytes, empty = default), co-admins (up
   to 20, Uni ID or e-mail address; the creator cannot be removed), vaults (ID, created, last write, size, members,
   blobs still to re-encrypt, state; delete vault, no contents), suspend and resume, the last audit entries and the full
   audit page, and "delete scope" after typing the scope ID.
@@ -820,7 +832,7 @@ per-response CSP nonce). Built in `server/wds_server/dashboard.py` (routes and p
 service is and the official privacy sentence to repeat word for word, in English and German ("Data is end-to-end encrypted; the faculty holds a recovery key for emergencies." / "Die Daten sind Ende-zu-Ende-verschlüsselt; die Fakultät verwahrt für Notfälle einen Wiederherstellungsschlüssel."; `PRIVACY_EN` / `PRIVACY_DE` in `prompt.py`; llms.txt, integration.md and users.*.md carry the same words, `test_docs.py` checks; a text in a third language uses the English one, a longer text may follow); the scope's settings with an "as of" date (scope ID, enrollment with the
 warning never to put a join code into the app, breach check mapped to "keep / remove `https://api.pwnedpasswords.com` in
 `connect-src`", limits); the pointer to `llms.txt`; the exact script tag; the `WDS.connect` line and the forbidden patterns; a porting
-line ("If the app already exists, follow 'Porting an existing app'"); for a test vault in the real scope (the deletion path of a migration) how to get the join code (ask the person when the step is reached and say what it is for; pass it only through the environment variable `WDS_JOIN_CODE`, which `tools/lib/drive-library.mjs` reads; never into a file or a command line; tell the person when the test ran so that they delete the test vault in the dashboard; the prompt does not name the dashboard, the hint texts next to the prompt and the join code tell the staff member that Claude may ask) or, for an open or closed scope, what to do instead; when the server has a sandbox, how to test against it and never to
+line ("If the app already exists, read docs/porting.md; data the old version left in the browser is taken over with `store.migrateLocal`"); the breach-check sentence when the scope has the check on; for a test vault in the real scope (the deletion path of a migration) how to get the join code (ask the person when the step is reached and say what it is for; the person puts it into the file `~/.wds/join-code` themselves, in their own terminal, with the commands that porting.md gives; the agent never reads, prints or copies the file and never asks for the code in the chat; the real-scope test is optional; the agent deletes its test vault itself and tells the person which one it was) or, for an open or closed scope, what to do instead; when the server has a sandbox, how to test against it and never to
 write its ID into the app; running wds-verify from the public repository; and the instruction to add the **CLAUDE.md / AGENTS.md
 section** (English, shown separately too) to the app's folder, keeping existing content. That section keeps the rules in the app's
 repository for later sessions: the scope, read `llms.txt` before changing storage, keep the tag, no own storage or crypto, never the
@@ -870,6 +882,7 @@ Built as follows:
 | History versions | 10 | 50 | ≤ ceiling |
 | Bytes per scope | 2 GB | 10 GB | ≤ ceiling |
 
+- Sizes: 1 MB = 1,048,576 bytes (2^20), 1 GB = 2^30 bytes, in the documents, the dashboard, the prompt and wds-verify; the configuration and the API carry exact bytes (`max_value_bytes` 10485760). The Argon2id memory (64 MiB) is a cryptographic parameter and keeps its binary name.
 - Defaults and ceilings come from `[limits.defaults]` and `[limits.ceilings]` in the configuration; scope admins set
   values within the ceilings on the dashboard, the operator API (`PATCH /admin/scopes`) can do the same.
 - Data and local backups live on separate virtual disks (50 GB data disk, 50 GB backup disk, §12). The sum of all scopes'
@@ -961,14 +974,10 @@ filled in at request time). Their public source is the repository https://github
   records, `autosave` for editors); conflicts; members and sharing; export; errors; forbidden patterns (own crypto, own
   `fetch` to the datastore, CDN scripts, app data in browser storage, custom passphrase dialogs); running `wds-verify` and
   putting the report into the README and writing `wds-verify.json`; what to tell users; a complete minimal example app; deployment of the app;
-  "Porting an existing app" (inventory, mapping, an import of the old export file that keeps ids and rewrites references, a tested one-time
-  migration of old IndexedDB/localStorage data that the owner runs once and that deletes the old data only after a verified copy, never in the
-  sandbox unless wds-verify sets its test global; round E added Blobs and key-value stores, a fingerprint over the bytes of every Blob,
-  settings that are applied exactly once (`migratedSettings()`, `settingsDone()`, `fillGaps` before the app writes defaults), the tag per
-  browser with a decision table for `tagged: false`, a strict `toNewRecords`, ids with `-` and `%`, the same-origin condition, and the test
-  of Step 6 with a `seed` block and a test vault in the developer's own scope); collections, two devices, files, conflicts in code,
-  lock and unlock again; the sandbox; the table of the library's dialogs and `drive-library.mjs` for own end-to-end tests. Downloads the person asks for and forms with `preventDefault` under `form-action 'none'` are
+a short section 16 that points to porting.md; collections, two devices, files, conflicts in code,
+  lock and unlock again, the library's dialogs above modal dialogs of the app; the sandbox; the table of the library's dialogs and `drive-library.mjs` for own end-to-end tests. Downloads the person asks for and forms with `preventDefault` under `form-action 'none'` are
   allowed and say so. The code recipes run in three engines against the real server (`examples/docs-recipes.spec.mjs`).
+- `/datastore/docs/porting.md` (HTML at `/datastore/docs/porting`; round F moved section 16 of integration.md here and rewrote it) – porting an existing app: inventory and mapping, replacing the storage calls, an import of the old export file that keeps ids and rewrites references, `store.migrateLocal` (options, `map(old, h)`, `from`, ids and the tag, two complete examples: references in both directions with files and localStorage settings, and a localStorage JSON with notes, files and a key-value store; the result and what the app does with it; what the person sees; the safety rules), the same-origin condition, the tests (wds-verify `seed` in its exact order, `--migration-delete`, the test global in an own automated test, the join code file for tests, the test vault, `redeemInvite`), and the checklist for apps with forms and modal dialogs (own dialogs closed in `onLock`, typed values kept, no double save, `preventDefault`, restored filters, ids in selectors, a file in a new tab inside the click).
 - `/datastore/docs/users.de.md` and `users.en.md` – for app users: passphrase, access ID, key file and recovery code, new
   device, sharing, conflicts, what the faculty can see (escrow), recovery, export.
 - `/datastore/docs/operator.md` – places, escrow key handling, recovery, quotas, read-only mode, deploy and releasing a

@@ -242,11 +242,11 @@ class Scopes(DashCase):
                       'crossorigin=&quot;anonymous&quot;&gt;&lt;/script&gt;', html)
         self.assertIn("https://wiai.uni-bamberg.de/datastore/llms.txt", html)
         prompt = re.search(r'<pre id="prompt">(.*?)</pre>', html, re.S).group(1)
-        self.assertIn(f"- Scope ID: {scope}", prompt)
+        self.assertIn(f"- App ID (scope): {scope}", prompt)
         self.assertIn("wds-verify", prompt)
         de = self.browser(lang_header="de")
         self.login(de, "alice", "alice@uni-bamberg.de")
-        self.assertIn(f"- Scope-ID: {scope}", de.get(f"/scopes/{scope}").text)
+        self.assertIn(f"- App-ID (Scope): {scope}", de.get(f"/scopes/{scope}").text)
 
     def test_missing_hashes_file(self):
         import os
@@ -255,7 +255,7 @@ class Scopes(DashCase):
         scope = self.make_scope(a)
         r = a.get(f"/scopes/{scope}")
         self.assertEqual(r.status, 200)
-        self.assertIn("hashes are not available", r.text)
+        self.assertIn("checksums are not available", r.text)
 
     def test_names_are_escaped(self):
         a = self.staff()
@@ -301,10 +301,10 @@ class Scopes(DashCase):
         a = self.staff()
         scope = self.make_scope(a)
         html = a.get(f"/scopes/{scope}").text
-        for needle in ("10,0 MiB", "25,0 MiB", "200,0 MiB", "1,0 GiB", "2,0 GiB", "10,0 GiB", "50", "500"):  # defaults and ceilings are shown
+        for needle in ("10,0 MB", "25,0 MB", "200,0 MB", "1,0 GB", "2,0 GB", "10,0 GB", "50", "500"):  # defaults and ceilings are shown
             self.assertIn(needle, html)                      # numbers as a German reader writes them
         en = a.get(f"/scopes/{scope}?lang=en").text
-        for needle in ("10.0 MiB", "25.0 MiB", "1.0 GiB"):
+        for needle in ("10.0 MB", "25.0 MB", "1.0 GB"):
             self.assertIn(needle, en)
         r = a.post(f"/scopes/{scope}/limits", {"max_value_bytes": "5", "vault_bytes": "100", "scope_bytes": "1000", "max_vaults": "20",
                                                "history_versions": "7"})
@@ -405,7 +405,7 @@ class Scopes(DashCase):
         self.assertIn(w.vault, html)
         self.assertNotIn(other.vault, html)
         row = re.search(rf"<code>{v.vault}</code>(.*?)</tr>", html, re.S).group(1)
-        self.assertIn("KiB", row)  # bytes (record plus roster)
+        self.assertIn("KB", row)  # bytes (record plus roster)
         self.assertRegex(re.sub(r"<[^>]+>", " ", row), r"\b1\b")  # one member (the founder)
         # re-encryption pending: record blobs of an older epoch
         self.env.sql("SELECT 1")
@@ -535,7 +535,7 @@ class Operator(DashCase):
         self.assertIn(scope, html)
         self.assertIn("alice", html)
         # global limits from the configuration, read-only (no form for them)
-        self.assertIn("10,0 MiB", html)
+        self.assertIn("10,0 MB", html)
         self.assertNotIn('name="max_vaults"', html)
         # disk and read-only state
         self.assertIn("10,0 %", html)

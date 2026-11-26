@@ -71,6 +71,12 @@ input[aria-invalid=true]{border-color:var(--danger);border-width:2px}
 .badge{display:inline-block;padding:0 .5rem;border:1px solid var(--line);border-radius:1rem;font-size:.85rem;background:var(--soft)}
 .badge.warn{border-color:var(--warn);color:var(--warn)}.badge.bad{border-color:var(--danger);color:var(--danger)}.badge.good{border-color:var(--ok);color:var(--ok)}
 details{margin:.8rem 0}summary{cursor:pointer;font-weight:600}
+details.expert{border:1px solid var(--line);border-radius:8px;padding:.2rem .9rem .6rem;margin:2rem 0 1rem}
+details.expert>summary{font-size:1.15rem;padding:.5rem 0}details.expert h3{border-top:1px solid var(--line);padding-top:.8rem;margin-top:1.8rem;font-size:1.15rem}
+details.expert h4{font-size:1rem;margin:1.1rem 0 .3rem}
+ol.steps{padding-left:1.4rem}ol.steps>li{margin:0 0 1.2rem;padding-left:.3rem}ol.steps>li::marker{font-weight:700;color:var(--accent)}
+.step-title{font-weight:600;margin:0 0 .3rem}
+.scrollbox{max-height:15rem;overflow:auto;border-radius:6px}.scrollbox pre{margin:0}
 dl.facts{display:grid;grid-template-columns:max-content 1fr;gap:.2rem 1rem}dl.facts dt{font-weight:600}dl.facts dd{margin:0}
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(14rem,1fr));gap:.8rem}
 .card{border:1px solid var(--line);border-radius:8px;padding:.7rem .9rem;background:var(--soft)}
@@ -95,6 +101,9 @@ var el=document.getElementById(b.getAttribute('data-copy'));if(!el){return;}
 function fallback(){var r=document.createRange();r.selectNodeContents(el);var s=window.getSelection();s.removeAllRanges();s.addRange(r);
 try{if(document.execCommand('copy')){wdsDone(b);}}catch(e){}}
 if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(el.textContent.trim()).then(function(){wdsDone(b);},fallback);}else{fallback();}});});
+function wdsOpen(){var h=location.hash,el=null;if(h.length<2){return;}try{el=document.getElementById(decodeURIComponent(h.slice(1)));}catch(e){return;}if(!el){return;}
+var d=el.closest('details'),ch=false;while(d){if(!d.open){d.open=true;ch=true;}d=d.parentElement?d.parentElement.closest('details'):null;}if(ch){el.scrollIntoView();}}
+wdsOpen();window.addEventListener('hashchange',wdsOpen);
 document.querySelectorAll('form[data-confirm]').forEach(function(f){f.addEventListener('submit',function(e){if(!window.confirm(f.getAttribute('data-confirm'))){e.preventDefault();}});});
 """
 
@@ -155,9 +164,10 @@ _EN_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oc
 
 
 def fmt_bytes(n, lang: str = "en") -> str:
+    """Sizes as people read them: B, KB, MB, GB, TB, where 1 KB = 1024 bytes and 1 MB = 1,048,576 bytes (the docs say so once)."""
     n = float(n or 0)
-    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
-        if n < 1024 or unit == "TiB":
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024 or unit == "TB":
             return f"{int(n)} B" if unit == "B" else f"{fmt_number(n, lang)} {unit}"
         n /= 1024
     return str(n)

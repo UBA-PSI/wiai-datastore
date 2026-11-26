@@ -28,5 +28,21 @@
     {"click": "#tab-projects"},
     {"click": "#tab-time"},
     {"click": "#tab-notes"}
-  ]
+  ],
+  "seed": {
+    "page": "old/index.html",
+    "steps": [
+      {"fill": ["#project-name", "Altes Projekt {canary}"]},
+      {"click": "#project-add"},
+      {"fill": ["#entry-desc", "Alter Eintrag {canary}"]},
+      {"click": "#entry-add"},
+      {"fill": ["#note-title", "Alte Notiz {canary}"]},
+      {"fill": ["#note-text", "Alter Notiztext {canary}"]},
+      {"upload": ["#note-file"]},
+      {"click": "#note-add"},
+      {"fill": ["#timer-desc", "Alter Timer {canary}"]},
+      {"click": "#timer-start"},
+      {"wait": 800}
+    ]
+  }
 }

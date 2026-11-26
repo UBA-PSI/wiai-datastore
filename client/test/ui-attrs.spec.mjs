@@ -370,3 +370,32 @@ test('sandbox: a vault that was swept after the dialog opened (unknown vault at 
   await expect(dialog(p2).locator('h2')).toHaveText('Sandbox: Create your vault');
   await expect(dialog(p2).getByText('The sandbox was emptied on')).toBeVisible();
 });
+
+test('data-wds-view is never empty or missing while a dialog is visible; aria-busy marks loading, progress and a submit in flight', async ({ browser }) => {
+  const page = await openApp(await browser.newContext(), w);
+  await mockHibp(page);
+  await page.evaluate(() => {
+    window.seen = [];
+    new MutationObserver(() => { document.querySelectorAll('dialog.wds-dialog').forEach((d) => window.seen.push([d.getAttribute('data-wds-view'), d.getAttribute('aria-busy')])); })
+      .observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-wds-view', 'aria-busy'] });
+  });
+  await page.evaluate(() => { window.unlockP = store.unlock(); });
+  await expect(dialog(page)).toHaveAttribute('data-wds-view', 'unlock');
+  await expect(dialog(page)).not.toHaveAttribute('aria-busy', /.*/);       // a view with its controls is ready
+  await byWds(page, 'to-create').click();
+  await byWds(page, 'passphrase').fill(PASS); await byWds(page, 'passphrase-repeat').fill(PASS);
+  w.world.server.delayMs = 400;                                            // the vault creation request takes a moment
+  await byWds(page, 'create-submit').click();
+  await expect(dialog(page)).toHaveAttribute('aria-busy', 'true');         // Argon2id and the request: not ready
+  await expect(dialog(page)).toHaveAttribute('data-wds-view', 'create');
+  await expect(byWds(page, 'access-id')).toBeVisible();
+  w.world.server.delayMs = 0;
+  await expect(dialog(page)).toHaveAttribute('data-wds-view', 'sheet');
+  await expect(dialog(page)).not.toHaveAttribute('aria-busy', /.*/);
+  await byWds(page, 'sheet-confirm').check(); await byWds(page, 'sheet-continue').click();
+  await page.evaluate(() => window.unlockP);
+  const seen = await page.evaluate(() => window.seen);
+  expect(seen.length).toBeGreaterThan(2);
+  for (const [view] of seen) expect(view).toBeTruthy();
+  expect(seen.some(([view, busy]) => view === 'loading' && busy === 'true')).toBe(true);
+});

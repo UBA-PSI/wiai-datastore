@@ -551,3 +551,136 @@ test('static-only runs from a copy of tools/ alone (no client directory, no node
     assert.equal(j.findings.find((f) => f.id === 'scope-hibp').level, 'pass');
   } finally { await svc.close(); }
 });
+
+// ---- round F: named functions, store.migrateLocal, hand-made migrations, app modals, the breach-check sentence ----
+import { usesMigrateLocal, handMigration, usesShowModal, hasBreachNote, mentionsBreachService, BREACH_NOTE } from '../lib/static-checks.mjs';
+
+test('static: the guard of a deletion is looked for in the nearest enclosing NAMED function, not in an anonymous callback', () => {
+  const del = (code) => level(check(withScript(code)), 'local-delete');
+  // the deletion sits in a forEach callback, the guard in the function around it (the Literaturliste case): no warning
+  assert.equal(del("function removeOldData(st) { if (store.status().sandbox) return; rows.forEach(function (r) { localStorage.removeItem(r); }); }"), undefined);
+  assert.equal(del("function removeOldData(st) { if (keepInSandbox(st)) return; rows.forEach((r) => { localStorage.removeItem(r); }); }"), undefined);
+  assert.equal(del("var removeOld = function () { var sandbox = store.status().sandbox; if (sandbox) return; [1].forEach(k => { localStorage.removeItem(k); }); };"), undefined);
+  assert.equal(del("const removeOld = async () => { if (store.status().sandbox) return; await Promise.all(keys.map(async (k) => { localStorage.removeItem(k); })); };"), undefined);
+  assert.equal(del("const o = { removeOld(st) { if (st.sandbox) return; rows.map((r) => { localStorage.removeItem(r); }); } };"), undefined);
+  // no guard in the named function (a guard in another function does not count): warn
+  assert.equal(del("function removeOldData() { rows.forEach(function (r) { localStorage.removeItem(r); }); }"), 'warn');
+  assert.equal(del("function other() { return 'sandbox'; }\nfunction removeOldData() { rows.forEach((r) => { localStorage.removeItem(r); }); }"), 'warn');
+  assert.equal(del("const o = { a() { return sandbox; }, removeOld() { rows.map((r) => { localStorage.removeItem(r); }); } };"), 'warn');
+  assert.equal(del("o.removeOld = function () { items.forEach(function (r) { localStorage.removeItem(r); }); };"), 'warn');
+  // only anonymous functions around the call (an IIFE with a callback): the outermost one is the unit, as the whole script would be
+  assert.equal(del("(function () { [1].forEach(function (k) { localStorage.removeItem(k); }); })();"), 'warn');
+  assert.equal(del("(function () { var sandbox = store.status().sandbox; [1].forEach(function (k) { if (!sandbox) localStorage.removeItem(k); }); })();"), undefined);
+});
+
+test('static: store.migrateLocal is recognised; code that reads or deletes browser storage by hand and never calls it is a hand-made migration', () => {
+  const MIG = "store.migrateLocal({ id: 'literatur', indexedDB: { name: 'literatur', stores: ['refs'] }, map: function (old, h) { return { items: [] }; } });";
+  const r = check(withScript(MIG));
+  assert.equal(level(r, 'migrate-local'), 'info');
+  assert.equal(level(r, 'local-delete'), undefined);
+  assert.equal(level(r, 'hand-migration'), undefined);
+  assert.deepEqual(r.findings.filter((f) => f.level === 'fail' || f.level === 'warn'), []);
+  assert.ok(usesMigrateLocal(MIG));
+  assert.ok(!usesMigrateLocal("var s = 'store.migrateLocal(x)'; // store.migrateLocal(y)".replace('// store.migrateLocal(y)', '')));
+  // by hand: reading is enough
+  for (const [code, name] of [["function readOld() { return indexedDB.open('old'); }", 'indexedDB.open'], ["var s = localStorage.getItem('old');", 'localStorage.getItem'],
+    ["function drop() { if (!store.status().sandbox) localStorage.removeItem('old'); }", 'localStorage.removeItem']]) {
+    const x = check(withScript(code));
+    assert.equal(level(x, 'hand-migration'), 'warn', code);
+    assert.match(x.findings.find((f) => f.id === 'hand-migration').detail, new RegExp(name.replace('.', '\\.')));
+    assert.match(x.findings.find((f) => f.id === 'hand-migration').detail, /store\.migrateLocal \(porting\.md\)/);
+    assert.deepEqual(handMigration(code), [name]);
+  }
+  // with migrateLocal in the code: keys and databases that its options name are not reported, everything else is
+  assert.equal(level(check(withScript(MIG + "\nvar s = localStorage.getItem('literatur');")), 'hand-storage'), undefined);
+  const other = check(withScript(MIG + "\nvar s = localStorage.getItem('old');"));
+  assert.equal(level(other, 'hand-storage'), 'warn');
+  assert.equal(level(other, 'hand-migration'), undefined);
+  assert.match(other.findings.find((f) => f.id === 'hand-storage').detail, /localStorage\.getItem/);
+  // the options may be a variable
+  assert.equal(level(check(withScript("const M = { id: 'a', localStorage: { keys: ['zn.data'] }, map() {} };\nstore.migrateLocal(M);\nvar s = localStorage.getItem('zn.data');")), 'hand-storage'), undefined);
+  // comments do not count: a commented call does not hide the hand-made migration
+  const commented = check(withScript("// later: store.migrateLocal(opts)\nfunction readOld() { return indexedDB.open('old'); }\nfunction drop() { localStorage.removeItem('old'); }"));
+  assert.equal(level(commented, 'hand-migration'), 'warn');
+  assert.equal(level(commented, 'migrate-local'), undefined);
+  assert.ok(!usesMigrateLocal('/* store.migrateLocal(x) */ var a = 1;'));
+  // aliases are seen: a variable that holds localStorage, window["indexedDB"], objectStore().clear()
+  assert.deepEqual(handMigration("var ls = window.localStorage; ls.removeItem('k');"), ['localStorage']);
+  assert.deepEqual(handMigration("var idb = window['indexedDB']; idb.open('x');"), ['indexedDB']);
+  assert.deepEqual(handMigration("db.transaction('s','readwrite').objectStore('s').clear();"), ['objectStore()']);
+  assert.equal(level(check(withScript("function f(db) { db.transaction('s','readwrite').objectStore('s').clear(); }")), 'local-delete'), 'warn');
+  // the sandbox guard is a real expression: the word in a comment or a string is no guard
+  const guard = (code) => level(check(withScript(code)), 'local-delete');
+  assert.equal(guard("function drop() { // sandbox\n localStorage.removeItem('k'); }"), 'warn');
+  assert.equal(guard("function drop() { var s = 'sandbox'; localStorage.removeItem('k'); }"), 'warn');
+  assert.equal(guard("function drop() { if (store.status().sandbox) return; localStorage.removeItem('k'); }"), undefined);
+  // an unguarded deletion next to migrateLocal still warns, and says that the library deletes itself
+  const both = check(withScript(MIG + "\nfunction drop() { localStorage.removeItem('old'); }"));
+  assert.equal(level(both, 'local-delete'), 'warn');
+  assert.match(both.findings.find((f) => f.id === 'local-delete').detail, /store\.migrateLocal, which deletes the old data itself/);
+  // strings and comments do not count; the good example has none of these
+  assert.deepEqual(handMigration("var s = 'indexedDB.open(x)'; var t = \"localStorage.getItem('k')\";"), []);
+  for (const id of ['hand-migration', 'migrate-local', 'app-modals']) assert.equal(level(check(good()), id), undefined, id);
+  assert.match(check(withScript("function drop() { localStorage.removeItem('old'); }")).findings.find((f) => f.id === 'local-delete').detail, /use store\.migrateLocal \(porting\.md\)/);
+});
+
+test('static: an app that opens modal dialogs with showModal() gets the information about library dialogs above them', () => {
+  const r = check(withScript("document.getElementById('d').showModal();"));
+  assert.equal(level(r, 'app-modals'), 'info');
+  assert.match(r.findings.find((f) => f.id === 'app-modals').detail, /Library dialogs open above your own modal dialogs.*onLock.*while a store call is pending/);
+  assert.equal(level(check(withScript("var s = 'x.showModal()'; // d.showModal()")), 'app-modals'), undefined);
+  assert.ok(usesShowModal('dlg . showModal ( )'));
+});
+
+test('the breach-check sentence: found in the page or the README, or at least the name of the service; an info finding when the scope checks passphrases and nothing says so', async () => {
+  assert.equal(BREACH_NOTE.length, 2);
+  assert.match(BREACH_NOTE[0], /^When you choose a passphrase, your browser checks it against known data breaches with the Pwned Passwords service \(USA\); the service receives your IP address and the first five characters of a checksum of the passphrase, never the passphrase itself\.$/);
+  assert.match(BREACH_NOTE[1], /^Wenn Sie eine Passphrase wählen, prüft Ihr Browser sie beim Dienst Pwned Passwords \(USA\) auf bekannte Datenlecks; der Dienst erhält Ihre IP-Adresse und die ersten fünf Zeichen einer Prüfsumme der Passphrase, nie die Passphrase selbst\.$/);
+  assert.equal(hasBreachNote('<p>' + BREACH_NOTE[0] + '</p>'), true);
+  assert.equal(hasBreachNote('<p>' + BREACH_NOTE[1].replace('ü', '&uuml;').replace('ä', '&auml;') + '</p>'), true);
+  assert.equal(hasBreachNote('<p>nothing</p>', '# App\n\n' + BREACH_NOTE[1]), true);
+  assert.equal(hasBreachNote('<p>Passphrases are checked with the Pwned\n   Passwords service.</p>'), false);   // naming the service is not the sentence
+  assert.equal(hasBreachNote('<p>Passwords are pwned elsewhere.</p>'), false);
+  assert.equal(hasBreachNote('<p>We do not use Pwned Passwords.</p>'), false);
+  assert.equal(mentionsBreachService('<p>We use Pwned Passwords.</p>'), true);
+  assert.equal(hasBreachNote('<p>nothing</p>'), false);
+  const noteOf = async (doc, html, readme) => {
+    const svc = await startStub({ ['/api/v1/scopes/wds-verify-demo-k7m2a9']: doc });
+    try {
+      const dir = writeApp(html);
+      if (readme) writeFileSync(join(dir, 'README.md'), readme);
+      const r = await run('wds-verify.mjs', [dir, '--static-only', '--json'], { env: { WDS_VERIFY_OFFLINE: '', WDS_VERIFY_SERVICE: svc.url, WDS_VERIFY_HASHES_URL: 'off' } });
+      const j = JSON.parse(r.stdout);
+      return { code: r.code, note: j.findings.find((x) => x.id === 'breach-check-note'), settings: j.findings.find((x) => x.id === 'scope-settings') };
+    } finally { await svc.close(); }
+  };
+  const missing = await noteOf(scopeDoc(), good());
+  assert.equal(missing.code, 0);
+  assert.equal(missing.note.level, 'info');
+  assert.ok(missing.note.detail.includes(BREACH_NOTE[0]) && missing.note.detail.includes(BREACH_NOTE[1]));
+  assert.match(missing.settings.detail, /1 MB = 1,048,576 bytes/);
+  assert.equal((await noteOf(scopeDoc(), variant(good(), '<body>', '<body><p>' + BREACH_NOTE[0] + '</p>'))).note, undefined);
+  assert.equal((await noteOf(scopeDoc(), good(), '# App\n\n' + BREACH_NOTE[1] + '\n')).note, undefined);
+  assert.equal((await noteOf(scopeDoc({ hibp: false }), good())).note, undefined);
+});
+
+test('the tool\'s breach-check sentences are the ones of the dashboard prompt (prompt.py HIBP_EN, HIBP_DE)', { skip: !existsSync(join(ROOT, '.venv', 'bin', 'python')) && 'no project venv' }, () => {
+  const r = spawnSync(join(ROOT, '.venv', 'bin', 'python'), ['-c', 'import json; from wds_server.prompt import HIBP_EN, HIBP_DE; print(json.dumps([HIBP_EN, HIBP_DE]), end="")'], { cwd: join(ROOT, 'server'), encoding: 'utf8' });
+  if (r.status !== 0 && /ImportError|cannot import|ModuleNotFound/.test(r.stderr)) return;   // the server side is not there yet (parallel work): nothing to compare
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(BREACH_NOTE, JSON.parse(r.stdout));
+});
+
+test('--script-tag prints the complete tag with the onerror handler of the documentation, the CSP and its place; --scope-check off skips the scope check', async () => {
+  const { ONERROR } = await import('../lib/static-checks.mjs');
+  const py = readFileSync(join(ROOT, 'server', 'wds_server', 'docs.py'), 'utf8');
+  assert.equal(/^ONERROR = "(.*)"$/m.exec(py)[1], ONERROR, 'the tool prints the onerror text of docs.py');
+  const r = await run('wds-verify.mjs', ['--script-tag', '--hashes', join(ROOT, 'client', 'dist', 'hashes.json')]);
+  assert.equal(r.code, 0, r.stderr);
+  assert.ok(r.stdout.includes('onerror="' + ONERROR + '"></script>'), r.stdout);
+  assert.match(r.stdout, /right after <meta charset>, before any script/);
+  const dir = writeApp(good());
+  const off = await run('wds-verify.mjs', [dir, '--static-only', '--json', '--scope-check', 'off'], { env: { WDS_VERIFY_OFFLINE: '' , WDS_VERIFY_HASHES_URL: 'off' } });
+  const j = JSON.parse(off.stdout);
+  assert.match(j.findings.find((f) => f.id === 'scope-settings').detail, /--scope-check off/);
+});

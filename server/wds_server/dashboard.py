@@ -36,6 +36,8 @@ from .validate import valid_scope_id, valid_vault_id
 
 log = logging.getLogger("wds_server")
 
+EXPERT_COOKIE = "wds_expert"  # "1": show the expert settings opened (a display preference of this browser, no personal data)
+EXPERT_COOKIE_AGE = 365 * 86400
 SESSION_COOKIE = "__Host-wds_session"
 NONCE_COOKIE = "__Host-wds_login"
 PRE_COOKIE = "__Host-wds_pre"  # dev login only: binds the form token to the browser
@@ -45,13 +47,14 @@ MIB = 1048576
 
 
 def whole_bytes(text: str) -> str:
-    """"10,0 MiB" -> "10 MiB" (the prompt is read by Claude and by people: no decimal for whole numbers)."""
-    return re.sub(r"[.,]0( [KMGT]iB)$", r"\1", text)
+    """"10,0 MB" -> "10 MB" (the prompt is read by Claude and by people: no decimal for whole numbers)."""
+    return re.sub(r"[.,]0( [KMGT]B)$", r"\1", text)
 
 
 BYTE_LIMITS = ("max_value_bytes", "vault_bytes", "scope_bytes")
 NOTICES = {"created", "saved", "limits", "code_rotated", "admin_added", "admin_removed", "vault_deleted", "suspended",
            "resumed", "blocked", "unblocked", "locked"}
+EXPERT_NOTICES = {"saved", "limits", "admin_added", "admin_removed", "vault_deleted", "suspended"}  # results of forms in the expert area: show it opened
 
 
 class DashError(Exception):
@@ -362,36 +365,48 @@ class Dashboard:
 
         rows = await self.svc.run(work)
         notice = request.query_params.get("notice")
-        parts = [f'<h1>{t("home_title")}</h1>']
+        parts = [f'<h1>{t("home_title")}</h1>', f'<p id="home-intro">{t("home_intro")}</p>']
         if notice in NOTICES:
             parts.append(f'<div class="notice" role="status">{t("notice_" + notice)}</div>')
         body_rows = [tr(f'<a href="{ctx.url("/scopes/" + r["scope_id"])}">{esc(r["name"])}</a>', f'<code>{esc(r["scope_id"])}</code>',
                         self.status_badge(ctx, r), (str(r["nvaults"]), "num"), (ctx.bytes(r["size"]), "num")) for r in rows]
         parts.append(table([(t("col_name"), ""), (t("col_scope_id"), ""), (t("col_status"), ""), (t("col_vaults"), "num"),
                             (t("col_size"), "num")], body_rows, t("no_scopes")))
+        if rows:
+            parts.append(f'<p class="hint" id="home-table-hint">{t("home_table_hint")}</p>')
         if ident.can_create:
-            parts.append(self.create_form(ctx, values or {}, open_=bool(error) or not rows, error=error))
+            parts.append(self.create_form(ctx, values or {}, open_=bool(error) or not rows, error=error, expert=self.expert_pref(request)))
         else:
             parts.append(f'<p class="muted">{t("cannot_create")}</p>')
         return render(ctx, t("home_title"), "".join(parts), status=status)
 
-    def create_form(self, ctx: Ctx, v: dict, open_: bool, error: str | None = None) -> str:
+    def create_form(self, ctx: Ctx, v: dict, open_: bool, error: str | None = None, expert: bool = False) -> str:
+        """The standard variant needs three answers (name, contact, description). Slug, enrollment and breach check sit in a
+        collapsed part; the form submits their defaults when nobody opens it (join code, breach check on)."""
         t = ctx.t
         enroll = v.get("enrollment", "join_code")
         opts = "".join(f'<option value="{e}"{" selected" if e == enroll else ""}>{t("enroll_" + e)}</option>' for e in ENROLLMENTS)
         hibp_checked = "" if v and not v.get("hibp") else " checked"
+        contact = v["contact_email"] if "contact_email" in v else (ctx.ident.email or "")
+        d_ = self.cfg.limit_defaults
+        defaults = t("create_defaults", vault=whole_bytes(ctx.bytes(d_["vault_bytes"])), value=whole_bytes(ctx.bytes(d_["max_value_bytes"])),
+                     versions=d_["history_versions"], vaults=d_["max_vaults"])
+        more_open = expert or bool(error and v and (v.get("slug") or enroll != "join_code" or not v.get("hibp")))
+        more = (f'<details class="expert" id="create-more"{" open" if more_open else ""}><summary>{t("create_more")}</summary>'
+                f'<label for="c_slug">{t("f_slug")}</label><input type="text" id="c_slug" name="slug" maxlength="30" pattern="[a-z][a-z0-9\\-]*" value="{esc(v.get("slug"))}">'
+                f'<p class="hint">{t("f_slug_hint")}</p>'
+                f'<label for="c_enroll">{t("f_enrollment")}</label><select id="c_enroll" name="enrollment">{opts}</select>'
+                f'<p class="hint">{t("f_enrollment_hint")}</p>'
+                f'<p><input type="checkbox" id="c_hibp" name="hibp" value="1"{hibp_checked}> <label class="inline" for="c_hibp">{t("f_hibp")}</label></p>'
+                f'<p class="hint">{t("f_hibp_hint")}</p></details>')
         inner = (
             f'<label for="c_name">{t("f_name")}</label><input type="text" id="c_name" name="name" required maxlength="100" value="{esc(v.get("name"))}">'
             f'<p class="hint">{t("f_name_hint")}</p>'
-            f'<label for="c_slug">{t("f_slug")}</label><input type="text" id="c_slug" name="slug" maxlength="30" pattern="[a-z][a-z0-9\\-]*" value="{esc(v.get("slug"))}">'
-            f'<p class="hint">{t("f_slug_hint")}</p>'
-            f'<label for="c_desc">{t("f_description")}</label><textarea id="c_desc" name="description" maxlength="1000">{esc(v.get("description"))}</textarea>'
-            f'<label for="c_mail">{t("f_contact")}</label><input type="email" id="c_mail" name="contact_email" required maxlength="254" value="{esc(v.get("contact_email"))}">'
+            f'<label for="c_mail">{t("f_contact")}</label><input type="email" id="c_mail" name="contact_email" required maxlength="254" value="{esc(contact)}">'
             f'<p class="hint">{t("f_contact_hint")}</p>'
-            f'<label for="c_enroll">{t("f_enrollment")}</label><select id="c_enroll" name="enrollment">{opts}</select>'
-            f'<p class="hint">{t("f_enrollment_hint")}</p>'
-            f'<p><input type="checkbox" id="c_hibp" name="hibp" value="1"{hibp_checked}> <label class="inline" for="c_hibp">{t("f_hibp")}</label></p>'
-            f'<p class="hint">{t("f_hibp_hint")}</p>'
+            f'<label for="c_desc">{t("f_description")}</label><textarea id="c_desc" name="description" maxlength="1000">{esc(v.get("description"))}</textarea>'
+            f'<p class="hint">{t("f_description_hint")}</p>'
+            f'<p class="box" id="create-defaults">{defaults}</p>' + more
             + (self.form_error("create", error) if error else "") + f'<button type="submit">{t("create_scope")}</button>')
         return (f'<h2>{t("create_title")}</h2><details{" open" if open_ else ""}><summary>{t("create_summary")}</summary>'
                 + ctx.form("/scopes", inner) + "</details>")
@@ -507,6 +522,10 @@ class Dashboard:
             return redirect
         return await self.render_scope(request, ctx, request.path_params["scope"])
 
+    def expert_pref(self, request) -> bool:
+        """The person asked this browser to show the expert settings opened (cookie wds_expert=1)."""
+        return request.cookies.get(EXPERT_COOKIE) == "1"
+
     async def render_scope(self, request, ctx: Ctx, scope_id: str, *, error: str | None = None, status: int = 200,
                            values: dict | None = None, field: str | None = None) -> Response:
         t = ctx.t
@@ -523,7 +542,9 @@ class Dashboard:
         notice = request.query_params.get("notice")
         sid = row["scope_id"]
         is_sb = self.svc.is_sandbox(sid)
-        p = [f'<p><a href="{ctx.url("/")}">&larr; {t("my_scopes")}</a></p><h1>{esc(row["name"])}</h1>']
+        suspended = row["status"] == "suspended"
+        title = esc(row["name"]) + (f' <span class="small">{self.status_badge(ctx, row)}</span>' if suspended else "")
+        p = [f'<p><a href="{ctx.url("/")}">&larr; {t("my_scopes")}</a></p><h1>{title}</h1>']
         if notice in NOTICES:
             p.append(f'<div class="notice" role="status">{t("notice_" + notice)}</div>')
         if top_error:
@@ -533,84 +554,135 @@ class Dashboard:
             can_edit = False
         elif role == "operator":
             p.append(f'<div class="box">{t("operator_view")}</div>')
-        # overview
-        p.append(f'<dl class="facts"><dt>{t("col_scope_id")}</dt><dd><code id="sid">{esc(sid)}</code> '
-                 f'<button type="button" class="secondary small" data-copy="sid" data-done="{t("copied")}">{t("copy")}</button></dd>'
-                 f'<dt>{t("col_status")}</dt><dd>{self.status_badge(ctx, row)}</dd>'
+        # ---- the default view: what a person who is not a developer needs ------------------------------------------------
+        if not is_sb:
+            if suspended:
+                p.append(self.suspend_controls(ctx, row, role))
+            p.append(self.steps_section(ctx, row, tag, can_edit, limits))
+            p.append(self.usage_section(ctx, row, vaults, limits, can_edit))
+            p.append(self.help_section(ctx, row))
+        # ---- the expert area -------------------------------------------------------------------------------------------------
+        x = []
+        to_here = ctx.href("/scopes/" + sid)
+        pref_on = self.expert_pref(request)
+        x.append(ctx.form("/prefs/expert", f'<input type="hidden" name="on" value="{0 if pref_on else 1}">'
+                          f'<input type="hidden" name="next" value="{esc(to_here)}">'
+                          f'<button type="submit" class="secondary small">{t("expert_forget" if pref_on else "expert_remember")}</button> '
+                          f'<span class="hint">{t("expert_remember_hint")}</span>'))
+        x.append(f'<dl class="facts">'
+                 + (f'<dt>{t("col_scope_id")}</dt><dd><code id="sid">{esc(sid)}</code></dd>' if is_sb else "")
+                 + f'<dt>{t("col_status")}</dt><dd>{self.status_badge(ctx, row)}</dd>'
                  f'<dt>{t("f_contact")}</dt><dd>{esc(row["contact_email"]) or "–"}</dd>'
                  f'<dt>{t("created")}</dt><dd>{ctx.time(row["created"])}</dd>'
                  f'<dt>{t("f_enrollment")}</dt><dd>{t("enroll_" + row["enrollment"])}</dd>'
                  f'<dt>{t("f_hibp")}</dt><dd>{t("yes") if row["hibp"] else t("no")}</dd></dl>')
         if row["description"]:
-            p.append(f'<p>{esc(row["description"])}</p>')
+            p_desc = f'<p>{esc(row["description"])}</p>'
+            x.append(p_desc)
         if is_sb:
-            p.append(self.sandbox_facts(ctx))
-        # suspend / resume
-        if not is_sb:
-            p.append(self.suspend_controls(ctx, row, role))
-        # integration
-        if not is_sb:
-            p.append(self.integration_section(ctx, row, tag))
-        # settings
+            x.append(self.sandbox_facts(ctx))
+        else:
+            x.append(self.integration_section(ctx, row, tag))
         if can_edit:
             retyped = field == "settings" and bool(values)
             hibp_checked = " checked" if (values.get("hibp") == "1" if retyped else row["hibp"]) else ""
 
             def shown(key: str) -> str:
                 return esc(values.get(key, "") if retyped else row[key])
-            p.append(f'<h2>{t("sec_settings")}</h2>' + ctx.form(f"/scopes/{sid}/settings",
+            x.append(f'<h3>{t("sec_settings")}</h3>' + ctx.form(f"/scopes/{sid}/settings",
                 f'<label for="s_name">{t("f_name")}</label><input type="text" id="s_name" name="name" required maxlength="100" value="{shown("name")}">'
                 f'<label for="s_desc">{t("f_description")}</label><textarea id="s_desc" name="description" maxlength="1000">{shown("description")}</textarea>'
                 f'<label for="s_mail">{t("f_contact")}</label><input type="email" id="s_mail" name="contact_email" required maxlength="254" value="{shown("contact_email")}">'
+                f'<p class="hint">{t("f_contact_hint")}</p>'
                 f'<p><input type="checkbox" id="s_hibp" name="hibp" value="1"{hibp_checked}> <label class="inline" for="s_hibp">{t("f_hibp")}</label></p>'
                 f'<p class="hint">{t("f_hibp_hint")}</p>{err_for("settings")}<button type="submit">{t("save")}</button>'))
-            # enrollment
             opts = "".join(f'<option value="{e}"{" selected" if e == row["enrollment"] else ""}>{t("enroll_" + e)}</option>' for e in ENROLLMENTS)
-            p.append(f'<h2>{t("sec_enrollment")}</h2><p>{t("f_enrollment_hint")}</p>'
+            x.append(f'<h3 id="enrollment">{t("sec_enrollment")}</h3><p>{t("f_enrollment_hint")}</p>'
                      + ctx.form(f"/scopes/{sid}/enrollment", f'<label for="e_mode">{t("f_enrollment")}</label><select id="e_mode" name="enrollment">{opts}</select>'
                                 f'<button type="submit">{t("save")}</button>'))
-            if row["enrollment"] == "join_code":
-                p.append(f'<h3>{t("join_code")}</h3><p><code id="jc" class="big">{esc(row["join_code"])}</code> '
-                         f'<button type="button" class="secondary small" data-copy="jc" data-done="{t("copied")}">{t("copy")}</button></p>'
-                         f'<p class="hint">{t("join_code_hint")}</p>'
-                         + ctx.form(f"/scopes/{sid}/join-code", f'<button type="submit" class="secondary">{t("rotate_code")}</button>',
-                                    confirm=t("rotate_confirm")))
-            # limits
-            p.append(self.limits_form(ctx, row, limits, own, err_for("limits"), values if field == "limits" else {}))
+            x.append(self.limits_form(ctx, row, limits, own, err_for("limits"), values if field == "limits" else {}))
         else:
-            p.append(f'<h2>{t("sec_limits")}</h2>' + self.limits_table(ctx, limits, own))
-        # admins
+            x.append(f'<h3 id="limits">{t("sec_limits")}</h3>' + self.limits_table(ctx, limits, own))
         if is_sb:  # the configuration file owns the sandbox: no admin list to show or to edit
-            p.append(f'<h2>{t("sec_admins")}</h2><p>{t("sandbox_admins")}</p>')
+            x.append(f'<h3>{t("sec_admins")}</h3><p>{t("sandbox_admins")}</p>')
         else:
-            p.append(self.admins_section(ctx, row, admins, can_edit, err_for("admin"), values.get("admin", "") if field == "admin" else ""))
-        # vaults
-        p.append(self.vaults_section(ctx, row, vaults, can_edit))
-        # audit
-        p.append(f'<h2>{t("sec_audit")}</h2><p class="hint">{t("audit_hint", tz=TZ_NAME)}</p>' + self.audit_table(ctx, audit)
+            x.append(self.admins_section(ctx, row, admins, can_edit, err_for("admin"), values.get("admin", "") if field == "admin" else ""))
+        x.append(self.vaults_section(ctx, row, vaults, can_edit))
+        x.append(f'<h3>{t("sec_audit")}</h3><p class="hint">{t("audit_hint", tz=TZ_NAME)}</p>' + self.audit_table(ctx, audit)
                  + f'<p><a href="{ctx.url("/scopes/" + sid + "/audit")}">{t("audit_all")}</a></p>')
-        # danger zone (the operator may delete a scope, too: it frees the disk budget)
+        if not is_sb and not suspended:
+            x.append(f'<h3>{t("suspend")}</h3>' + self.suspend_controls(ctx, row, role))
+        # the operator may delete a scope, too: it frees the disk budget
         if (can_edit or role == "operator") and not is_sb:
-            p.append(f'<h2>{t("sec_danger")}</h2><p>{t("delete_scope_text", days=DELETED_VAULT_TTL // 86400)}</p>'
+            x.append(f'<h3>{t("sec_danger")}</h3><p>{t("delete_scope_text", days=DELETED_VAULT_TTL // 86400)}</p>'
                      + ctx.form(f"/scopes/{sid}/delete",
                                 f'<label for="d_conf">{t("delete_scope_confirm", scope=sid)}</label>'
                                 f'<input type="text" id="d_conf" name="confirm" autocomplete="off" required{self.invalid_attrs(err_for("danger"))}>'
                                 f'{err_for("danger")}<button type="submit" class="danger">{t("delete_scope")}</button>'))
+        opened = bool(ctx.ident.operator or pref_on or field or notice in EXPERT_NOTICES)
+        p.append(f'<details class="expert" id="expert"{" open" if opened else ""}><summary>{t("expert_title")}</summary>'
+                 f'<p class="hint">{t("expert_hint")}</p>' + "".join(x) + "</details>")
         return render(ctx, row["name"], "".join(p), status=status)
 
-    def integration_section(self, ctx: Ctx, row, tag: str | None) -> str:
+    def steps_section(self, ctx: Ctx, row, tag: str | None, can_edit: bool, limits: dict) -> str:
+        """"Next steps": the text for Claude, the join code (or what the enrollment setting means), the guide for the users."""
         t = ctx.t
-        p: list[str] = []
-        p.append(f'<h2 id="integration">{t("sec_integration")}</h2><p>{t("integration_intro")}</p>')
-        if tag:
-            p.append(f'<h3>{t("script_tag")}</h3><pre id="tag">{esc(tag)}</pre>'
-                     f'<button type="button" class="secondary small" data-copy="tag" data-done="{t("copied")}">{t("copy")}</button>')
+        sid = row["scope_id"]
+        prompt_text, _snippet = self.prompt(ctx, row, tag)
+        copy = lambda target: (f'<button type="button" class="secondary small" data-copy="{target}" data-done="{t("copied")}">{t("copy")}</button>')
+        steps = [f'<li><p class="step-title">{t("step_prompt")}</p><p class="hint">{t("claude_prompt_hint")}</p>'
+                 f'<div class="scrollbox" role="group" tabindex="0" aria-label="{t("claude_prompt")}"><pre id="prompt">{esc(prompt_text)}</pre></div>{copy("prompt")}'
+                 + ("" if tag else f'<div class="error">{t("no_hashes")}</div>') + "</li>"]
+        mode = row["enrollment"]
+        if mode == "join_code":
+            if can_edit:
+                steps.append(f'<li><p class="step-title">{t("step_code")}</p><p><code id="jc" class="big">{esc(row["join_code"])}</code> {copy("jc")}</p>'
+                             f'<p class="hint">{t("join_code_hint")}</p><p class="hint">{t("join_code_test_hint")}</p>'
+                             + ctx.form(f"/scopes/{sid}/join-code", f'<button type="submit" class="secondary small">{t("rotate_code")}</button>',
+                                        confirm=t("rotate_confirm")) + "</li>")
+        elif mode == "open":
+            steps.append(f'<li><p class="step-title">{t("step_code")}</p><p>{t("step_code_open", n=limits["max_vaults"])}</p></li>')
         else:
-            p.append(f'<div class="error">{t("no_hashes")}</div>')
-        prompt_text, snippet = self.prompt(ctx, row, tag)
-        p.append(f'<h3>{t("claude_prompt")}</h3><p class="hint">{t("claude_prompt_hint")}</p><pre id="prompt">{esc(prompt_text)}</pre>'
-                 f'<button type="button" class="secondary small" data-copy="prompt" data-done="{t("copied")}">{t("copy")}</button>'
-                 f'<h3>{t("claude_md_title")}</h3><p class="hint">{t("claude_md_hint")}</p><pre id="claude-md">{esc(snippet)}</pre>'
+            steps.append(f'<li><p class="step-title">{t("step_code")}</p><p>{t("step_code_closed")}</p></li>')
+        users = esc(BASE + "/docs/" + ctx.pick("users.de", "users.en"))
+        steps.append(f'<li><p class="step-title">{t("step_users")}</p><p>{t("step_users_hint")} <a href="{users}">{t("users_doc")}</a></p></li>')
+        return f'<h2 id="next-steps">{t("next_steps")}</h2><ol class="steps">{"".join(steps)}</ol>'
+
+    def usage_section(self, ctx: Ctx, row, vaults, limits: dict, can_edit: bool) -> str:
+        t = ctx.t
+        active = [v for v in vaults if not v["deleted"]]
+        used = sum(v["bytes"] + v["roster_bytes"] for v in active)
+        near = len(active) >= 0.8 * limits["max_vaults"] or used >= 0.8 * limits["scope_bytes"]
+        official = prompt_mod.PRIVACY_EN if ctx.lang == "en" else prompt_mod.PRIVACY_DE
+        out = (f'<h2 id="usage">{t("usage_title")}</h2><p><strong>{t("usage_text", n=len(active), max=limits["max_vaults"], size=ctx.bytes(used), quota=ctx.bytes(limits["scope_bytes"]))}</strong></p>'
+               + (f'<div class="box" role="status">{t("usage_near")}</div>' if near else "")
+               + f'<p>{t("vault_explain")}</p><p>{t("who_reads", official=official, privacy_url=ctx.href("/privacy"))}</p>')
+        if can_edit:
+            out += f'<p class="hint">{t("test_vault_hint")}</p>'
+        return out
+
+    def help_section(self, ctx: Ctx, row) -> str:
+        t = ctx.t
+        contact = self.cfg.help_contact
+        line = ""
+        if contact:
+            shown = esc(contact)
+            link = f'<a href="mailto:{shown}">{shown}</a>' if re.fullmatch(r"[^@\s<>\"]+@[^@\s<>\"]+", contact) else shown
+            line = f'<p>{t("help_contact", contact="@@C@@").replace("@@C@@", link)}</p>'
+        return (f'<h2 id="help">{t("help_title")}</h2><p>{t("help_text", docs=BASE + "/docs/", porting=BASE + "/docs/porting", users=BASE + "/docs/" + ctx.pick("users.de", "users.en"))}</p>{line}'
+                f'<p><strong>{t("col_scope_id")}</strong> <code id="sid">{esc(row["scope_id"])}</code> '
+                f'<button type="button" class="secondary small" data-copy="sid" data-done="{t("copied")}">{t("copy")}</button></p>'
+                f'<p class="hint">{t("sid_hint")}</p>')
+
+    def integration_section(self, ctx: Ctx, row, tag: str | None) -> str:
+        """For developers (inside the expert area): the script tag and the section for CLAUDE.md / AGENTS.md."""
+        t = ctx.t
+        p: list[str] = [f'<h3 id="integration">{t("sec_integration")}</h3><p>{t("integration_intro")}</p>']
+        if tag:
+            p.append(f'<h4>{t("script_tag")}</h4><pre id="tag">{esc(tag)}</pre>'
+                     f'<button type="button" class="secondary small" data-copy="tag" data-done="{t("copied")}">{t("copy")}</button>')
+        _prompt_text, snippet = self.prompt(ctx, row, tag)
+        p.append(f'<h4>{t("claude_md_title")}</h4><p class="hint">{t("claude_md_hint")}</p><pre id="claude-md">{esc(snippet)}</pre>'
                  f'<button type="button" class="secondary small" data-copy="claude-md" data-done="{t("copied")}">{t("copy")}</button>')
         return "".join(p)
 
@@ -665,19 +737,19 @@ class Dashboard:
         typed = typed or {}
         rows = []
         for k in LIMIT_KEYS:
-            unit = "MiB" if k in BYTE_LIMITS else ""
+            unit = "MB" if k in BYTE_LIMITS else ""
             div = MIB if k in BYTE_LIMITS else 1
             ceil = -(-self.cfg.limit_ceilings[k] // div)
             default = self.cfg.limit_defaults[k] // div
             value = esc(typed[k]) if k in typed else (str(own[k] // div) if k in own else "")
             field = (f'<input type="number" id="l_{k}" name="{k}" min="1" max="{ceil}" value="{value}" placeholder="{default}" '
                      f'aria-label="{esc(t("lim_" + k))} {unit}">')
-            rows.append(tr(f'<label class="inline" for="l_{k}">{t("lim_" + k)}</label> <span class="muted">{unit}</span>',
+            rows.append(tr(f'<label class="inline" for="l_{k}">{t("lim_" + k)}</label>',
                            (self.fmt_limit(ctx, k, self.cfg.limit_defaults[k]), "num"), (self.fmt_limit(ctx, k, self.cfg.limit_ceilings[k]), "num"),
-                           (self.fmt_limit(ctx, k, limits[k]), "num"), field))
+                           (self.fmt_limit(ctx, k, limits[k]), "num"), field + (f' <span class="muted">{unit}</span>' if unit else "")))
         tbl = table([(t("col_limit"), ""), (t("col_default"), "num"), (t("col_ceiling"), "num"), (t("col_current"), "num"),
                      (t("col_new_value"), "")], rows)
-        return (f'<h2>{t("sec_limits")}</h2><p>{t("limits_hint")}</p>'
+        return (f'<h3 id="limits">{t("sec_limits")}</h3><p>{t("limits_hint")}</p>'
                 + ctx.form(f"/scopes/{row['scope_id']}/limits", tbl + error_html + f'<button type="submit">{t("save")}</button>'))
 
     def admins_section(self, ctx: Ctx, row, admins, can_edit: bool, error_html: str = "", typed: str = "") -> str:
@@ -691,7 +763,7 @@ class Dashboard:
                                   f'<button type="submit" class="danger small">{t("remove")}</button>', confirm=t("remove_confirm"))
             rows.append(tr(esc(a["admin"]), f'<span class="badge">{t("role_" + a["role"])}</span>', esc(a["added_by"] or "–"),
                            ctx.time(a["added"]), remove))
-        out = f'<h2>{t("sec_admins")}</h2><p>{t("admins_hint")}</p>'
+        out = f'<h3 id="admins">{t("sec_admins")}</h3><p>{t("admins_hint")}</p>'
         out += table([(t("col_admin"), ""), (t("col_role"), ""), (t("col_added_by"), ""), (t("col_added"), ""), ("", "")], rows, t("no_admins"))
         if can_edit:
             out += ctx.form(f"/scopes/{sid}/admins", f'<label for="a_new">{t("add_admin")}</label>'
@@ -716,7 +788,7 @@ class Dashboard:
                                   confirm=t("delete_vault_confirm"))
             rows.append(tr(f'<code>{esc(v["vault_id"])}</code>', ctx.time(v["created"]), ctx.time(v["last_write"]),
                            (ctx.bytes(v["bytes"] + v["roster_bytes"]), "num"), (str(v["members"]), "num"), reenc, state, action))
-        return (f'<h2>{t("sec_vaults")}</h2><p>{t("vaults_hint")}</p>'
+        return (f'<h3 id="vaults">{t("sec_vaults")}</h3><p>{t("vaults_hint")}</p><p>{t("vault_explain")}</p>'
                 + table([(t("col_vault"), ""), (t("created"), ""), (t("col_last_write"), ""), (t("col_size"), "num"),
                          (t("col_members"), "num"), (t("col_reencrypt"), ""), (t("col_state"), ""), ("", "")], rows, t("no_vaults")))
 
@@ -876,7 +948,7 @@ class Dashboard:
                 else:
                     div = MIB if k in BYTE_LIMITS else 1
                     hi = -(-self.cfg.limit_ceilings[k] // div)            # the same ceiling the form shows
-                    n = parse_int(raw, ctx.t("lim_" + k), 1, hi, "MiB" if k in BYTE_LIMITS else "")
+                    n = parse_int(raw, ctx.t("lim_" + k), 1, hi, "MB" if k in BYTE_LIMITS else "")
                     changes[k] = n * div
             merged = {k: v for k, v in json.loads(row["limits"] or "{}").items() if k not in changes}
             merged.update({k: v for k, v in changes.items() if v is not None})
@@ -947,6 +1019,17 @@ class Dashboard:
                 self.svc.audit(conn, actor_of(ctx, role == "operator"), "scope_resumed", row["scope_id"])
 
         return await self.action(request, ctx, request.path_params["scope"], fn, "resumed", admin=False)
+
+    async def post_prefs_expert(self, request, ctx: Ctx, form) -> Response:
+        """Remember in this browser (a cookie, no database row) that the expert settings are shown opened, or forget it."""
+        if not ctx.ident:
+            raise DashError(401, "err_login")
+        target = safe_next(form.get("next")).split("#")[0]
+        if form.get("on") == "1":
+            cookie = cookie_header(EXPERT_COOKIE, "1", max_age=EXPERT_COOKIE_AGE)
+        else:
+            cookie = cookie_header(EXPERT_COOKIE, "", max_age=0)
+        return with_cookies(RedirectResponse(target + "#expert", status_code=303), cookie)
 
     async def post_scope_delete(self, request, ctx: Ctx, form) -> Response:
         def fn(conn, row, role):
@@ -1113,7 +1196,7 @@ class Dashboard:
             (BASE + "/operator", self.operator_page), (BASE + "/operator/audit", self.operator_audit),
         ]
         posts = [
-            (BASE + "/logout", self.logout), (BASE + "/scopes", self.create), (scope + "/settings", self.post_settings),
+            (BASE + "/logout", self.logout), (BASE + "/prefs/expert", self.post_prefs_expert), (BASE + "/scopes", self.create), (scope + "/settings", self.post_settings),
             (scope + "/enrollment", self.post_enrollment), (scope + "/join-code", self.post_join_code),
             (scope + "/limits", self.post_limits), (scope + "/admins", self.post_admin_add),
             (scope + "/admins/remove", self.post_admin_remove), (scope + "/vaults/{vault}/delete", self.post_vault_delete),

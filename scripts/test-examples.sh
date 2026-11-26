@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests of the example apps in examples/: each app runs from a file:// page in a browser against the real server with a temporary
 # database (the integration environment), with its library URL and service URL mapped to that local server. examples/docs-recipes.spec.mjs
-# runs the code recipes of docs/site/integration.md the same way (and wds-verify on the example of the guide, against the mock and a sandbox).
+# runs the code blocks of docs/site/integration.md and docs/site/porting.md the same way (store.migrateLocal against a seeded old database, the checklist for forms; and wds-verify on the example of the guide and on zeit-notizen with its seed, against the mock and a sandbox).
 # Needs Node >= 22, the project venv (.venv, see server/README.md) and the Playwright browsers (Chromium; WDS_BROWSERS=chromium,firefox,webkit for more).
 #   scripts/test-examples.sh [playwright arguments, e.g. -g "notes"]
 set -euo pipefail

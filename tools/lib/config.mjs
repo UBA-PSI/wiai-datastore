@@ -5,7 +5,8 @@ const FORMS = '{"click": selector}, {"fill": [selector, text]}, {"select": [sele
   + '{"upload": [selector]} or {"upload": [selector, path]}, {"download": selector} or {"wait": ms}';
 // In the text of a fill step, this becomes a unique generated token (a canary the tool searches for).
 export const CANARY_PLACEHOLDER = '{canary}';
-// The global that wds-verify --migration-delete sets (before any script of the page runs) so that a migration deletes the old data even in the sandbox.
+// The global that wds-verify --migration-delete (and the developer's own automated test, through context.addInitScript) sets before any script of the page
+// runs, so that store.migrateLocal deletes the old data even in the sandbox. The library honours it only when navigator.webdriver is true. The app never sets it.
 export const MIGRATION_TEST_GLOBAL = '__WDS_MIGRATION_TEST__';
 export const OBJECT_FORM = '{ "locale": "de-DE", "steps": [ {"click": "#tab"}, {"fill": ["#title", "a unique text"]}, {"click": "#save"} ], "afterReload": [ {"click": "#tab"} ] }';
 const KEYS = ['locale', 'steps', 'afterReload', 'seed'];

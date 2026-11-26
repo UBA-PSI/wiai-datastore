@@ -5,7 +5,7 @@
 // maps every request to https://wiai.uni-bamberg.de/datastore/ to the local server, so the default service URL is what is tested.
 // Run with scripts/test-examples.sh (Chromium; WDS_BROWSERS=chromium,firefox,webkit for more).
 import { test as base, expect } from '../../client/node_modules/@playwright/test/index.mjs';
-import { mkdirSync, writeFileSync, readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, mkdtempSync, rmSync, cpSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,6 +30,8 @@ const test = base.extend({
     expect(html).toContain(stack.scope);
     stack.appUrl = 'file://' + join(dir, 'index.html');
     writeFileSync(join(dir, 'index.html'), html);
+    cpSync(join(HERE, 'old'), join(dir, 'old'), { recursive: true });       // the older, local-only version of the app, for the take-over of old data
+    stack.oldUrl = 'file://' + join(dir, 'old', 'index.html');
     stack.dir = dir;
     try { await use(stack); } finally { await stack.stop(); rmSync(dir, { recursive: true, force: true }); }
   }, { scope: 'worker' }],
@@ -63,7 +65,7 @@ async function openApp(ctx, stack) {
   await page.goto(stack.appUrl);
   return page;
 }
-async function createVault(page, stack) {
+async function createVault(page, stack, { waitForApp = true } = {}) {
   const dlg = dialogOf(page);
   await dlg.getByRole('button', { name: 'Neuen Tresor anlegen' }).click();
   await dlg.getByLabel('Beitrittscode').fill(stack.joinCode);
@@ -74,7 +76,7 @@ async function createVault(page, stack) {
   const accessId = (await dlg.locator('[data-wds=access-id]').innerText()).trim();
   await dlg.getByLabel('Ich habe das Zugangsblatt und den Wiederherstellungscode gesichert.').check();
   await dlg.getByRole('button', { name: 'Weiter' }).click();
-  await expect(page.locator('#app')).toBeVisible({ timeout: 60000 });
+  if (waitForApp) await expect(page.locator('#app')).toBeVisible({ timeout: 60000 });
   return accessId;
 }
 async function unlock(page, accessId) {
@@ -689,5 +691,130 @@ test('repair lists: a list that is gone is rebuilt from the records, and the app
   await page2.locator('#tab-notes').click();
   await expect(page2.locator('#note-list li')).toHaveCount(2);
   await noViolations(page, page2);
+  await ctx.close();
+});
+
+test('old data of the local-only version is taken over: asked once, copied, checked and deleted; the attachment belongs to its note, the timer runs, the language is applied', async ({ browser, browserName, stack }) => {
+  test.skip(browserName !== 'chromium', 'the old page and the new app are two files: only Chromium shares the storage of file:// pages (in Firefox and Safari the new file replaces the old one)');
+  const ctx = await newContext(browser, stack);
+  // the old app: two projects, two time entries, a note with an attachment, a running timer, the language
+  const old = await ctx.newPage();
+  await old.goto(stack.oldUrl);
+  for (const name of ['Altes Projekt Alpha', 'Altes Projekt Beta']) { await old.locator('#project-name').fill(name); await old.locator('#project-add').click(); }
+  await old.locator('#entry-project').selectOption({ label: 'Altes Projekt Alpha' });
+  await old.locator('#entry-date').fill(ymd(new Date()));     // within the 14 days that the app lists at first
+  await old.locator('#entry-minutes').fill('90');
+  await old.locator('#entry-desc').fill('Alter Eintrag eins');
+  await old.locator('#entry-add').click();
+  await old.locator('#entry-project').selectOption({ label: 'Altes Projekt Beta' });
+  await old.locator('#entry-minutes').fill('45');
+  await old.locator('#entry-desc').fill('Alter Eintrag zwei');
+  await old.locator('#entry-add').click();
+  await expect(old.locator('#entry-list li')).toHaveCount(2);
+  await old.locator('#note-title').fill('Alte Notiz mit Anhang');
+  await old.locator('#note-text').fill('Text der alten Notiz mit Umlauten äöü');
+  await old.locator('#note-tags').fill('alt, import');
+  await old.locator('#note-file').setInputFiles([{ name: 'plan.pdf', mimeType: 'application/pdf', buffer: PDF }]);
+  await old.locator('#note-add').click();
+  await expect(old.locator('#note-list li')).toHaveCount(1);
+  await old.locator('#timer-project').selectOption({ label: 'Altes Projekt Beta' });
+  await old.locator('#timer-desc').fill('Alter Timer läuft');
+  await old.locator('#timer-start').click();
+  await expect(old.locator('#timer-info')).toHaveText('Timer läuft');
+  await old.locator('#lang').selectOption('en');
+  await old.waitForTimeout(500);
+  await old.close();
+
+  const page = await openApp(ctx, stack);
+  const accessId = await createVault(page, stack, { waitForApp: false });
+  // the library asks once: 7 entries (2 projects, 2 time entries, the note, its file, the timer); the backup is a ZIP with the file in it
+  const q = page.locator('[data-wds-view="migrate"]');
+  await expect(q).toBeVisible({ timeout: 30000 });
+  await expect(q).toContainText('7 Einträge');
+  const backup = page.waitForEvent('download');
+  await q.locator('[data-wds="migrate-backup"]').click();
+  const zipDownload = await backup;
+  expect(zipDownload.suggestedFilename()).toMatch(/^zeitnotizen-old-data-\d{4}-\d{2}-\d{2}\.zip$/);
+  const zip = readZip(readFileSync(await zipDownload.path()));
+  expect(Object.keys(zip)).toContain('data.json');
+  expect(zip[Object.keys(zip).find((n) => /^files\/.*plan\.pdf$/.test(n))].equals(PDF)).toBe(true);
+  await q.locator('[data-wds="migrate-yes"]').click();
+  await expect(page.locator('#app')).toBeVisible({ timeout: 60000 });
+  await expect(page.locator('.wds-toast').filter({ hasText: '7 Einträge sind jetzt in Ihrem Tresor' })).toBeVisible();
+
+  // everything is there, in the language of the old app's settings
+  await expect(page.locator('html')).toHaveAttribute('lang', 'en');
+  await page.locator('#tab-projects').click();
+  await expect(page.locator('#project-list')).toContainText('Altes Projekt Alpha');
+  await expect(page.locator('#project-list')).toContainText('Altes Projekt Beta');
+  await page.locator('#tab-time').click();
+  await expect(page.locator('#entries')).toContainText('Alter Eintrag eins');
+  await expect(page.locator('#entries')).toContainText('1:30');
+  await expect(page.locator('#entries')).toContainText('Alter Eintrag zwei');
+  await expect(page.locator('#timer-running')).toBeVisible();                                   // the timer record, with the project of the new id
+  await expect(page.locator('#timer-info')).toContainText('Altes Projekt Beta');
+  await expect(page.locator('#timer-info')).toContainText('Alter Timer läuft');
+  await page.locator('#tab-notes').click();
+  await page.locator('#note-list li').filter({ hasText: 'Alte Notiz mit Anhang' }).locator('button').click();
+  await expect(page.locator('#note-text')).toHaveValue('Text der alten Notiz mit Umlauten äöü');
+  await expect(page.locator('#note-tags')).toHaveValue('alt, import');
+  await expect(page.locator('#file-list .file')).toHaveCount(1);                                // the file belongs to its note
+  const dl = page.waitForEvent('download');
+  await page.getByRole('button', { name: /plan\.pdf/ }).first().click();
+  const download = await dl;
+  expect(download.suggestedFilename()).toBe('plan.pdf');
+  expect(readFileSync(await download.path()).equals(PDF)).toBe(true);
+
+  // the old storage is empty (the tag of this browser stays); the question does not come again, and the language the person chooses now is not overwritten
+  const oldState = await page.evaluate(async () => {
+    const db = await new Promise((resolve, reject) => { const r = indexedDB.open('zeitnotizen'); r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error); });
+    const counts = {};
+    for (const s of ['notes', 'files', 'meta']) counts[s] = await new Promise((resolve) => { const r = db.transaction(s).objectStore(s).count(); r.onsuccess = () => resolve(r.result); });
+    db.close();
+    return { counts, data: localStorage.getItem('zeitnotizen.daten'), tag: /^[0-9a-f]{8}$/.test(localStorage.getItem('wds:migrate:zeitnotizen:tag') || '') };
+  });
+  expect(oldState).toEqual({ counts: { notes: 0, files: 0, meta: 0 }, data: null, tag: true });
+  await page.locator('#btn-lang').click();                                                      // English -> German
+  await expect(page.locator('html')).toHaveAttribute('lang', 'de');
+  await expect(page.locator('#toast')).toContainText('Sprache');
+  const again = await openApp(ctx, stack);
+  await unlock(again, accessId);
+  await expect(again.locator('[data-wds-view="migrate"]')).toHaveCount(0);
+  await expect(again.locator('html')).toHaveAttribute('lang', 'de');
+  await noViolations(page, again);
+  await ctx.close();
+});
+
+test('old data that nothing refers to any more is kept, not dropped: an attachment whose note is gone and a timer of a deleted project are taken over', async ({ browser, browserName, stack }) => {
+  test.skip(browserName !== 'chromium', 'the old page and the new app are two files: only Chromium shares the storage of file:// pages');
+  const ctx = await newContext(browser, stack);
+  const old = await ctx.newPage();
+  await old.goto(stack.oldUrl);
+  await old.locator('#project-name').fill('Einziges Projekt');
+  await old.locator('#project-add').click();
+  await old.waitForTimeout(300);
+  await old.evaluate(async (pdf) => {     // what an older version left behind: a file of a note that no longer exists, and a timer of a project that no longer exists
+    const db = await new Promise((resolve, reject) => { const r = indexedDB.open('zeitnotizen'); r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error); });
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(['files', 'meta'], 'readwrite');
+      tx.objectStore('files').add({ noteId: 999, name: 'verwaist.pdf', type: 'application/pdf', blob: new File([new Uint8Array(pdf)], 'verwaist.pdf', { type: 'application/pdf' }) });
+      tx.objectStore('meta').put({ project: 77, desc: 'Timer ohne Projekt', start: Date.now() - 120000 }, 'timer');
+      tx.oncomplete = resolve; tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+  }, Array.from(PDF));
+  await old.close();
+  const page = await openApp(ctx, stack);
+  await createVault(page, stack, { waitForApp: false });
+  const q = page.locator('[data-wds-view="migrate"]');
+  await expect(q).toBeVisible({ timeout: 30000 });
+  await expect(q).toContainText('3 Einträge');                       // the project, the orphan file, the timer: nothing is skipped, so there is no box to tick
+  await expect(q.locator('[data-wds="migrate-skip-ack"]')).toHaveCount(0);
+  await q.locator('[data-wds="migrate-yes"]').click();
+  await expect(page.locator('#app')).toBeVisible({ timeout: 60000 });
+  await expect(page.locator('.wds-toast').filter({ hasText: '3 Einträge sind jetzt in Ihrem Tresor' })).toBeVisible();
+  await expect(page.locator('#timer-running')).toBeVisible();        // the timer keeps running, without its project
+  await expect(page.locator('#timer-info')).toContainText('(gelöschtes Projekt)');
+  await expect(page.locator('#timer-info')).toContainText('Timer ohne Projekt');
   await ctx.close();
 });

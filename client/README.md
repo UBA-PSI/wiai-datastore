@@ -27,7 +27,7 @@ Browser library for the WIAI Datastore, the end-to-end encrypted key-value store
 ```
 
 API summary: `unlock`, `onUnlock`, `onLock`, `lock`, `status`, `get`, `getMany`, `getRecord`, `getBlob`, `set`, `remove`, `list`, `collection`, `autosave`, `history`, `restore`,
-`showHistory`, `onConflict`, `onStale`, `setLocale`, `share`, `exportAll`, `usage`. Every async method unlocks first when the store is locked. The full
+`showHistory`, `onConflict`, `onStale`, `setLocale`, `share`, `exportAll`, `usage`, `migrateLocal` (and `WDS.fillGaps`). Every async method unlocks first when the store is locked. The full
 description is PLAN.md 8.1.
 
 * Values: JSON values, or `Blob`/`File`/`ArrayBuffer`/`Uint8Array` (stored as bytes). Names: any non-empty string up to 1024 bytes;
@@ -93,7 +93,7 @@ One collection object exists per prefix; a later call with the same prefix repla
 |---|---|
 | `await notes.load()` / `await notes.refresh()` | the items (`refresh` re-reads the index and fires `onChange` on a difference) |
 | `notes.items()`, `notes.has(id)` | synchronous; a `UsageError` until `load()` ran (and again after a lock) |
-| `await notes.get(id)`, `await notes.getAll({concurrency, fresh})` | the value(s); records that are gone are skipped |
+| `await notes.get(id, {fresh?})`, `await notes.getAll({concurrency, fresh})` | the value(s); records that are gone are skipped; `fresh: true` ignores the copy that `list()` keeps for a moment |
 | `await notes.add(value, {id?, meta?, mime?, created?})` | `{id, name, version, resolution}`; ids are 10 characters `[0-9a-z]`, or yours (1 to 200 characters, no `/`); `created` (ms) only orders the list |
 | `await notes.set(id, value, {meta?, mime?, created?})`, `await notes.remove(id)` | the `set`/`remove` result. `set` is an upsert: a new id gets its index entry (`created`, or now), an existing entry keeps its date and gets the new meta. Like `store.set` it writes on top of the version this page has read or written: a record that exists but that this page has not read (listed in the index only) is a conflict, decided by `onConflict` or the dialog, never overwritten silently |
 | `notes.autosave(id, getState, opts)` | an autosave handle that also keeps the index meta current (index writes at most every 10 s) |
@@ -109,10 +109,88 @@ device is back online, on focus, and on lock. Records under the prefix that the 
 ### Stable attributes (for tests and wds-verify)
 
 Every button, input, select, textarea and summary inside the library's dialogs carries `data-wds="<name>"`, and every dialog carries `data-wds-view="<view>"`
-(`loading`, `error`, `unlock`, `create`, `redeem`, `sheet`, `conflict`, `history`, `share`, `revoke`, `progress`, `notice`), updated on every view switch. Examples:
+(`loading`, `error`, `unlock`, `create`, `redeem`, `sheet`, `conflict`, `history`, `share`, `revoke`, `progress`, `notice`, `migrate`, `migrate-discard`, `migrate-differs`, `migrate-large`), set when the view is rendered.
+A dialog that waits (view `loading` or `progress`, or a submit in flight such as Argon2id and the request) carries `aria-busy="true"`: view present and no `aria-busy` means ready for input. Examples:
 `unlock-submit`, `to-create`, `passphrase`, `passphrase-repeat`, `create-submit`, `sheet-confirm`, `sheet-continue`, `conflict-mine`, `conflict-theirs`, `invite-create`,
-`revoke-confirm`. Toasts have `data-wds-toast="<key>"` and the buttons `toast-action` and `toast-dismiss`. The names do not change with the language; they are listed in the
+`revoke-confirm`, `migrate-yes`, `migrate-backup`, `migrate-no`, `migrate-skip-ack` (only when rows are left out with `h.skip`), `migrate-discard`, `migrate-discard-confirm`, `migrate-discard-back`, `migrate-differs-keep-vault`, `migrate-differs-keep-both`, `migrate-differs-later`, `migrate-large-download` (with `data-wds-index`), `migrate-large-ack`, `migrate-delete`, `migrate-keep`. Toasts have `data-wds-toast="<key>"` (the migration uses `migration`) and the buttons `toast-action` and `toast-dismiss`. The names do not change with the language; they are listed in the
 header comment of `src/wds-ui.js` and covered by `test/ui-attrs.spec.mjs`.
+
+### Dialogs, toasts and your own modal dialogs
+
+Every library dialog is a modal `<dialog class="wds-root wds-dialog">` (the browser makes the rest of the page inert and draws the backdrop), and the toast region
+and the sandbox bar are `popover="manual"` elements. They all live in the browser's top layer, so they appear above a modal dialog that the app opened with `showModal()`:
+
+* A conflict, the unlock dialog after an expired session, the migration question and every toast (also with buttons) work above an open app modal. While a toast is shown
+  the library keeps it inside the topmost modal dialog (the app's or its own) so that it stays clickable; clicks, key presses and submits inside the toast region do not reach
+  the dialog that hosts it. A toast whose host dialog the app removes comes back on its own.
+* An app dialog that is opened with `showModal()` *after* a library dialog does not cover it: the library puts its dialog on top again (within a moment; also when the app reuses one `<dialog>` element
+  that was open before). It notices the `open` attribute of any dialog and checks what is on top at the middle of its own dialog, never which element opened. The app should still not
+  open modals while a store call is pending. The 400 ms check runs only while a library dialog or a modal dialog of the app is open.
+* A toast sits at the bottom right (at the bottom on a narrow screen) in the top layer and can cover a button of an app dialog: short ones (info, ok) go after about 9 seconds, warnings and errors (also the migration notices)
+  stay until dismissed. wds-verify dismisses a toast that covers the element of a `click` step and says so; a person has to use `toast-dismiss` as well. Put the app's own notices inside its dialogs: a fixed element of the page lies under a modal dialog.
+* `lock()`, `expired` and `revoked` close every library dialog (a pending question settles as cancelled: a conflict rejects the write, the unlock promise rejects with
+  `code: "cancelled"`). The app closes its own modals in `onLock`. To find only your own dialogs use `dialog:not(.wds-dialog)`; do not close the library's.
+* Escape closes a library dialog only when it is cancelable (the close button `×` exists); mandatory dialogs (unlock, the access sheet, progress) stay. Escape is handled
+  with a `keydown` listener on the document, so it also works when no control has the focus.
+* CSS of the app for `dialog` (padding, `max-width`, a transform for centring, an opacity transition, `display:flex`, a transparent backdrop) does not change the library's dialogs: the
+  box is reset with `all: initial` and explicit rules. Minimum browsers: Chrome/Edge 114, Firefox 125, Safari 17 (modal `<dialog>` and `popover`); older engines show the toasts with
+  the former fixed layout, which an app modal can cover.
+
+### Taking over old local data: `store.migrateLocal`
+
+```js
+const refCol = store.collection("refs/", { meta: (r) => ({ title: String(r.title || "").slice(0, 80) }) });
+const pdfCol = store.collection("pdfs/");
+const result = await store.migrateLocal({
+  id: "literatur",                                           // names this migration (lock, tag, marker): 1-40 characters [a-z0-9-]
+  indexedDB: { name: "literatur", stores: ["refs", "pdfs"] }, // one object or an array; only these stores are read and emptied
+  localStorage: { keys: ["literaturliste.einstellungen"], prefixes: [] },
+  map(old, h) {
+    const items = old.rows("refs").map((row) => ({ col: refCol, id: h.id(row.key), value: { ...row.value, pdfId: h.ref("pdfs", row.value.pdfId, ".pdf") }, from: row }));
+    for (const row of old.rows("pdfs")) items.push({ col: pdfCol, id: h.id(row.key, ".pdf"), value: h.blob(row.value), meta: { name: row.value.name }, from: row });
+    return { items, settings: { record: "settings", value: old.json("literaturliste.einstellungen") || {}, from: "literaturliste.einstellungen" } };
+  },
+});
+```
+
+Call it once in `start()`, before `load()`; the app no longer touches `indexedDB` or `localStorage` for the old data. It reads the old data (nothing is written there except the tag below),
+runs `map` twice (the results must be identical: ids from `h.id`, no random numbers, no clock), checks the result, asks the person once (dialog view `migrate`), copies with
+create-only writes, writes the index of every collection, reads everything back and compares byte for byte, writes a marker record inside the vault and only then deletes the old rows
+(never in a sandbox). Every old row has to be accounted for: each entry carries `from` (the row, or the localStorage key) and rows that are no entries are listed with `h.skip(row, why)`;
+one row that is neither copied nor skipped stops the run and nothing is deleted. `h.skip` deletes the row with the old data (the backup has it): the question then asks for a confirmation (a box, or the backup
+download) before it copies anything, so use it only for rows that are no user data (a cache). The marker (`.wds/migration/<id>/<tag>`, hidden from `list()` and `exportAll()`) remembers, per entry, a short hash of
+what `map` made of it (name, value, meta, date, type; files by size, type, name and date): a later start with the old data still there (sandbox, kept, crash before the delete) never compares with the vault again, asks nothing, and does not bring back what the
+person edited or deleted since; only an entry that `map` now makes differently (a new or changed old row, or a corrected `map`) is new. Rows and files are compared by a cheap fingerprint at every start (no file is
+read); every copy is checked byte for byte, and the bytes of every file are compared once more right before the delete.
+
+* **Statuses** (`result.status`): `nothing` (no old data: no dialog, no request), `busy` (another tab runs it; load normally), `skipped` (`why: "not-owner"`; a member's vault is not
+  a place for private old data; a notice with a backup button is shown once per page, and not again after the person dismissed it), `declined` (Not now / Escape / close; nothing written, asked again next start), `discarded` (the person chose
+  "Do not take over; delete the old data" and confirmed: nothing was written, the old data is deleted, `deleted: "kept"` in a sandbox), `failed`
+  (`why` for developers; nothing deleted; also offline, quota, locked, and every mistake in `map` or in one user's data: the message is in the console, the person gets a notice with a backup button), `partial` (`tooLarge` entries that were left out and kept, or `why: "differs"` with `differs` names that are not decided),
+  `migrated` (`deleted`: `"deleted"`, `"kept"` in a sandbox, `"changed"` when the old data changed meanwhile and stays; `copied`, `total`, `tooLarge` if the person deleted the rest, `again: true`
+  when only the delete was repeated). `result.sandbox` says whether the scope is a sandbox; `result.downloadBackup()` (not enumerable) saves the backup of what is still in the old storage, for an app with `notify: false`. It rejects only with `UsageError` for wrong
+  options (before anything is read) and with a cancelled unlock; a mistake that map or one user's data causes (a missing `from`, a bad id) is a `failed` result, so the page still starts for that user.
+* **Old data** `old`: `rows(name)` (`[{key, value}]`; the store name, or `"db/store"` when two databases have the same store name; `[]` for a missing database), `local` (`{key: text}` of every
+  configured key and prefix match), `keys(prefix?)`, `json(key)`. `map` gets copies of the rows: it may change them (also in a classic script) without touching the old rows; Blob/File and binary buffers are shared, do not change their bytes. `old.rows(name)` is `[]` for every configured store that does not exist in this browser.
+* **Helpers** `h`: `id(oldKey, ending?)` (the id of an entry: `<tag>-<token>` for a browser's tag, or just `j12` for the number 12 with `tagged: false`; the token is `s…` for a string key,
+  `j…` for anything else, `b…` for binary keys; different keys never give the same id; at most 200 characters; `ending` like `".pdf"`; a reference computes the id of its target with the
+  same call), `ref(storeName, oldKey, ending?)` (the target's id, or `null` when the row is gone), `blob(value, field?)` (a `Blob` from a Blob/File, `value[field]`, `value.blob`, `value.data` or a
+  `data:` URL), `created(x)` (ms from a Date, number or date string), `skip(row, why)`, `fail(row, why)` (stops the run; nothing is written).
+* **map returns** `{ items, records, settings }`: `items: [{ col, id, value, meta?, created?, mime?, from }]` (written like `col.set`), `records: [{ name, value, mime?, from }]` (like `store.set`;
+  not inside a collection's prefix, not `.wds/`), `settings: { record, value, from }` (a JSON object: the keys that the vault's record lacks are filled in, nothing is overwritten, also
+  not `null`; `WDS.fillGaps(current, old)` is the same rule). A JSON value must not hold a Blob, buffer, Map or Set (JSON would write `{}`), Dates become ISO strings. Every `h.ref` result must
+  be the id of an item of this run. A reference to an entry that was left out (too large, no room) becomes `null`.
+* **tagged** (default true): every browser gets a random 8-character tag (`localStorage["wds:migrate:<id>:tag"]`, kept after the delete), so two browsers with the same old numeric ids do
+  not overwrite each other. `tagged: false` gives natural ids (`j12`): identical data written by a second browser is recognised as already there; different data is offered as "keep the
+  version in the vault / keep both (old copy as `<id>~<tag>`) / decide later" (view `migrate-differs`). Never a conflict dialog or an `onConflict` handler.
+* **Size**: entries over `max_value_bytes` and, when the vault is too full, the largest entries are left out, listed in view `migrate-large` with one download each; the old data is deleted
+  only after every file was downloaded (or the checkbox "I have saved the files or do not need them" was ticked) and the person chose Delete; Keep (or Escape) gives `status: "partial"`.
+* **Backup**: view `migrate` offers a ZIP file (`data.json` and every Blob under `files/`, not encrypted) that works without the vault. When the files do not fit into one ZIP file the data file and every file are saved as separate downloads and the dialog says so.
+* **Safety**: tab locks (`navigator.locks`, `ifAvailable`: a second tab gets `busy` at once), the old database is opened without creating it (a blocked one fails after 5 s), `wds:` keys are never
+  read or removed, nothing but the configured stores and keys is deleted (never `localStorage.clear()`, never `deleteDatabase`), and the delete re-reads everything: one changed row (also a file of
+  the same size with other bytes) and nothing is deleted (`"changed"`). The test global `window.__WDS_MIGRATION_TEST__ = true` makes a sandbox delete too, but only in an automated browser
+  (`navigator.webdriver === true`); set it only in your own test setup (`context.addInitScript`), never in the app.
+* **Texts**: `texts: { de: { "migrate.question": "…" }, en: {…} }` (or flat keys) overrides single `migrate.*` texts. A toast with key `migration` reports the outcome.
 
 ### Sandbox
 
@@ -125,7 +203,7 @@ the sandbox was emptied.
 ### Theming
 
 Set CSS custom properties on `:root` (or any ancestor of `<body>`): `--wds-bg`, `--wds-fg`, `--wds-muted`, `--wds-border`, `--wds-accent`, `--wds-accent-fg`,
-`--wds-danger`, `--wds-warn`, `--wds-ok`, `--wds-soft`, `--wds-radius`, `--wds-font`, `--wds-mono`, `--wds-font-size`, `--wds-z`. Dark
+`--wds-danger`, `--wds-warn`, `--wds-ok`, `--wds-soft`, `--wds-radius`, `--wds-font`, `--wds-mono`, `--wds-font-size`, `--wds-backdrop`. Dark
 mode follows `prefers-color-scheme` unless the variables are set. All classes start with `wds-`; there is no Shadow DOM.
 
 ## Build
@@ -168,10 +246,12 @@ over HTTP (`test/ui-server.mjs`). The Playwright version is pinned to the Chromi
 WDS_BROWSERS=chromium,firefox,webkit ../scripts/test-integration.sh   # fail instead of skipping a missing browser
 ```
 
+`test/migrate.spec.mjs` (same config; real server and a sandbox server, a seeded old IndexedDB/localStorage in the same page, served over `http://127.0.0.1` because WebKit keeps no IndexedDB for `file://` pages; WebKit runs in a persistent profile because an ephemeral one cannot keep Blobs) covers `store.migrateLocal` in all three engines.
+
 `test/docs.spec.mjs` (same config) checks what the server serves as documentation: the example app of `docs/site/integration.md` under the documented Content-Security-Policy in all three engines (with a negative control and the `onerror` fallback), the static checks of `tools/wds-verify.mjs` against that example, and `docs/site/export.html` served and saved to disk.
 
 `test/integration.spec.mjs` starts the Python server from `../server` with a temporary database and generated escrow keys
 (`test/integration-env.mjs`), builds a bundle that pins exactly those keys, and drives it from `file://` pages. It has its own
-config (`playwright.integration.config.mjs`); `playwright.config.mjs` runs only the `ui*.spec.mjs` files (`ui.spec`, `ui-visual.spec`, `ui-store.spec`, `ui-attrs.spec`). Missing browsers: `npx playwright install firefox webkit`.
+config (`playwright.integration.config.mjs`); `playwright.config.mjs` runs only the `ui*.spec.mjs` files (`ui.spec`, `ui-visual.spec`, `ui-store.spec`, `ui-attrs.spec`, `ui-layers.spec`: dialogs, toasts and the sandbox bar above modal dialogs of the app). Missing browsers: `npx playwright install firefox webkit`.
 If the installed WebKit build is not the one this Playwright version expects, an older `webkit-*` build is used (or name one with
 `WDS_WEBKIT_EXECUTABLE=/path/to/pw_run.sh`).

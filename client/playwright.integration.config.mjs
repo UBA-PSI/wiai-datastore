@@ -40,7 +40,7 @@ if (!projects.length) throw new Error('no browser available for the integration 
 
 export default defineConfig({
   testDir: './test',
-  testMatch: ['integration.spec.mjs', 'docs.spec.mjs'],
+  testMatch: ['integration.spec.mjs', 'docs.spec.mjs', 'migrate.spec.mjs'],
   timeout: 240000,
   expect: { timeout: 20000 },
   workers: 1,

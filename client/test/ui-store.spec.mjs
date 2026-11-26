@@ -691,3 +691,15 @@ test('collection.set is an upsert: a new id gets its index entry (created from t
   expect([r2.resolution, r2.value]).toEqual(['theirs', { t: 'two, edited by a' }]);
   expect(await b.evaluate(() => notes.items().filter((i) => i.id === 'n2').map((i) => i.meta.t))).toEqual(['two, edited by a']);
 });
+
+test('collection.get(id, { fresh }): ignores the copy list() kept, like store.get; without the option the kept copy is returned; a missing record still queues the index repair', async ({ browser }) => {
+  const { page, vault, other } = await setup(browser);
+  const p2 = await device(browser, vault);
+  await p2.evaluate(async () => { window.items = store.collection('items/'); await items.load(); });
+  await other.put('items/a', { i: 1 });
+  await p2.evaluate(async () => { await store.list('items/'); });          // list() keeps what it downloaded for a moment
+  await other.put('items/a', { i: 'new' });
+  expect(await p2.evaluate(() => items.get('a'))).toEqual({ i: 1 });
+  expect(await p2.evaluate(() => items.get('a', { fresh: true }))).toEqual({ i: 'new' });
+  expect(await p2.evaluate(() => items.get('missing', { fresh: true }))).toBeUndefined();
+});

@@ -6,6 +6,9 @@
 > and can restore a vault after a documented procedure. Wherever you describe the privacy of an app, use this sentence word for word (a text in another language uses the English one):
 > en: Data is end-to-end encrypted; the faculty holds a recovery key for emergencies.
 > de: Die Daten sind Ende-zu-Ende-verschlüsselt; die Fakultät verwahrt für Notfälle einen Wiederherstellungsschlüssel.
+> When the scope has the breach check of passphrases on (the default; the dashboard prompt and wds-verify say which), add this sentence right after it, in the language of the text:
+> en: When you choose a passphrase, your browser checks it against known data breaches with the Pwned Passwords service (USA); the service receives your IP address and the first five characters of a checksum of the passphrase, never the passphrase itself.
+> de: Wenn Sie eine Passphrase wählen, prüft Ihr Browser sie beim Dienst Pwned Passwords (USA) auf bekannte Datenlecks; der Dienst erhält Ihre IP-Adresse und die ersten fünf Zeichen einer Prüfsumme der Passphrase, nie die Passphrase selbst.
 
 You are probably the Claude of a developer who wants an app to keep its data in this service, a new app or an existing one. Read
 {{base}}/docs/integration.md first. It has the exact script tag (with the current Subresource Integrity hash), the
@@ -22,7 +25,7 @@ Source code, PROTOCOL.md and the verifier wds-verify (public): {{repo_url}}
    datastore, no user data in localStorage, sessionStorage, IndexedDB or cookies. The library has no unencrypted path.
 3. Never build your own passphrase, login or key dialogs and never ask for a passphrase or access ID. Call
    store.unlock() (or any store method; each one unlocks first) and let the library's dialogs do it. The dialogs follow the browser language;
-   an app with its own language switch calls store.setLocale.
+   an app in one language calls store.setLocale("de") (or "en") once right after WDS.connect, and an app with its own language switch calls it at start and on every change.
 4. One record per entity. Many items or files: store.collection() (integration.md, "Collections"), which keeps the list and merges changes of several devices without losing items.
    Editors: store.autosave(), never store.set() on every keystroke, never the whole app state in one record.
 5. Put the Content-Security-Policy meta tag from integration.md into the head, before every script, and keep the
@@ -31,9 +34,12 @@ Source code, PROTOCOL.md and the verifier wds-verify (public): {{repo_url}}
    node tools/wds-verify.mjs <app.html> (integration.md, section "wds-verify"). Static checks need only Node and the clone. Without Python it tests against the public sandbox (below).
    Without Node, follow integration.md, "Without wds-verify". Add a wds-verify.json when inputs are hidden until the user acts, the app has tabs or a file input ("Writing wds-verify.json"). Fix what it reports and put the report into the app's README.
    If you cannot run it, say so in the README. Tell the users what they need (integration.md, section "What to tell users").
-7. Porting an existing app? Read integration.md, section "Porting an existing app", before you change anything. Data that old versions left in IndexedDB or localStorage may be read once, written into the store and deleted
-   (a tested recipe is there); replace "saved locally" texts. Test it with a "seed" block in wds-verify.json (the old app's HTML, steps that type old data) and --migration-delete in the sandbox ("Writing wds-verify.json"). Never write window.__WDS_MIGRATION_TEST__ into the app: only wds-verify sets it. The new app must be opened from the same origin as the old one to find its data.
-8. Conflicts: the library's dialog is the default; decide in code only where a merge helps ("Conflicts in code"). Lock and unlock in one page: register store.onLock and store.onUnlock once ("Lock and unlock again").
+7. Porting an existing app? Read {{base}}/docs/porting.md before you change anything (inventory, the replacement of the storage calls, the import of an old export, tests, a checklist for apps with forms and modal dialogs). Data that old versions left in IndexedDB or localStorage is taken over with ONE call,
+   store.migrateLocal({ id, indexedDB, localStorage, map }): the library asks the person, copies into the vault, checks, and deletes the old data (it keeps it in the sandbox). Do not write that code yourself, and replace "saved locally" texts. h.skip deletes the row with the old data: copy everything a person made, skip only caches. It rejects only for wrong options; a mistake in map is a "failed" result with the message in the console.
+   Test it with a "seed" block in wds-verify.json (the old app's HTML, steps that type old data), also with --migration-delete in the sandbox ("Writing wds-verify.json"). Never write window.__WDS_MIGRATION_TEST__ into the app: only an automated test of yours (context.addInitScript) or wds-verify sets it.
+   The new app must be opened from the same place as the old one (same file name in the same folder, or the same origin) to find its data.
+   For a test against the real scope the join code is never typed into the chat or a command: the person puts it into the file ~/.wds/join-code in their own terminal (the commands are in porting.md, "The join code for tests"); you never read or print that file. The test ends with deleteVault, and you tell the person the ID of the test vault.
+8. Conflicts: the library's dialog is the default; decide in code only where a merge helps ("Conflicts in code"). Lock and unlock in one page: register store.onLock and store.onUnlock once ("Lock and unlock again"). The library's dialogs open above modal dialogs of your own: close yours in store.onLock and open none while a store call is pending (porting.md, "Checklist for apps with forms and modal dialogs").
 9. Downloads the person explicitly asks for (a CSV, an attachment) are fine, with a note that the file is not encrypted. Never download in the background.
 
 ## Sandbox
@@ -43,6 +49,7 @@ Source code, PROTOCOL.md and the verifier wds-verify (public): {{repo_url}}
 ## Pages
 
 - {{base}}/docs/integration.md - developer guide for you (Markdown; the same as HTML at {{base}}/docs/integration)
+- {{base}}/docs/porting.md - porting an existing app: the old storage, the one-call take-over of old browser data (store.migrateLocal), tests, checklist for form apps (Markdown; HTML at {{base}}/docs/porting)
 - {{base}}/docs/users.en.md and {{base}}/docs/users.de.md - guide for the people who use the app
 - {{base}}/docs/operator.md - for the operator of the service (escrow keys, recovery, quotas, sandbox, deployment)
 - {{base}}/export/ - standalone tool that unlocks a vault and downloads everything, decrypted, as a ZIP
@@ -55,5 +62,5 @@ Source code, PROTOCOL.md and the verifier wds-verify (public): {{repo_url}}
   inside the scope; the owner can share a vault with others (roles write and read).
 - Users unlock with an access ID and their own passphrase (at least 12 characters). A forgotten passphrase cannot be
   reset by the server. The access sheet holds a recovery code for the faculty recovery.
-- Default limits per record: 10 MB; per vault: 200 MB including history; the last 10 versions of every record are kept. A scope may set other values: the dashboard prompt and wds-verify print the current ones.
+- Default limits per record: 10 MB; per vault: 200 MB including history; the last 10 versions of every record are kept. A scope may set other values: the dashboard prompt and wds-verify print the current ones. Everywhere 1 MB = 1,048,576 bytes.
 - The service is online only. When the connection fails, the library offers a backup download of the unsaved values.

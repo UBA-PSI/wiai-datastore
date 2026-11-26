@@ -4,7 +4,7 @@ import { defineConfig } from '@playwright/test';
 // fake of the datastore API over HTTP (test/ui-server.mjs). Chromium only; WebKit/Firefox builds are not installed here.
 export default defineConfig({
   testDir: './test',
-  testMatch: ['ui.spec.mjs', 'ui-visual.spec.mjs', 'ui-store.spec.mjs', 'ui-attrs.spec.mjs'], // integration.spec.mjs has its own config (playwright.integration.config.mjs)
+  testMatch: ['ui.spec.mjs', 'ui-visual.spec.mjs', 'ui-store.spec.mjs', 'ui-attrs.spec.mjs', 'ui-layers.spec.mjs'], // integration.spec.mjs has its own config (playwright.integration.config.mjs)
   timeout: 90000,
   expect: { timeout: 15000 },
   workers: 1,

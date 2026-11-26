@@ -8,9 +8,7 @@ müssen und wer was sehen kann. [English version]({{base}}/docs/users.en)
 
 1. **Einen Beitrittscode** von der Person, die die App betreibt. Sie brauchen ihn einmal, um Ihren Tresor anzulegen.
 2. **Eine eigene Passphrase** mit mindestens 12 Zeichen. Vier oder mehr unzusammenhängende Wörter eignen sich gut
-   („lila Elefant marschiert langsam“). Die App weist sehr verbreitete Passphrasen (auch deutsche wie „ichliebedich123“) und solche aus bekannten Datenlecks zurück. Ist die Prüfung auf Datenlecks nicht erreichbar oder für die App abgeschaltet, verlangt sie eine stärkere Passphrase.
-   Für diese Prüfung gehen nur die ersten fünf Zeichen eines Hashwerts Ihrer Passphrase an den Dienst Pwned Passwords in den USA,
-   nie die Passphrase selbst.
+   („lila Elefant marschiert langsam“). Die App weist sehr verbreitete Passphrasen (auch deutsche wie „ichliebedich123“) und solche aus bekannten Datenlecks zurück. Ist die Prüfung auf Datenlecks nicht erreichbar oder für die App abgeschaltet, verlangt sie eine stärkere Passphrase. Wenn Sie eine Passphrase wählen, prüft Ihr Browser sie beim Dienst Pwned Passwords (USA) auf bekannte Datenlecks; der Dienst erhält Ihre IP-Adresse und die ersten fünf Zeichen einer Prüfsumme der Passphrase, nie die Passphrase selbst.
 3. **Ihr Zugangsblatt.** Nach dem Anlegen des Tresors zeigt die App es an: Ihre **Zugangskennung** (fünf Gruppen zu vier Zeichen) und
    Ihren **Wiederherstellungscode**. Drucken oder speichern Sie das Blatt und bewahren Sie es getrennt von Ihrem Rechner auf.
 
@@ -76,6 +74,17 @@ Kurz gesagt: **Die Daten sind Ende-zu-Ende-verschlüsselt; die Fakultät verwahr
 
 Ohne Wiederherstellungscode geht es nur, wenn Sie beim Anlegen eine E-Mail-Adresse als Wiederherstellungskontakt hinterlegt haben. Die Wartezeit
 beträgt dann 7 Tage. Fehlt beides, lassen sich Ihre Daten nicht wiederherstellen.
+
+## Daten aus einer früheren Version der App
+
+Gab es die App vorher als Version, die ihre Daten nur in Ihrem Browser gespeichert hat, fragt die neue Version beim Öffnen **einmal** nach: „In diesem Browser liegen … Einträge aus einer früheren Version dieser App … Sollen sie in Ihren Tresor kopiert und danach aus diesem Browser gelöscht werden?“
+
+- Die App kopiert die Einträge in Ihren Tresor, liest sie vom Server zurück und vergleicht sie, und löscht erst danach die alte Kopie im Browser. In Ihrem Tresor wird nichts überschrieben, und wenn das Kopieren nicht klappt, bleiben die alten Daten, wo sie sind.
+- **Laden Sie vorher eine Sicherung herunter**, wenn Sie eine möchten: eine ZIP-Datei mit allen alten Einträgen und ihren Dateien. Sie ist **nicht verschlüsselt**; bewahren Sie sie sicher auf oder löschen Sie sie, nachdem Sie hineingeschaut haben.
+- „Später“ ändert nichts; die alten Daten bleiben unverschlüsselt in diesem Browser, und die App fragt beim nächsten Mal wieder.
+- Passt etwas nicht in Ihren Tresor, listet die App es auf und lässt Sie jede Datei herunterladen, bevor etwas gelöscht wird.
+- Das kann nur die Eigentümerin oder der Eigentümer eines Tresors. Wurden Sie in den Tresor einer anderen Person eingeladen, zeigt die App einen Hinweis und lässt die alten Daten in Ruhe; übernehmen Sie sie in einem eigenen Tresor.
+- Öffnen Sie die neue Version so, wie Sie die alte geöffnet haben (dieselbe Datei am selben Ort oder dieselbe Webadresse): Ein Browser verwahrt die Daten jeder Adresse getrennt.
 
 ## Wenn ein Dialog „Testumgebung“ sagt
 

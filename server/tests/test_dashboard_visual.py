@@ -22,8 +22,8 @@ class Formats(DashCase):
     def test_numbers_follow_the_language(self):
         self.assertEqual(fmt_number(10.0, "de"), "10,0")
         self.assertEqual(fmt_number(10.0, "en"), "10.0")
-        self.assertEqual(fmt_bytes(10 * 1048576, "de"), "10,0 MiB")
-        self.assertEqual(fmt_bytes(10 * 1048576, "en"), "10.0 MiB")
+        self.assertEqual(fmt_bytes(10 * 1048576, "de"), "10,0 MB")
+        self.assertEqual(fmt_bytes(10 * 1048576, "en"), "10.0 MB")
         self.assertEqual(fmt_bytes(512, "de"), "512 B")
 
 
@@ -33,7 +33,7 @@ class Tables(DashCase):
         scope = self.make_scope(a)
         html = a.get(f"/scopes/{scope}").text
         self.assertIn('<td data-label="Kennung / E-Mail">', html)
-        self.assertRegex(html, r'<td data-label="Obergrenze" class="num">')
+        self.assertRegex(html, r'<td data-label="Höchstwert" class="num">')
         self.assertIn(".scroll td::before{content:attr(data-label)", html)          # the narrow-screen rule is in the page
         self.assertNotRegex(html, r"<td(?![^>]*data-label)")                        # no cell without a title
 
@@ -43,13 +43,13 @@ class Tables(DashCase):
         a.post(f"/scopes/{scope}/limits", {"max_value_bytes": "5", "vault_bytes": "", "scope_bytes": "", "max_vaults": "", "history_versions": ""})
         html = a.get(f"/scopes/{scope}/audit").text
         self.assertIn("Grenzen geändert", html)
-        self.assertIn("Größe eines Werts: 5,0 MiB", html)
+        self.assertIn("Größte Datei bzw. größter Eintrag: 5,0 MB", html)
         self.assertIn("Standard", html)
         self.assertNotIn("max_value_bytes=", html)
         self.assertIn('class="wrap"', html)
         en = a.get(f"/scopes/{scope}/audit?lang=en").text
         self.assertIn("Limits changed", en)
-        self.assertIn("Value size: 5.0 MiB", en)
+        self.assertIn("Largest file or entry: 5.0 MB", en)
         self.assertIn("default", en)
         self.assertIn("Zeiten in Ortszeit", html)
 
@@ -87,14 +87,14 @@ class FieldErrors(DashCase):
         scope = self.make_scope(a)
         r = a.post(f"/scopes/{scope}/limits", {"max_value_bytes": "-5"})
         self.assertEqual(r.status, 400)
-        self.assertIn("Größe eines Werts: Bitte geben Sie eine ganze Zahl von 1 bis 25 MiB ein.", r.text)
+        self.assertIn("Größte Datei bzw. größter Eintrag: Bitte geben Sie eine ganze Zahl von 1 bis 25 MB ein.", r.text)
         self.assertNotIn("Bitte geben Sie eine ganze Zahl ein.", r.text)
         r = a.post(f"/scopes/{scope}/limits", {"max_vaults": "501"})
-        self.assertIn("Tresore je App: Bitte geben Sie eine ganze Zahl von 1 bis 500 ein.", r.text)
+        self.assertIn("Höchstzahl der Tresore: Bitte geben Sie eine ganze Zahl von 1 bis 500 ein.", r.text)
         r = a.post(f"/scopes/{scope}/limits", {"max_vaults": "abc"})
-        self.assertIn("Tresore je App: Bitte geben Sie eine ganze Zahl ein.", r.text)
+        self.assertIn("Höchstzahl der Tresore: Bitte geben Sie eine ganze Zahl ein.", r.text)
         r = a.post(f"/scopes/{scope}/limits?lang=en", {"max_value_bytes": "0"})
-        self.assertIn("Value size: please enter a whole number from 1 to 25 MiB.", r.text)
+        self.assertIn("Largest file or entry: please enter a whole number from 1 to 25 MB.", r.text)
 
     def test_slug_pattern_is_valid_under_the_v_flag(self):
         # Browsers compile the pattern attribute with the v flag; an unescaped hyphen at the end of a class is invalid there

@@ -55,6 +55,31 @@ async function waitHealthy(base, child, log) {
   }
 }
 
+// A second server on the same escrow keys and bundle with a [sandbox] section (open enrollment, nightly wipe): the sandbox scope is SANDBOX_ID.
+export const SANDBOX_ID = 'sandbox-000000';
+export async function startSandboxServer(stack) {
+  const port = await freePort();
+  const cfg = join(stack.tmp, 'sandbox-' + port + '.ini');
+  const hash = createHash('sha256').update(stack.operatorToken).digest('base64url');
+  writeFileSync(cfg, '[server]\nclient_dir = ' + stack.bundleDir + '\nread_only_threshold = 1.0\nsweep_interval = 0\npublic_base = http://127.0.0.1:' + port + '/datastore\n'
+    + '[escrow]\ncurrent_e_pub = ' + stack.escrow.current.e_pub + '\ncurrent_s_pub = ' + stack.escrow.current.s_pub + '\n'
+    + 'spare_e_pub = ' + stack.escrow.spare.e_pub + '\nspare_s_pub = ' + stack.escrow.spare.s_pub + '\n[operator]\ntoken_hashes = ' + hash + '\n'
+    + '[sandbox]\nscope_id = ' + SANDBOX_ID + '\nwipe_time = 03:30\ntimezone = Europe/Berlin\n');
+  let out = '';
+  const db = join(stack.tmp, 'sandbox-' + port + '.db');
+  const child = spawn(pythonBin(), ['-m', 'wds_server', '--db', db, '--host', '127.0.0.1', '--port', String(port), '--config', cfg], { cwd: SERVER_DIR, stdio: ['ignore', 'pipe', 'pipe'] });
+  child.stdout.on('data', (d) => { out += d; });
+  child.stderr.on('data', (d) => { out += d; });
+  const origin = 'http://127.0.0.1:' + port;
+  for (let i = 0; ; i++) {
+    if (child.exitCode !== null) throw new Error('sandbox server exited:\n' + out);
+    try { if ((await fetch(origin + '/datastore/healthz')).ok) break; } catch (e) { /* not yet */ }
+    if (i > 300) throw new Error('sandbox server did not start:\n' + out);
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return { origin, service: origin + '/datastore/', scope: SANDBOX_ID, stop: () => new Promise((resolve) => { if (child.exitCode !== null) return resolve(); child.once('exit', resolve); child.kill('SIGTERM'); setTimeout(() => child.kill('SIGKILL'), 5000); }) };
+}
+
 // Start the stack. Returns {service, scope, joinCode, ..., startServer(opts), stop()}.
 export async function startStack() {
   const tmp = mkdtempSync(join(tmpdir(), 'wds-int-'));

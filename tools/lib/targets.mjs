@@ -63,7 +63,12 @@ export async function loadKnownHashes(flags = {}) {
   }
   if (online) {
     const differs = !!local && canonical(online) !== canonical(local);
-    return { known: online, source: url, differs, note: differs ? 'Your clone of the repository has different library hashes than the service: it is outdated; run git pull in the clone (' + REPO_URL + ').' : '' };
+    // the clone has a version (or another hash for the newest version) that the service does not publish: the clone is newer, not outdated
+    const newer = differs && Object.keys(local).some((v) => !online[v] || (!online[v].frozen && online[v].sri !== local[v].sri));
+    const note = !differs ? '' : newer
+      ? 'Your clone has a library build that the service does not publish yet (an unreleased version, or another hash for the newest one). That is expected while the library is being changed: the static checks use the published hashes, so a page with the hash of your own build fails the integrity check. For an unreleased build run with --hashes client/dist/hashes.json (the hashes of your clone), and --scope-check off when the scope is not registered yet.'
+      : 'Your clone of the repository has different library hashes than the service: it is outdated; run git pull in the clone (' + REPO_URL + ').';
+    return { known: online, source: url, differs, note };
   }
   if (local) return { known: local, source: 'the local clone (client/dist/hashes.json); ' + url + ' ' + why, differs: false, note: '' };
   throw new UsageError('the published library hashes are not available: ' + url + ' ' + why + ', and there is no local clone with client/dist/hashes.json. Clone ' + REPO_URL + ' and run wds-verify from the clone, or pass --hashes <file>.');

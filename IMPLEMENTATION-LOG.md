@@ -582,3 +582,144 @@ gave a byte-identical dist and hashes.
 | `scripts/test-examples.sh` | 36 passed (Chromium) |
 
 Nothing committed.
+
+## Round F: library dialogs in the top layer, store.migrateLocal, porting.md, a dashboard for lay staff
+
+### Input
+
+The clean-room port of the "Literaturliste" (IndexedDB with auto-increment ids, PDFs as Blobs, a reference that points to its PDF, a localStorage settings key), built with only llms.txt, integration.md and the public repository. Its feedback, with the maintainer's three wishes for this round
+(a library helper for the migration instead of the 200-line recipe; a dashboard whose jargon lay faculty staff understand or that explains it; a simple default in the dashboard and an expert view for the advanced options).
+
+| # | Feedback / wish | Decision |
+|---|---|---|
+| 1 | A modal `<dialog>` of the app (opened with `showModal()`) blocked the library's conflict dialog: the page hung | The library's dialogs are modal `<dialog>` elements in the top layer; toasts and the sandbox bar are popovers hosted inside the topmost modal; a library dialog is put on top again when an app modal opens later; lock closes every library dialog (LIB). Docs: "The library's dialogs and your own modal dialogs", checklist for forms (porting.md, section 7) |
+| 2 | The recipe needs adapting in more places than its comment says; texts fixed in English; reference in the other direction; no word on dead references; no five-liner for the download dialog | `store.migrateLocal({ id, indexedDB, localStorage, tagged, map, texts })`: the library owns the dialogs (German and English), the ids (`h.id`, `h.ref` returns null for a dead reference), the safety logic; porting.md has two complete examples (the Literaturliste shape with references both ways and files, and zeit-notizen) |
+| 3 | The 200-line recipe | Gone from every document. `from` on every entry and `h.skip` (every old row is accounted for or nothing is deleted), the marker is the proof (a start with the marker never compares the vault again), map runs twice and must be identical, backup is a ZIP with the files, "differs" and "too large" are questions with answers, a second tab gets `busy`, members are `skipped` with a backup button, no `applySettings` (settings are filled by the library with `WDS.fillGaps`) |
+| 4 | `collection.get(id, { fresh })` undocumented | Added to the library and documented (integration.md, method list) |
+| 5 | A one-language app and `setLocale` | Every app calls `store.setLocale` once right after `WDS.connect` (a one-language app with its language), integration.md section 4 and llms.txt rule 3 say so; the example app of section 14 does it |
+| 6 | The join code: an environment variable does not survive an agent's tool call and counts as a command line | The code is read from a file that the person creates in their own terminal (`~/.wds/join-code`, `WDS_JOIN_CODE_FILE`); checks on the file; the agent never reads it; the real-scope test is optional; Windows with Notepad (porting.md, "The join code for tests"; tools/README.md) |
+| 7 | May an own test set `__WDS_MIGRATION_TEST__`? | Yes, in the developer's own automated browser (`context.addInitScript`); never in the app; the library honours it only with `navigator.webdriver === true` and only in a sandbox, with one console warning |
+| 8 | MiB in prompt and dashboard, MB in the docs | MB everywhere (1 MB = 1,048,576 bytes), said once in the documents; the Argon2id memory keeps its binary name |
+| 9 | Popup blocker after `await getBlob` | The window is opened inside the click and filled later, with a download link as fallback (integration.md "Files", porting.md checklist; both blocks are tested to be identical) |
+| 10 | wds-verify: restored search filter, which field is "neither shown nor written", the "Deleting local data" heuristic, flaky dialog handling, the order of a seed run | TOOLS (see tools/README.md); the order of the seed run is copied into porting.md and a test checks the order of its six steps; `afterReload` reset of a restored filter is in "Writing wds-verify.json" |
+| 11 | `porting.md` as its own file; a checklist for form apps | docs/site/porting.md (served at /docs/porting and /docs/porting.md, linked from llms.txt and integration.md; section 16 of integration.md is a pointer); checklist with six points plus the popup block |
+| 12 | Dashboard: jargon, default and expert view | SERVER: glossary (app ID, vault, join code, breach check, checksum, faculty recovery key, pause, activity log), a default create form (name, contact, description) and a default scope page with next steps, usage and help; a folded expert view with a cookie `wds_expert`; the operator sees the expert area open. DOCS: integration.md section 1 describes it, users.*.md use the same words |
+
+### Changes by area (DOCS)
+
+- docs/site/porting.md (new): sections 1 to 7, the options and `map` reference, the ids and the tag decision table, the two examples, the result table (what the app does), what the person sees, the safety rules, the seed run in order, the test global, the join code file, the test vault, the checklist for forms.
+- docs/site/integration.md: section 1 for the new dashboard; the breach-check sentence at the top, in section 13 and in llms.txt; section 3 wording (checksum); `migrateLocal`, `collection.get(id, { fresh })`, one language per screen, units; a subsection on the library's dialogs and own modal dialogs; the popup block; the table of dialogs with `migrate`, `migrate-differs`, `migrate-large`, readiness (`aria-busy`) and the toast key `migration`; section 12 (restored filters, named fields, the seed block, the test global); section 16 shrunk to a pointer. llms.txt rule 7 and the page list; users.de.md and users.en.md (app ID, checksum, the breach-check sentence, "Data from an earlier version"); operator.md and PLAN.md/PROTOCOL.md in MB; PLAN.md describes the dialogs, the migration, the dashboard and porting.md; export.html says checksum.
+- examples/zeit-notizen: `old/index.html` (the local-only predecessor), the migration through `store.migrateLocal` (the block between two marker comments is the one of porting.md, a test compares them), a `seed` block in wds-verify.json (the report in the README is a new run: 30 checks passed), the privacy text with the breach-check sentence, a Playwright case for the take-over (Chromium).
+- examples/docs-recipes.spec.mjs: the hand-recipe cases are gone (LIB's migrate.spec.mjs has their safety properties); new: the Literaturliste block of porting.md against a seeded old database (real server: migrated and deleted, the question asked once, references both directions, a dead reference, settings that do not overwrite, a second start finds nothing; tagged false gives the ids of the import; the sandbox keeps and a rerun asks nothing; the test global deletes), the options block, the start function, the zeit-notizen block equals the app's, the seed block equals the example's, the popup block, the checklist block, the autosave block, the static findings of the Literaturliste block and of hand-made code, the migration of zeit-notizen under wds-verify (mock deletes, sandbox keeps, `--migration-delete` deletes), and a test that every code block of both documents is run or parsed and that a new block must be classified.
+- server/tests/test_docs.py: porting.md served and linked, the privacy and breach-check sentences in every document (identical to prompt.py), the hand recipe words gone from docs/site, no MiB, section 16 is a pointer, users documents explain the old data question.
+
+### Deviations from the design (DOCS)
+
+- The design asked for `applySettings`, `h.ending`, `h.tag` and `h.fail` only; the library has no `applySettings` and no `h.ending`/`h.tag` (critique 4, 10), `from` is required (critique 1). porting.md and the examples follow the library, not the design text.
+- The zeit-notizen example builds the ending of a file id itself (nothing refers to a file's id); the Literaturliste block uses the fixed ending `.pdf` on both sides.
+- porting.md's headings are numbered only for its seven main sections; references in the other documents name the heading ("The join code for tests").
+- A popover fallback for old engines (critique 32) is not implemented by LIB; the documents give the minimum browsers.
+
+### Test counts (DOCS, sequential)
+
+| Suite | Result |
+|---|---|
+| `scripts/test-server.sh` | 491 tests OK |
+| `scripts/test-examples.sh` | 37 passed (Chromium); the porting, popup, checklist, dialog-above-modal and block cases of docs-recipes.spec.mjs also in Firefox and WebKit (40 passed) |
+| `scripts/check-public.sh` | clean |
+| LIB (their report) | `scripts/test-client.sh`: 129 node tests and 80 Playwright cases (Chromium); `scripts/test-integration.sh`: 147 passed, 27 skipped (WebKit cannot keep Blobs in IndexedDB on file:// pages) in three engines |
+
+Nothing committed.
+
+## Round F, review fixes
+
+Reviewers (code and visual review, advisor, a dogfood port that used only the docs) found 30-odd points. What changed, and what was rejected.
+
+### Library (client/src/wds-ui.js)
+
+- **`h.skip` no longer drops data silently.** Skipped rows are deleted with the old data, so the question now says so and "Take over" waits for a box (`migrate-skip-ack`) or the backup download; the zeit-notizen example copies an orphaned attachment with `note: null` and a timer of a deleted project without the project instead of skipping them. porting.md says that `h.skip` is for rows that are no user data.
+- **`map` gets copies of the rows** (containers copied, Blobs and buffers shared) instead of frozen originals: a classic-mode `v.pdfId = h.ref(...)` now works and the old rows stay untouched.
+- **`old.rows(name)` is `[]` for every configured store** whose database does not exist (it threw, so the app did not start for such users).
+- **Only wrong options reject.** Every mistake that `map` or one user's data causes (a missing `from`, an id with a slash, a `created` that is no number, a damaged JSON key) is a `failed` result with the message in `console.error`: the page still starts.
+- **Every notice that leaves the old data has a backup button**, and the result has a non-enumerable `downloadBackup()`; a member's notice is remembered as dismissed (`wds:migrate:<id>:member`); a backup that does not fit into a ZIP is saved as the data file plus every file (and the dialog says so); "Do not take over; delete the old data" (`discarded`, view `migrate-discard`); no question when only settings are left (`done.settings`).
+- **Marker v2: per entry, what `map` made of it** (name to a short hash of value, meta, date, type), plus the fingerprints of skipped rows. A corrected `map` makes its entries new again; one localStorage key that holds many entries is compared per entry, so one added entry is one new entry (the "Entries that differ" dialog no longer shows what the person edited). A console warning names the marker when it is found in the sandbox.
+- **Cost of a start.** The old storage is first only counted (`migrateAnyData`), then read after the unlock and the role check, and rows are compared by a cheap fingerprint (no file is read); the bytes of every file are compared once, right before the delete (`deepBytesEqual`), and every copy is checked byte for byte as before. The snapshot is taken after the unlock.
+- **Layers.** Detection of an app dialog above a library dialog no longer tracks elements (a reused `<dialog>` was missed): a MutationObserver on the `open` attribute and a check of what is on top at the middle of the library dialog (`elementFromPoint`). The 400 ms timer runs only while a library dialog or an app modal is open.
+- Message for two stores with the same keys corrected (`h.id(["notes", row.key])`).
+
+### Tests
+
+- migrate.spec.mjs: pages are served over `http://127.0.0.1` and WebKit runs in a persistent profile (an ephemeral one cannot keep Blobs): all 32 cases run in Chromium, Firefox and WebKit (before: every case that seeded an old IndexedDB was skipped in WebKit). New cases: sloppy-mode `map` that changes rows, a missing old database, `h.skip` confirmation, failed run with backup, a changed `map`, one localStorage key with many entries, discard, member dismissal.
+- ui-layers.spec.mjs: a reused app dialog that is shown again above a library dialog. tools: static checks (comments masked, real sandbox guard, aliases, `objectStore().clear()`, storage next to `migrateLocal`, the breach sentence word for word), JSON downloads outside the library's dialog are leaks, a toast that covers a click, `h.skip` warning, `--script-tag` and `--scope-check off`. server: the lay texts, the anchors, the page script. examples: orphaned attachment and timer.
+
+### Tools and dashboard
+
+- wds-verify: `--script-tag` prints the complete tag with `onerror` (the text of docs.py, tested), `--hashes client/dist/hashes.json` for an unreleased build, "clone is newer than the service" instead of "outdated", `--scope-check off` for an unregistered scope, the CSP place named as in integration.md; a click covered by a library notice is retried after dismissing it and noted; the tool ticks `migrate-skip-ack` and warns (`migration-skipped-rows`).
+- Dashboard: an intro on the home page (what an app and a vault are), the terms explained where they first appear (Tresor, Beitrittscode, Wiederherstellungscode), "Versionen" instead of "Fassungen", no terminal instructions in the lay view (one sentence: Claude may ask for help with an optional test), the help links say which documents are for Claude (English), mentions of the expert area are links (`#vaults`, `#limits`, `#enrollment`, `#admins`) and the page script opens the folded area for a hash link; the test vault is deleted by Claude itself (prompt) and the person deletes only the ID Claude names.
+- Docs: porting.md (skip, copies, failed results, damaged values, corrected map, shared keys, seed steps that prove something, notices above dialogs, own notices in dialogs, return values, the join-code file), integration.md (placeholders in repo files, unreleased library, `--scope-check`), llms.txt, tools/README.md, client/README.md, PLAN.md.
+
+### Rejected or deferred, with reasons
+
+- **No library change for toasts over app dialogs.** The corner cannot be right for every app dialog; the tool now dismisses a covering notice and says so, and the docs name position, lifetime and the dismiss step.
+- **No step kinds for lock, unlock or a second client** in wds-verify: each needs a rule for what the person sees mid-run; porting.md shows how to test them against a mock in an own Playwright test (`startMock`).
+- **drive-library still insists on mode 600 for the join-code file**: the test is optional, the lay view no longer sends anyone to a terminal, and a looser mode would make the check meaningless; porting.md names the file and the fix command.
+- **The popover fallback for older engines** stays deferred; the minimum browsers are documented (Chrome/Edge 114, Firefox 125, Safari 17).
+- Reviewer proposals to keep per-key deletes for skipped rows: not possible with one transaction per store; the confirmation and the backup are the guard.
+
+## Round F: second clean-room trial
+
+### Input
+
+A Claude in a clean-room container ported an unrelated local-only app, the "Literaturliste" (IndexedDB stores `refs` and `pdfs` with auto-increment ids, PDFs as Blobs, a reference that points from the entry to its PDF, a localStorage key for settings), with only the public documents and a clone of the public repository (library 1.0.0, commit 0e0b0fd). The port passed wds-verify against the production sandbox: 31 passed, 0 failed, 1 warning (the flaky "Test run notes: dialog handling failed" warning, which also appeared for examples/zeit-notizen); with `--migration-delete` 31 passed, 0 failed, 0 warnings. Its FEEDBACK.md:
+
+- Missing, with consequences: (1) a modal `<dialog>` of the app blocked the library's conflict dialog, so the page hung (found only in its own test; wds-verify creates no conflicts); (2) the migration recipe needed adapting in more places than its comment said, with texts fixed in English; (3) a reference in the other direction (entry to PDF) needed a reverse map, an id ending computable from both sides and a null for a dead reference; (4) how `ui.offerDownload` should look without a background download; (5) whether `collection.get(id, opts)` has `fresh`; (6) the language of a one-language app; (7) a contradiction in the join-code rule (an environment variable does not survive an agent's tool call, so it ended up on a command line); (8) whether an own test may set `__WDS_MIGRATION_TEST__`; (9) MiB in the prompt and dashboard, MB in the documents; (10) the popup blocker after `await getBlob()`.
+- Guesses around wds-verify: a restored search filter empties the list after the reload; the order of a seed run; "1 other typed value" without naming the field; the "Deleting local data" heuristic that looked only at the innermost function (a `forEach` callback); the truncated and flaky dialog-handling note (an unready unlock dialog after the reload, once a dialog without a view).
+- Smaller wishes: section 16 as its own file; a library helper instead of the 200-line recipe; a checklist for form apps; a `redeemInvite` helper in drive-library.
+- What worked: llms.txt as the entry, script tag and CSP to copy, the scope check, the migration recipe once adapted, `seed` plus `--migration-delete` in the sandbox, `data-wds` attributes with drive-library, the "Not tested" list, the error objects.
+
+The maintainer's wishes for this round: (1) a library helper `store.migrateLocal` replacing the copy-paste recipe; (2) dashboard jargon that lay faculty staff understand, or that is explained in plain words; (3) a simple default in the dashboard (a standard variant for normal use, few choices) and an expert view with the advanced options. Only test vaults were to be used.
+
+### Decisions
+
+The table in "Round F: library dialogs in the top layer, …" above maps every point to its decision; in short:
+
+- **Top layer.** Every library dialog is a modal `<dialog>` opened with `showModal()`; toasts and the sandbox bar are `popover="manual"` hosted in the topmost modal; a library dialog is lifted again when an app modal opens later (MutationObserver on `open` plus an `elementFromPoint` check while a dialog is open). porting.md section 7 tells apps to close their own modals in `onLock`.
+- **`store.migrateLocal`** replaces the recipe in every document (PLAN.md §8.5): `from` on every entry or `h.skip`, `map` run twice, create-only copies read back byte for byte, a marker per run, deletion only after a final byte comparison, bilingual dialogs owned by the library, `tagged`, `busy`/`skipped`/`declined`/`discarded`/`failed`/`partial`/`migrated`, `downloadBackup()`.
+- **porting.md** (section 16 of integration.md moved and rewritten, two complete examples incl. the Literaturliste shape, the seed order, the test global for own automated tests, the join-code file, the checklist for forms). `collection.get(id, { fresh })` documented; every app calls `setLocale` once (a one-language app with its language); the popup block (open the window inside the click).
+- **Join code for tests** in a file the person creates in their own terminal (`~/.wds/join-code` or `WDS_JOIN_CODE_FILE`, mode 600, outside the repository); the agent never reads or prints it; the real-scope test is optional.
+- **wds-verify**: unready dialogs wait instead of failing, `fillWhenReady`, longer call logs, covered clicks dismissed and noted, the unnamed field named, the enclosing named function for the delete heuristic, `--script-tag` with `onerror`, `--scope-check off`, `--hashes` for an unreleased build, `redeemInvite` in drive-library (PLAN.md §9).
+- **Dashboard**: a default view (create form with name, contact, description and a sentence that names the standard variant: join code, breach check on, default limits; scope page with next steps, usage, help) and a folded expert view (cookie `wds_expert`, open for the operator, hash links open it); every term explained where it first appears (the glossary of PLAN.md §10); no terminal instructions in the lay view; MB everywhere (1 MB = 1,048,576 bytes).
+
+### Closing review: what was not done, and why
+
+Not committed. Fixed all the critical and major points plus the cheap minor ones. Reasons for what I did not do:
+
+1. No library change for toasts covering app dialog buttons: no corner suits every dialog, so wds-verify dismisses a covering toast and notes it, and porting.md names the position, lifetime and the dismiss step.
+2. No lock/unlock/conflict step kinds in wds-verify (each needs a rule for what the person sees mid-run); porting.md documents `startMock` for own Playwright tests.
+3. drive-library keeps the mode-600 rule for the join-code file (looser would make the check meaningless); the lay view no longer sends anyone to a terminal, and porting.md names the real file (`join-code`, plain text) and the `chmod` fix.
+4. The popover fallback for older engines stays deferred; minimum browsers (Chrome/Edge 114, Firefox 125, Safari 17) are documented.
+5. Per-key deletion of the claimed rows only was not possible (one clear per store in one transaction); the confirmation box or backup download is the guard instead.
+
+Design notes:
+
+- The old SRI of three files was replaced by the new build hash (`client/dist/hashes.json`; the build is not frozen).
+- File hashes are no longer computed at every start (a cheap fingerprint instead), but file bytes are compared once right before the delete, and copies are still verified byte for byte.
+- The migration marker format changed (v2; nothing is released).
+- Added the `discarded` status and `result.downloadBackup()`.
+- The WebKit tests run in a persistent profile because an ephemeral context aborts Blob writes to IndexedDB.
+- The dashboard test for the link that opens the folded area was verified in a real browser by script, not added to a suite (the server tests have no browser).
+- PLAN.md now describes the top-layer dialogs (§8.5), `migrateLocal` (§8.5), the join-code file (§8.5, §10), the tests of the top layer and the migration (§8.6), the wds-verify changes and drive-library as a test API (§9), the default and expert view and the glossary (§10), the units (§10.1) and porting.md (§13).
+- Scratchpad: the dogfood port, the advisor and review folders were deleted; the latest dashboard screenshots stay.
+
+### Test counts (final sequential run)
+
+| Suite | Result |
+|---|---|
+| `scripts/test-server.sh` | 497 tests OK |
+| `scripts/test-client.sh` | 129 node tests, 81 Playwright cases passed (Chromium) |
+| `scripts/test-tools.sh` | 109 passed |
+| `scripts/test-integration.sh` | 191 passed, 4 skipped (Chromium, Firefox, WebKit) |
+| `scripts/test-examples.sh` | 38 passed (Chromium) |
+| `scripts/check-public.sh` | clean (162 files) |
+
+Nothing committed.

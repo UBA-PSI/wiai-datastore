@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
+import { inflateSync } from 'node:zlib';
 import { createRequire } from 'node:module';
 import { expect } from '@playwright/test';
 import { startWorld, DIST } from './ui-server.mjs';
@@ -41,6 +42,32 @@ export function writePage(name, { src, integrity, css } = {}) {
 }
 
 export async function startTestWorld(opts) { return startWorld(opts); }
+
+// The colour [r, g, b] of one pixel of a PNG (8 bit, RGB or RGBA, not interlaced; what Playwright's screenshot() returns).
+export function pixelAt(png, x, y) {
+  let pos = 8, width = 0, bpp = 4;
+  const idat = [];
+  while (pos < png.length) {
+    const len = png.readUInt32BE(pos), type = png.toString('latin1', pos + 4, pos + 8), data = png.subarray(pos + 8, pos + 8 + len);
+    if (type === 'IHDR') { width = data.readUInt32BE(0); bpp = data[9] === 6 ? 4 : 3; if (data[8] !== 8 || data[12] !== 0) throw new Error('unsupported PNG'); }
+    if (type === 'IDAT') idat.push(data);
+    pos += 12 + len;
+  }
+  const raw = inflateSync(Buffer.concat(idat)), stride = width * bpp, rows = [];
+  let prev = Buffer.alloc(stride);
+  for (let r = 0; r <= y; r++) {
+    const f = raw[r * (stride + 1)], line = Buffer.from(raw.subarray(r * (stride + 1) + 1, (r + 1) * (stride + 1)));
+    for (let i = 0; i < stride; i++) {
+      const a = i >= bpp ? line[i - bpp] : 0, b = prev[i], c = i >= bpp ? prev[i - bpp] : 0;
+      let add = 0;
+      if (f === 1) add = a; else if (f === 2) add = b; else if (f === 3) add = (a + b) >> 1;
+      else if (f === 4) { const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c); add = pa <= pb && pa <= pc ? a : pb <= pc ? b : c; }
+      line[i] = (line[i] + add) & 255;
+    }
+    prev = line;
+  }
+  return [prev[x * bpp], prev[x * bpp + 1], prev[x * bpp + 2]];
+}
 
 // Open the page and create the store: window.store.
 export async function openApp(context, w, { page: url, cfg } = {}) {

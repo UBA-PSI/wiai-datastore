@@ -1,5 +1,8 @@
 // wds-verify: the migration test (the "seed" of wds-verify.json), the union of the views after the reload, the placeholder {canary}, and the sandbox
 // wording. The old app is a tiny local-only notes page (IndexedDB "oldapp" + one localStorage key); the new app copies it into the vault.
+// The new app here migrates BY HAND (own prompt, own deletion, answered by steps): the tests check what the tool sees, whatever the app does, including the
+// bad ways (no copy, a plaintext copy, a deletion in the sandbox, a forgotten store). The good way, store.migrateLocal with the library's own dialogs, is in
+// verify-dynamic-roundf.test.mjs; a hand-made migration also gets the static finding 'hand-migration' (verify-static.test.mjs).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
@@ -25,7 +28,7 @@ document.getElementById('save').onclick = function () {
 </script></body></html>`;
 
 // The new app: after unlocking it looks for old notes, asks (the prompt is answered by a step of wds-verify.json), copies them into the vault
-// and deletes the old data unless the vault is the sandbox (the recipe of docs section 16, in short).
+// and deletes the old data unless the vault is the sandbox (what store.migrateLocal does for an app, written by hand).
 const NEW_BODY = '<ul id="list"></ul><p id="result"></p><div id="ask" hidden>Copy the old notes? <button id="yes" type="button">Copy</button></div>'
   + '<label>New note <input id="n" type="text"></label><button id="add" type="button">Add</button>';
 const MIGRATE = `
@@ -106,6 +109,9 @@ test('migration (mock): the old values are typed into the old app, the prompt is
   assert.equal(r.find('reload').level, 'pass');
   assert.equal(r.find('saved').level, 'pass');
   assert.doesNotMatch(r.parsed.notTested.join('\n'), /migration of old local data was not tested/);
+  // the app migrates by hand: the static check says what to use instead
+  assert.equal(r.find('hand-migration').level, 'warn');
+  assert.match(r.find('hand-migration').detail, /store\.migrateLocal \(porting\.md\)/);
 });
 
 test('migration: an app that never copies the old data fails (not visible), and the old data is still there', { timeout: 240000 }, async () => {
@@ -142,7 +148,7 @@ test('without a seed, an app that mentions a migration is told that it was not t
   assert.match(r.parsed.notTested.join('\n'), /migration of old local data was not tested/);
 });
 
-test('migration: a prompt that names the old titles but never copies or deletes does not pass (the old data is still there); a download of the old data other than JSON is a leak, the JSON backup is not', { timeout: 300000 }, async () => {
+test('migration: a prompt that names the old titles but never copies or deletes does not pass (the old data is still there); a download of the old data is a leak, also as JSON (only the library\'s backup is expected)', { timeout: 300000 }, async () => {
   const prompting = variant(variant(variant(newApp(), "for (var j = 0; j < todo.length; j++) await store.set('notes/' + todo[j].id, { title: todo[j].title });", ''), 'await clearOld(keep);', ''),
     "await new Promise(function (ok) { $('ask').hidden = false;", "await new Promise(function (ok) { $('ask').firstChild.textContent = 'Copy ' + todo.map(function (t) { return t.title; }).join(', ') + '? '; $('ask').hidden = false;");
   const r = await verify(writeMigApp(prompting, { seed: SEED, steps: [{ click: '#yes' }] }));
@@ -155,9 +161,9 @@ test('migration: a prompt that names the old titles but never copies or deletes 
   assert.equal(text.code, 1, JSON.stringify(text.failures));
   assert.ok(text.titles('fail').includes('Canary found in download'), text.titles('fail').join('|'));
   const json = await verify(writeMigApp(download('oldapp-backup.json', 'JSON.stringify(todo)', 'application/json'), { seed: SEED, steps: [{ click: '#yes' }] }));
-  assert.equal(json.code, 0, JSON.stringify(json.failures));
-  assert.equal(json.find('leak-download').level, 'pass');
-  assert.match(json.find('downloads').detail, /a JSON download that holds the seeded old data/);
+  assert.equal(json.code, 1, JSON.stringify(json.failures));
+  assert.equal(json.find('leak-download').level, 'fail');
+  assert.match(json.find('leak-download').detail, /An app never downloads data in the background/);
 });
 
 test('migration: everything the old app stored must be gone, not only the places that hold a typed value; seed.keep names what stays; a file input without an upload step is pointed out', { timeout: 300000 }, async () => {

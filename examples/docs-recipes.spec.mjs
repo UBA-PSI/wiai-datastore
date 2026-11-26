@@ -1,52 +1,29 @@
-// Tests of the code recipes of docs/site/integration.md, against the REAL server and the REAL bundle (scripts/test-examples.sh).
-// Every recipe is taken from the served document (the first code block after its heading), put into a page that carries the documented
-// Content-Security-Policy and script tag, and run from a file:// page. Nothing here re-types a recipe: if the document changes, the test runs the new text.
-//  - Collections (several devices, concurrent adds, err.stored after a lost index write), conflicts in code (settings merge, keepTheirs, c.ask()),
-//    lock and unlock again (onLock/onUnlock registered once, a pending edit survives the lock), import of an old export,
-//  - the one-time migration of old IndexedDB/localStorage data: owner migrates and deletes, the sandbox copies and keeps, a second browser
-//    with the same old ids does not collide, an interrupted run continues, a declined run changes nothing, a blocked delete reports,
-//    data that does not fit stops before writing, the settings are snapshots that are taken over exactly once (state in the vault), a Blob replaced by one with other bytes is noticed,
-//    the marker is per browser, a start with a marker re-reads the copy before it deletes, toNewRecords stops for rows it cannot map,
-//  - the example app of section 14 and the wds-verify.json of section 12 pass wds-verify (mock target), the migration recipe passes its static checks,
+// Tests of the code blocks of docs/site/integration.md and docs/site/porting.md, against the REAL server and the REAL bundle (scripts/test-examples.sh).
+// Every block is taken from the served document (by its heading), put into a page that carries the documented Content-Security-Policy and script tag,
+// and run from a file:// page. Nothing here re-types a block: if the document changes, the test runs the new text.
+//  - integration.md: collections (several devices, concurrent adds, err.stored after a lost index write), conflicts in code (settings merge, keepTheirs, c.ask()),
+//    lock and unlock again (onLock/onUnlock registered once, a pending edit survives the lock), autosave, files (delete with attachments, the file in a new tab inside the click),
+//    set and created, the table of the library's dialogs against client/src/wds-ui.js, the example app of section 14 and the wds-verify.json of section 12 under wds-verify,
+//  - porting.md: the import of an old export, the options of store.migrateLocal, the Literaturliste block against a seeded old database (real server: migrated and deleted, the sandbox
+//    keeps, the test global deletes), the zeit-notizen block (identical to the one in examples/zeit-notizen/index.html), the start function, the checklist for apps with forms and
+//    modal dialogs, the popup block, the seed block (identical to the one of the example), the migration under wds-verify (mock deletes, sandbox keeps, --migration-delete deletes),
+//    static findings of the blocks,
+//  - every code block of both documents is accounted for (run, or syntax-checked), so that a new block cannot slip in untested,
 //  - the documents: no placeholder left, the repository named, links resolve.
+// The safety properties of the migration itself (interrupted runs, changed rows, too large, differing entries, two tabs, ...) are tested by client/test/migrate.spec.mjs.
 // Run with scripts/test-examples.sh (Chromium; WDS_BROWSERS=chromium,firefox,webkit for more).
 import { test as base, expect } from '../client/node_modules/@playwright/test/index.mjs';
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, cpSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { startStack, pythonBin, freePort, ROOT, SERVER_DIR } from '../client/test/integration-env.mjs';
+import { spawnSync } from 'node:child_process';
+import { startStack, startSandboxServer, SANDBOX_ID, ROOT } from '../client/test/integration-env.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PASS = 'purple-elephant-marching-slowly';
-const SANDBOX_ID = 'sandbox-000000';
 
 // ---------------------------------------------------------------------------------------------------------------------------
 // the stack: the real server with the documentation (public_base set), and a second server with a [sandbox] section for the sandbox cases
-
-async function startSandboxServer(stack) {
-  const port = await freePort();
-  const cfg = join(stack.tmp, 'sandbox-' + port + '.ini');
-  const hash = createHash('sha256').update(stack.operatorToken).digest('base64url');
-  writeFileSync(cfg, '[server]\nclient_dir = ' + stack.bundleDir + '\nread_only_threshold = 1.0\nsweep_interval = 0\npublic_base = http://127.0.0.1:' + port + '/datastore\n'
-    + '[escrow]\ncurrent_e_pub = ' + stack.escrow.current.e_pub + '\ncurrent_s_pub = ' + stack.escrow.current.s_pub + '\n'
-    + 'spare_e_pub = ' + stack.escrow.spare.e_pub + '\nspare_s_pub = ' + stack.escrow.spare.s_pub + '\n[operator]\ntoken_hashes = ' + hash + '\n'
-    + '[sandbox]\nscope_id = ' + SANDBOX_ID + '\nwipe_time = 03:30\ntimezone = Europe/Berlin\n');
-  let out = '';
-  const db = join(stack.tmp, 'sandbox-' + port + '.db');
-  const child = spawn(pythonBin(), ['-m', 'wds_server', '--db', db, '--host', '127.0.0.1', '--port', String(port), '--config', cfg], { cwd: SERVER_DIR, stdio: ['ignore', 'pipe', 'pipe'] });
-  child.stdout.on('data', (d) => { out += d; });
-  child.stderr.on('data', (d) => { out += d; });
-  const origin = 'http://127.0.0.1:' + port;
-  for (let i = 0; ; i++) {
-    if (child.exitCode !== null) throw new Error('sandbox server exited:\n' + out);
-    try { if ((await fetch(origin + '/datastore/healthz')).ok) break; } catch (e) { /* not yet */ }
-    if (i > 300) throw new Error('sandbox server did not start:\n' + out);
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  return { origin, service: origin + '/datastore/', stop: () => new Promise((resolve) => { if (child.exitCode !== null) return resolve(); child.once('exit', resolve); child.kill('SIGTERM'); setTimeout(() => child.kill('SIGKILL'), 5000); }) };
-}
 
 const test = base.extend({
   stack: [async ({}, use) => {
@@ -62,6 +39,11 @@ const test = base.extend({
     expect(r.status).toBe(200);
     await use(await r.text());
   }, { scope: 'worker' }],
+  porting: [async ({ stack }, use) => {
+    const r = await fetch(stack.docs.origin + '/datastore/docs/porting.md');
+    expect(r.status).toBe(200);
+    await use(await r.text());
+  }, { scope: 'worker' }],
 });
 test.setTimeout(240000);
 
@@ -72,7 +54,7 @@ test.setTimeout(240000);
 function blockAfter(md, heading, lang, n = 0) {
   const lines = md.split('\n');
   const start = lines.findIndex((l) => heading.test(l));
-  if (start < 0) throw new Error('no heading ' + heading + ' in integration.md');
+  if (start < 0) throw new Error('no heading ' + heading + ' in the document');
   const level = lines[start].match(/^#+/)[0].length;
   const blocks = [];
   for (let i = start + 1; i < lines.length; i++) {
@@ -175,11 +157,11 @@ const openVault = async (page, stack) => { await page.evaluate(() => { window.__
 const unlockLater = async (page, accessId) => { await page.evaluate(() => { window.__unlock = store.unlock(); }); await unlockVault(page, accessId); await page.evaluate(() => window.__unlock); };
 
 // ---------------------------------------------------------------------------------------------------------------------------
-// tests
+// tests: the documents
 
-test('the documents: no placeholder left, the public repository named, links resolve', async ({ stack, md }) => {
+test('the documents: no placeholder left, the public repository named, links resolve', async ({ stack, md, porting }) => {
   const o = stack.docs.origin + '/datastore';
-  const names = ['integration', 'operator', 'users.en', 'users.de'];
+  const names = ['integration', 'porting', 'operator', 'users.en', 'users.de'];
   const texts = { llms: await (await fetch(o + '/llms.txt')).text() };
   for (const n of names) texts[n] = await (await fetch(o + '/docs/' + n + '.md')).text();
   texts.export = await (await fetch(o + '/export/')).text();
@@ -192,16 +174,23 @@ test('the documents: no placeholder left, the public repository named, links res
   // no sandbox configured on this server: the documents say so instead of showing a made-up scope ID
   expect(texts.llms).toContain('This server has no public sandbox');
   expect(texts.llms).not.toContain(SANDBOX_ID);
-  // the rules and pointers of llms.txt exist in the guide
+  // the rules and pointers of llms.txt exist in the guides
   for (const pointer of ['Collections', 'Conflicts in code', 'Lock and unlock again', 'Porting an existing app', 'Without wds-verify', 'Writing wds-verify.json', 'The sandbox', 'wds-verify']) {
     expect(texts.llms + md, pointer).toContain(pointer);
     expect(md, 'heading ' + pointer).toMatch(new RegExp('^#{2,3} (\\d+\\. )?' + pointer.replace('.', '\\.') + '( |$)', 'm'));
   }
   expect(md).toMatch(/^## 12\. wds-verify$/m);
   expect(md).toMatch(/^## 16\. Porting an existing app$/m);
+  // porting.md: its own sections, linked from llms.txt and integration.md, and no hand recipe left anywhere
+  for (const heading of [/^# Porting an existing app to WIAI Datastore$/m, /^## 1\. Inventory$/m, /^## 4\. Data that is still in the browsers of existing users$/m, /^### Example 1: /m, /^### Example 2: /m,
+    /^### The join code for tests \(a real scope\)$/m, /^## 6\. Test the port$/m, /^## 7\. Checklist for apps with forms and modal dialogs$/m]) expect(porting, String(heading)).toMatch(heading);
+  expect(texts.llms).toContain(o + '/docs/porting.md');
+  expect(md).toContain(o + '/docs/porting.md');
+  for (const [name, text] of Object.entries(texts)) for (const gone of ['openOldDb', 'keepInSandbox', 'migratedSettings', 'settingsDone', 'toNewRecords', 'migrateOldData', 'WDS_JOIN_CODE=', 'MiB']) expect(text, name + ' still names ' + gone).not.toContain(gone);
   // links: every address on the served documents' own origin answers 200 (the pages of this documentation, the export tool, llms.txt, the API root of the library)
   const urls = new Set();
   for (const text of Object.values(texts)) for (const m of text.matchAll(new RegExp(stack.docs.origin.replace(/[.]/g, '\\.') + '/datastore/[A-Za-z0-9_./-]*[A-Za-z0-9_/]', 'g'))) urls.add(m[0]);
+  expect([...urls].some((u) => u.endsWith('/docs/porting.md'))).toBe(true);
   for (const u of urls) {
     if (/\/api\/|\/client\/$/.test(u) || /\/api$/.test(u)) continue;     // the API and the library directory are not pages
     const r = await fetch(u);
@@ -226,7 +215,7 @@ test('hash and version of the documents are the ones of client/dist/hashes.json 
   // the file at examples/ names the production URL and the published hash of this repository
   expect(readFileSync(join(HERE, 'zeit-notizen', 'index.html'), 'utf8')).toContain('https://wiai.uni-bamberg.de/datastore/client/wds-' + newest + '.js');
   // nothing else in the documentation or the examples carries a stale hash
-  for (const file of ['docs/site/integration.md', 'docs/site/llms.txt', 'docs/site/operator.md', 'README.md', 'examples/zeit-notizen/README.md', 'examples/zeit-notizen/index.html']) {
+  for (const file of ['docs/site/integration.md', 'docs/site/porting.md', 'docs/site/llms.txt', 'docs/site/operator.md', 'README.md', 'examples/zeit-notizen/README.md', 'examples/zeit-notizen/index.html']) {
     for (const m of readFileSync(join(ROOT, file), 'utf8').matchAll(/sha384-[A-Za-z0-9+/=]{64}/g)) expect(m[0], file).toBe(dist[newest].sri);
   }
 });
@@ -433,9 +422,8 @@ test('files: deleting a note removes its attachments first, then the note', asyn
   await noProblems(page);
   await ctx.close();
 });
-
-test('porting step 3: the import of an old export reads a file the person chose', async ({ browser, stack, md }) => {
-  const recipe = blockAfter(md, /^### Step 3: own export and import$/, 'js');
+test('porting.md section 3: the import of an old export reads a file the person chose', async ({ browser, stack, md, porting }) => {
+  const recipe = blockAfter(porting, /^## 3\. Own export and import$/, 'js');
   const url = harness(md, stack, { recipe, ret: ['notes', 'importOldExport'], scope: stack.scope });
   const ctx = await newContext(browser);
   const page = await open(ctx, url);
@@ -450,8 +438,8 @@ test('porting step 3: the import of an old export reads a file the person chose'
   const bad = await page.evaluate(() => R.importOldExport(new File(['{"items": []}'], 'x.json')).then(() => 'accepted', (e) => e.message));
   expect(bad).toContain('not an export of the old version');
   // the variant that keeps the old ids: references are rewritten, the old order and creation dates stay, a second import overwrites instead of doubling
-  const keep = blockAfter(md, /^### Step 3: own export and import$/, 'js', 1);
-  const url2 = harness(md, stack, { recipe: blockAfter(md, /^### Step 3: own export and import$/, 'js') + '\n' + keep, ret: ['notes', 'files', 'importOldExportKeepingIds'], scope: stack.scope });
+  const keep = blockAfter(porting, /^## 3\. Own export and import$/, 'js', 1);
+  const url2 = harness(md, stack, { recipe: blockAfter(porting, /^## 3\. Own export and import$/, 'js') + '\n' + keep, ret: ['notes', 'files', 'importOldExportKeepingIds'], scope: stack.scope });
   const page2 = await open(ctx, url2);
   await page2.evaluate(async () => { window.R = await window.__recipe(store, {}); });
   await unlockLater(page2, accessId);
@@ -467,480 +455,6 @@ test('porting step 3: the import of an old export reads a file the person chose'
   await noProblems(page);
   await ctx.close();
 });
-
-// ---- the one-time migration ----
-
-const MIGRATION = (md) => blockAfter(md, /^### Step 4: data that is still in the browsers of existing users$/, 'js');
-const SEED = String.raw`
-  window.seedOld = async function (opts) {
-    opts = opts || {};
-    await new Promise((ok, fail) => {
-      const req = indexedDB.open('oldapp', 1);
-      req.onupgradeneeded = () => {
-        req.result.createObjectStore('notes', { keyPath: 'id' }); req.result.createObjectStore('files', { keyPath: 'id' });
-        if (opts.meta) req.result.createObjectStore('meta');                                    // a key-value store: out-of-line keys, put(value, key)
-      };
-      req.onsuccess = () => {
-        const db = req.result, tx = db.transaction(['notes', 'files'].concat(db.objectStoreNames.contains('meta') ? ['meta'] : []), 'readwrite');
-        if (opts.meta && db.objectStoreNames.contains('meta')) { tx.objectStore('meta').put(opts.timer || { project: 'p1', start: 1700000000000 }, 'timer'); tx.objectStore('meta').put(opts.lang || 'de', 'lang'); }
-        tx.objectStore('notes').put({ id: 1, title: opts.title1 || 'Old one', text: 'text of the first old note, with Umlauts: äöü', created: 1700000000000 });
-        tx.objectStore('notes').put({ id: 2, title: 'Old two', text: 'text of the second old note', created: 1700000001000 });
-        tx.objectStore('files').put({ id: 7, noteId: 1, name: 'plan.pdf', type: 'application/pdf', data: new Uint8Array([37, 80, 68, 70, 1, 2, 3, 250, 251, 252]).buffer });   // bytes as an ArrayBuffer: WebKit cannot store a Blob in IndexedDB on file://
-        if (opts.bigBytes) tx.objectStore('files').put({ id: 8, noteId: 2, name: 'huge.bin', type: '', data: new ArrayBuffer(opts.bigBytes) });
-        tx.oncomplete = () => { db.close(); ok(); };
-        tx.onerror = () => fail(tx.error);
-      };
-      req.onerror = () => fail(req.error);
-    });
-    localStorage.setItem('oldapp:prefs', JSON.stringify(opts.prefs || { theme: 'dark' }));
-    localStorage.setItem('oldapp:avatar', 'data:image/png;base64,iVBORw0KGgo=');            // a picture kept as a data URL in localStorage
-    window.__blobSeeded = false;
-    if (opts.blob) await new Promise((ok) => {                                              // a File in the old store (value.blob); WebKit cannot store one on file://: then nothing is seeded
-      const r = indexedDB.open('oldapp');
-      r.onerror = () => ok();
-      r.onsuccess = () => {
-        const db = r.result;
-        try {
-          const tx = db.transaction('files', 'readwrite');
-          tx.objectStore('files').put({ id: 9, noteId: 2, name: 'photo.png', type: 'image/png', blob: opts.blob === 'plain' ? new Blob([new Uint8Array([137, 80, 78, 71, 9, 8, 7, 6])], { type: 'image/png' }) : new File([new Uint8Array([137, 80, 78, 71, 9, 8, 7, 6])], 'photo.png', { type: 'image/png', lastModified: 1700000002000 }) });
-          tx.oncomplete = () => { db.close(); window.__blobSeeded = true; ok(); };
-          tx.onabort = () => { db.close(); ok(); };
-        } catch (e) { db.close(); ok(); }
-      };
-    });
-  };
-  window.touchOldBlob = (lastModified, plain) => new Promise((ok, fail) => {                // "the old app replaced the file": the same name, size, type and (by default) modification time, one other byte
-    const r = indexedDB.open('oldapp');
-    const bytes = new Uint8Array([137, 80, 78, 71, 9, 8, 7, 7]);
-    r.onsuccess = () => { const db = r.result, tx = db.transaction('files', 'readwrite'); tx.objectStore('files').put({ id: 9, noteId: 2, name: 'photo.png', type: 'image/png', blob: plain ? new Blob([bytes], { type: 'image/png' }) : new File([bytes], 'photo.png', { type: 'image/png', lastModified: lastModified || 1700000002000 }) }); tx.oncomplete = () => { db.close(); ok(); }; tx.onerror = () => fail(tx.error); };
-    r.onerror = () => fail(r.error);
-  });
-  window.changeOldSettings = (o) => new Promise((ok, fail) => {                            // "the old app, used again": its settings change
-    if (o.prefs) localStorage.setItem('oldapp:prefs', JSON.stringify(o.prefs));
-    const r = indexedDB.open('oldapp');
-    r.onsuccess = () => { const db = r.result; if (!o.timer || !db.objectStoreNames.contains('meta')) { db.close(); return ok(); } const tx = db.transaction('meta', 'readwrite'); tx.objectStore('meta').put(o.timer, 'timer'); tx.oncomplete = () => { db.close(); ok(); }; tx.onerror = () => fail(tx.error); };
-    r.onerror = () => fail(r.error);
-  });
-  window.addOldRow = () => new Promise((ok, fail) => {                                // "the old app, used again in another tab"
-    const req = indexedDB.open('oldapp');
-    req.onsuccess = () => { const db = req.result, tx = db.transaction('notes', 'readwrite'); tx.objectStore('notes').put({ id: 3, title: 'Old three', text: 'written after the copy' }); tx.oncomplete = () => { db.close(); ok(); }; tx.onerror = () => fail(tx.error); };
-    req.onerror = () => fail(req.error);
-  });
-  window.__questions = []; window.__downloads = []; window.__answer = true; window.__answerQueue = []; window.__failDownload = false; window.__onDownload = null;
-  window.__ui = {                                                                // the app's own dialogs, as the recipe expects them
-    confirm: async (q) => { window.__questions.push(q); return window.__answerQueue.length ? window.__answerQueue.shift() : window.__answer; },
-    offerDownload: async (blob, name) => { if (window.__failDownload) throw new Error('download dialog failed'); window.__downloads.push({ name, size: blob.size, text: blob.size < 100000 ? await blob.text() : '' }); if (window.__onDownload) await window.__onDownload(name); },
-  };
-  window.oldState = async function () {                                            // db: the database exists; rows: how many rows it holds (an emptied database stays, it is empty)
-    const dbs = indexedDB.databases ? await indexedDB.databases() : [];
-    const db = dbs.some((d) => d.name === 'oldapp');
-    let rows = 0;
-    if (db) {
-      const conn = await new Promise((ok, fail) => { const r = indexedDB.open('oldapp'); r.onsuccess = () => ok(r.result); r.onerror = () => fail(r.error); });
-      for (const name of ['notes', 'files', 'meta']) if (conn.objectStoreNames.contains(name)) rows += await new Promise((ok) => { const r = conn.transaction(name).objectStore(name).count(); r.onsuccess = () => ok(r.result); });
-      conn.close();
-    }
-    return { db, rows, prefs: localStorage.getItem('oldapp:prefs'), avatar: localStorage.getItem('oldapp:avatar'), tag: localStorage.getItem('oldapp:migration-tag') };
-  };
-`;
-function migrationUrl(md, stack, scope, origin, { untagged = false } = {}) {
-  let recipe = MIGRATION(md);
-  if (untagged) { expect(recipe).toContain('lock: "oldapp-migration", tagged: true };'); recipe = recipe.replace('lock: "oldapp-migration", tagged: true };', 'lock: "oldapp-migration", tagged: false };'); }
-  return harness(md, stack, { recipe, ret: ['OLD', 'notes', 'files', 'migrateOldData', 'migratedSettings', 'settingsDone', 'fillGaps', 'openOldDb', 'removeOldData', 'toNewRecords'], scope, origin, extraHead: '<script>' + SEED + '</script>' });
-}
-// An engine without IndexedDB for file:// pages has no old database to seed (the recipe then looks at localStorage only); these tests need IndexedDB.
-async function idbAvailable(page) { return page.evaluate(() => { try { return typeof indexedDB !== 'undefined' && !!indexedDB.open('probe-' + Math.random()); } catch (e) { return false; } }); }
-async function migrationPage(ctx, url, testInfo) {
-  const page = await open(ctx, url);
-  if (testInfo && !(await idbAvailable(page))) {
-    expect(await page.evaluate(async () => { const R = await window.__recipe(store, {}); return R.migrateOldData({}); })).toEqual({ status: 'nothing' });   // the recipe copes: nothing to migrate
-    testInfo.skip(true, 'this engine has no IndexedDB for file:// pages');
-  }
-  await page.evaluate(async () => { window.R = await window.__recipe(store, {}); });
-  return page;
-}
-const runMigration = (page) => page.evaluate(() => R.migrateOldData(window.__ui));
-
-test('porting step 4: the owner migrates IndexedDB and localStorage, the old data is emptied, nothing is written twice, a second browser with the same old ids does not collide', async ({ browser, stack, md }) => {
-  const url = migrationUrl(md, stack, stack.scope);
-  const ctx1 = await newContext(browser), ctx2 = await newContext(browser);
-  const one = await migrationPage(ctx1, url, test.info());
-  const accessId = await openVault(one, stack);
-  await one.evaluate(() => window.__unlock);
-  expect(await one.evaluate(() => store.status())).toMatchObject({ role: 'owner', sandbox: false });
-
-  // nothing to migrate yet
-  expect(await runMigration(one)).toEqual({ status: 'nothing' });
-  expect(await one.evaluate(() => oldState())).toEqual({ db: false, rows: 0, prefs: null, avatar: null, tag: null });      // looking must not create the old database or the tag
-
-  await one.evaluate(() => seedOld());
-  // two runs at the same moment (two tabs of the new app): the lock lets one migrate, the other finds nothing left
-  const both = await one.evaluate(() => Promise.all([R.migrateOldData(window.__ui), R.migrateOldData(window.__ui)]));
-  const res = both.find((r) => r.status === 'migrated');
-  expect(res).toMatchObject({ status: 'migrated', deleted: 'deleted', count: 5, tooLarge: [] });   // 2 notes, the pdf, the avatar picture, the settings record
-  if (await one.evaluate(() => !!navigator.locks)) expect(both.map((r) => r.status).sort()).toEqual(['migrated', 'nothing']);
-  // the question names the vault by the end of its access ID, not in full
-  const question = (await one.evaluate(() => window.__questions))[0];
-  expect(question).toContain('ends in ' + accessId.slice(-4));
-  expect(question).not.toContain(accessId);
-  expect(question).toContain('delete them from this browser');
-  // the old storage is empty: stores, own keys (an emptied database stays, it holds nothing); the tag stays, it is no user data and names this browser in the vault
-  expect(await one.evaluate(() => oldState())).toMatchObject({ rows: 0, prefs: null, avatar: null, tag: expect.stringMatching(/^[0-9a-f]{8}$/) });
-  // the person got a copy of the old data before it went
-  const dl = (await one.evaluate(() => window.__downloads))[0];
-  expect(dl.name).toBe('oldapp-backup.json');
-  const backup = JSON.parse(dl.text);
-  expect(backup.notes.map((r) => r.value.title)).toEqual(['Old one', 'Old two']);
-  expect(backup.local.map((r) => r.key).sort()).toEqual(['oldapp:avatar', 'oldapp:prefs']);
-  // the vault holds everything under tagged ids (the key type is part of the id); references were remapped; the file bytes are intact; the creation dates survive; the marker is written
-  const items = await one.evaluate(async () => { await R.notes.refresh(); await R.files.refresh(); return { notes: R.notes.items(), files: R.files.items() }; });
-  const tag1 = items.notes[0].id.split('-')[0];
-  expect(items.notes.map((i) => i.id)).toEqual([tag1 + '-j1', tag1 + '-j2']);
-  expect(items.notes.map((i) => i.created)).toEqual([1700000000000, 1700000001000]);
-  expect(items.files.map((i) => i.id).sort()).toEqual([tag1 + '-j7.pdf', tag1 + '-soldapp%3Aavatar'].sort());
-  expect(items.files.find((i) => i.id.endsWith('.pdf')).meta).toEqual({ name: 'plan.pdf', note: tag1 + '-j1' });
-  expect(await one.evaluate((id) => store.get('files/' + id, { fresh: true }).then((b) => [...b]), tag1 + '-j7.pdf')).toEqual([37, 80, 68, 70, 1, 2, 3, 250, 251, 252]);
-  expect(await one.evaluate((id) => store.get('files/' + id, { fresh: true }).then((b) => [...b]), tag1 + '-soldapp%3Aavatar')).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
-  expect(await one.evaluate((t) => store.get('migrated/' + t + '/local', { fresh: true }), tag1)).toEqual({ 'oldapp:prefs': '{"theme":"dark"}' });          // the strings of localStorage
-  const marker = await one.evaluate((t) => store.get('migration/' + t, { fresh: true }), tag1);
-  expect(marker).toMatchObject({ tag: tag1, counts: { notes: 2, files: 1, local: 2 }, tooLarge: [], settings: 'pending' });
-  expect(typeof marker.digest).toBe('string');
-  expect(await one.evaluate((id) => R.notes.get(id), tag1 + '-j1')).toEqual({ title: 'Old one', text: 'text of the first old note, with Umlauts: äöü' });
-  // running it again finds nothing and writes nothing
-  expect(await runMigration(one)).toEqual({ status: 'nothing' });
-
-  // a second browser of the same person: the same old ids 1, 2 and 7 (another tag), the same vault
-  const two = await migrationPage(ctx2, url, test.info());
-  await unlockLater(two, accessId);
-  await two.evaluate(() => seedOld());
-  expect(await runMigration(two)).toMatchObject({ status: 'migrated', deleted: 'deleted', count: 5 });
-  await one.evaluate(async () => { await R.notes.refresh(); await R.files.refresh(); });
-  const after = await one.evaluate(() => ({ notes: R.notes.items().map((i) => i.id), files: R.files.items().map((i) => i.id) }));
-  expect(after.notes).toHaveLength(4);
-  expect(after.files).toHaveLength(4);
-  expect(new Set(after.notes.map((id) => id.split('-')[0])).size).toBe(2);
-  // nothing of the first migration was touched
-  expect(await one.evaluate((id) => R.notes.get(id), tag1 + '-j2')).toEqual({ title: 'Old two', text: 'text of the second old note' });
-  await noProblems(one, two);
-  await ctx1.close(); await ctx2.close();
-});
-
-test('porting step 4: declined, interrupted, did not fit: the old data is kept, a rerun continues without duplicates', async ({ browser, stack, md }) => {
-  const url = migrationUrl(md, stack, stack.scope);
-  const ctx = await newContext(browser);
-  const page = await migrationPage(ctx, url, test.info());
-  await openVault(page, stack);
-  await page.evaluate(() => window.__unlock);
-
-  // declined: nothing is written, the old data stays (the tag is the one write to the old storage)
-  await page.evaluate(() => seedOld());
-  await page.evaluate(() => { window.__answer = false; });
-  expect(await runMigration(page)).toEqual({ status: 'declined' });
-  let state = await page.evaluate(() => oldState());
-  expect(state.rows).toBe(3);
-  expect(state.prefs).not.toBeNull();
-  expect(state.avatar).not.toBeNull();
-  expect(await page.evaluate(() => R.notes.load().then((l) => l.length))).toBe(0);
-
-  // interrupted after the copy was verified (the download dialog fails): failed, old data kept, the vault has the copy
-  await page.evaluate(() => { window.__answer = true; window.__failDownload = true; });
-  const failed = await runMigration(page);
-  expect(failed).toMatchObject({ status: 'failed', note: 'the old data was kept' });
-  expect(failed.why).toContain('download dialog failed');
-  state = await page.evaluate(() => oldState());
-  expect(state.rows).toBe(3);
-  expect(await page.evaluate(() => R.notes.refresh().then((l) => l.length))).toBe(2);
-  const tag = state.tag;
-
-  // rerun: continues, writes nothing twice, finishes and empties the old storage
-  await page.evaluate(() => { window.__failDownload = false; });
-  let writes = 0;
-  await ctx.route(/\/api\/v1\/vaults\/[^/]+\/records\/[^/]+$/, (route) => { if (route.request().method() === 'PUT') writes++; return route.continue(); });
-  expect(await runMigration(page)).toMatchObject({ status: 'migrated', deleted: 'deleted' });
-  expect(writes).toBe(1);                                                             // only the migration marker
-  expect(await page.evaluate(() => oldState())).toMatchObject({ rows: 0, prefs: null, avatar: null });
-  expect(await page.evaluate(() => R.notes.refresh().then((l) => l.length))).toBe(2);
-  expect(await page.evaluate((t) => store.get('migration/' + t, { fresh: true }), tag)).toMatchObject({ tag });
-  await ctx.unroute(/\/api\/v1\/vaults\/[^/]+\/records\/[^/]+$/);
-
-  // does not fit: the vault is (said to be) almost full: nothing is written, nothing deleted (the old app was used again, so the verified copy of the marker does not cover it)
-  await page.evaluate(async () => { await seedOld(); await addOldRow(); });
-  await ctx.route(/\/api\/v1\/vaults\/[^/]+\/usage$/, async (route) => {
-    const r = await route.fetch(), j = await r.json();
-    return route.fulfill({ response: r, json: { ...j, bytes: j.limits.vault_bytes - 10 } });
-  });
-  const full = await runMigration(page);
-  await ctx.unroute(/\/api\/v1\/vaults\/[^/]+\/usage$/);
-  expect(full.status).toBe('failed');
-  expect(full.why).toContain('does not fit');
-  expect((await page.evaluate(() => oldState())).rows).toBe(4);
-  expect(await page.evaluate(() => R.notes.refresh().then((l) => l.length))).toBe(2);
-  await noProblems(page);
-  await ctx.close();
-});
-
-test('porting step 4: a record too large for the vault becomes a download; the old data goes only after the second confirmation', async ({ browser, stack, md }) => {
-  const url = migrationUrl(md, stack, stack.scope);
-  const ctx = await newContext(browser);
-  const page = await migrationPage(ctx, url, test.info());
-  await openVault(page, stack);
-  await page.evaluate(() => window.__unlock);
-  await page.evaluate(() => seedOld({ bigBytes: 11 * 1024 * 1024 }));
-  // the person says yes to the copy and no to deleting what exists only as a download
-  await page.evaluate(() => { window.__answerQueue = [true, false]; });
-  const partial = await runMigration(page);
-  expect(partial).toMatchObject({ status: 'partial', deleted: 'kept' });
-  expect(partial.tooLarge).toHaveLength(1);
-  expect(partial.tooLarge[0]).toMatch(/^files\/[0-9a-f]{8}-j8\.?/);
-  const questions = await page.evaluate(() => window.__questions);
-  expect(questions[0]).toContain('too large for the vault');
-  expect(questions[1]).toContain('Delete the old data anyway?');
-  expect((await page.evaluate(() => window.__downloads)).map((d) => d.name)).toEqual(['oldapp-backup.json', expect.stringMatching(/^oldapp-files-/)]);
-  expect((await page.evaluate(() => window.__downloads))[1].size).toBe(11 * 1024 * 1024);
-  const kept = await page.evaluate(() => oldState());
-  expect(kept.rows).toBe(4);                                                          // nothing deleted
-  expect(await page.evaluate(() => R.notes.refresh().then((l) => l.length))).toBe(2);   // the rest was copied
-  // the next start asks again; this time the person confirms: the rest was copied before, the old data goes
-  await page.evaluate(() => { window.__answerQueue = [true, true]; window.__downloads = []; });
-  expect(await runMigration(page)).toMatchObject({ status: 'migrated', deleted: 'deleted' });
-  expect(await page.evaluate(() => oldState())).toMatchObject({ rows: 0, prefs: null, avatar: null });
-  expect(await page.evaluate(() => R.notes.refresh().then((l) => l.length))).toBe(2);
-  await noProblems(page);
-  await ctx.close();
-});
-
-test('porting step 4: the old app is used again between the copy and the delete: nothing is deleted, the next run copies what is new; an index entry that never landed is repaired', async ({ browser, stack, md }) => {
-  const url = migrationUrl(md, stack, stack.scope);
-  const ctx = await newContext(browser);
-  const page = await migrationPage(ctx, url, test.info());
-  await openVault(page, stack);
-  await page.evaluate(() => window.__unlock);
-  await page.evaluate(() => seedOld());
-  // another tab of the old app writes a row while the person looks at the download dialog (after the verified copy, before the delete)
-  await page.evaluate(() => { window.__onDownload = async (name) => { if (name === 'oldapp-backup.json') { window.__onDownload = null; await addOldRow(); } }; });
-  const first = await runMigration(page);
-  expect(first).toMatchObject({ status: 'migrated', deleted: 'changed' });
-  let state = await page.evaluate(() => oldState());
-  expect(state.rows).toBe(4);                                                         // all rows are still there, including the new one
-  expect(state.prefs).not.toBeNull();
-  expect(state.tag).not.toBeNull();                                                   // the tag stays: the rerun uses the same ids
-  const tag = state.tag;
-  expect(await page.evaluate(() => R.notes.refresh().then((l) => l.length))).toBe(2);
-  // the next start: the marker does not match the old data any more, so the whole flow runs; only the new row is written
-  let writes = 0;
-  await ctx.route(/\/api\/v1\/vaults\/[^/]+\/records\/[^/]+$/, (route) => { if (route.request().method() === 'PUT') writes++; return route.continue(); });
-  expect(await runMigration(page)).toMatchObject({ status: 'migrated', deleted: 'deleted', count: 6 });
-  expect(writes).toBe(3);                                                             // the new note, its list entry, the marker
-  await ctx.unroute(/\/api\/v1\/vaults\/[^/]+\/records\/[^/]+$/);
-  expect((await page.evaluate(() => oldState())).rows).toBe(0);
-  expect(await page.evaluate(() => R.notes.refresh().then((l) => l.length))).toBe(3);
-
-  // an interrupted run that stored items but never wrote their list entries (the tab closed): the next run finds and repairs them
-  await page.evaluate(() => seedOld());
-  const tag2 = await page.evaluate(() => { localStorage.setItem('oldapp:migration-tag', 'abcd1234'); return 'abcd1234'; });
-  await page.evaluate(async (t) => {                                                   // the entities of an earlier run (same content), but no index entries
-    await store.set('notes/' + t + '-j1', { title: 'Old one', text: 'text of the first old note, with Umlauts: äöü' });
-    await store.set('notes/' + t + '-j2', { title: 'Old two', text: 'text of the second old note' });
-  }, tag2);
-  await page.evaluate(() => { window.__answer = true; });
-  const repaired = await runMigration(page);
-  expect(repaired).toMatchObject({ status: 'migrated', deleted: 'deleted' });
-  const ids = await page.evaluate(() => R.notes.refresh().then((l) => l.map((i) => i.id)));
-  expect(ids).toEqual(expect.arrayContaining(['abcd1234-j1', 'abcd1234-j2']));
-  expect(await page.evaluate(() => R.notes.items().find((i) => i.id === 'abcd1234-j1').meta)).toEqual({ title: 'Old one' });   // the repaired entry has its meta
-  await noProblems(page);
-  await ctx.close();
-});
-
-test('porting step 4: Blob and File values and a key-value store in IndexedDB; the old settings are applied once, only where the vault has none', async ({ browser, stack, md }) => {
-  const url = migrationUrl(md, stack, stack.scope);
-  const ctx = await newContext(browser);
-  const page = await migrationPage(ctx, url, test.info());
-  await openVault(page, stack);
-  await page.evaluate(() => window.__unlock);
-  await page.evaluate(() => seedOld({ meta: true, blob: true }));
-  const blob = await page.evaluate(() => window.__blobSeeded);
-  const res = await runMigration(page);
-  // 2 notes, the pdf (bytes), the avatar (data URL), the settings of localStorage, the key-value rows, and the File
-  expect(res).toMatchObject({ status: 'migrated', deleted: 'deleted', count: blob ? 7 : 6, tooLarge: [] });
-  expect(res.tag).toMatch(/^[0-9a-f]{8}$/);
-  expect(await page.evaluate(() => oldState())).toMatchObject({ rows: 0, prefs: null, avatar: null });   // the key-value store is emptied too
-  const tag = res.tag;
-  // the key-value rows of IndexedDB are one record, next to the one of localStorage
-  expect(await page.evaluate((t) => store.get('migrated/' + t + '/meta', { fresh: true }), tag)).toEqual({ lang: 'de', timer: { project: 'p1', start: 1700000000000 } });
-  expect(await page.evaluate((t) => store.get('migrated/' + t + '/local', { fresh: true }), tag)).toEqual({ 'oldapp:prefs': '{"theme":"dark"}' });
-  const marker = await page.evaluate((t) => store.get('migration/' + t, { fresh: true }), tag);
-  expect(marker.counts).toMatchObject({ notes: 2, meta: 2, local: 2, files: blob ? 2 : 1 });
-  // the backup file: bytes as { size }, a File as { size, type, name } (a plain JSON.stringify would write {})
-  const backup = JSON.parse((await page.evaluate(() => window.__downloads))[0].text);
-  expect(backup.files.find((r) => r.key === 7).value.data).toEqual({ size: 10 });
-  expect(backup.meta.map((r) => r.key)).toEqual(['lang', 'timer']);
-  if (blob) {
-    expect(backup.files.find((r) => r.key === 9).value.blob).toEqual({ size: 8, type: 'image/png', name: 'photo.png' });
-    const id = tag + '-j9.png';
-    const stored = await page.evaluate(async (i) => { const b = await store.getBlob('files/' + i); return [b.type, [...new Uint8Array(await b.arrayBuffer())]]; }, id);
-    expect(stored).toEqual(['image/png', [137, 80, 78, 71, 9, 8, 7, 6]]);
-    expect(await page.evaluate((i) => R.files.refresh().then((l) => l.find((f) => f.id === i).meta), id)).toEqual({ name: 'photo.png', note: tag + '-j2' });
-  }
-  // the settings are taken over exactly once, and the state is in the vault: until the app says it saved them they are offered again, whatever a start returned
-  const waiting = { tag, local: { 'oldapp:prefs': '{"theme":"dark"}' }, meta: { lang: 'de', timer: { project: 'p1', start: 1700000000000 } } };      // localStorage values stay strings
-  expect(await page.evaluate(() => R.migratedSettings())).toEqual(waiting);
-  expect(marker.settings).toBe('pending');
-  expect(await runMigration(page)).toEqual({ status: 'nothing' });                      // a later start, the page was closed before the app saved the settings
-  expect(await page.evaluate(() => R.migratedSettings())).toEqual(waiting);              // nothing is lost
-  // a browser that never migrated asks for nothing: no request, no dialog
-  const fresh = await migrationPage(await newContext(browser), url, test.info());
-  expect(await fresh.evaluate(() => R.migratedSettings())).toBeNull();
-  expect(await fresh.locator('[data-wds-view]').count()).toBe(0);
-  // ... and only where the vault has no value: a language that is set stays, a missing timer is taken over
-  expect(await page.evaluate(() => R.fillGaps({ lang: 'en', timer: null }, { lang: 'de', timer: { project: 'p1' }, theme: 'dark' }))).toEqual({ lang: 'en', timer: { project: 'p1' }, theme: 'dark' });
-  expect(await page.evaluate(() => R.fillGaps({}, {}))).toEqual({});
-  // the usage shown at the end of the recipe, as the app would write it
-  await page.evaluate(async () => {
-    await store.set('settings', { lang: 'en' });
-    const old = await R.migratedSettings();
-    if (old) {
-      const prefs = JSON.parse(old.local['oldapp:prefs'] || 'null') || {};
-      await store.set('settings', R.fillGaps((await store.get('settings')) || {}, { lang: old.meta.lang, theme: prefs.theme }));
-      await R.settingsDone(old);
-    }
-  });
-  expect(await page.evaluate(() => store.get('settings', { fresh: true }))).toEqual({ lang: 'en', theme: 'dark' });
-  expect(await page.evaluate(() => R.migratedSettings())).toBeNull();                    // never offered again
-  expect(await page.evaluate((t) => store.get('migration/' + t, { fresh: true }), tag)).toMatchObject({ settings: 'applied' });
-  await noProblems(page);
-  await ctx.close();
-});
-
-// A Blob replaced during the run by one with the same size, type, name and modification time: only its bytes differ. The bytes are part of the fingerprint now.
-for (const plain of [false, true]) {
-  test('porting step 4: ' + (plain ? 'a plain Blob (no name, no modification time)' : 'a File') + ' replaced during the run by one that differs only in its bytes is noticed: nothing is deleted; the next run reports the difference instead of overwriting', async ({ browser, stack, md }) => {
-    const url = migrationUrl(md, stack, stack.scope);
-    const ctx = await newContext(browser);
-    const page = await migrationPage(ctx, url, test.info());
-    await openVault(page, stack);
-    await page.evaluate(() => window.__unlock);
-    await page.evaluate((p) => seedOld({ blob: p ? 'plain' : true }), plain);
-    test.skip(!(await page.evaluate(() => window.__blobSeeded)), 'this engine cannot store a Blob in IndexedDB on file:// pages');
-    await page.evaluate((p) => { window.__onDownload = async (name) => { if (name === 'oldapp-backup.json') { window.__onDownload = null; await touchOldBlob(undefined, p); } }; }, plain);
-    const first = await runMigration(page);
-    expect(first).toMatchObject({ status: 'migrated', deleted: 'changed' });
-    expect((await page.evaluate(() => oldState())).rows).toBe(4);                      // 2 notes, the pdf, the Blob: all still there
-    // the next start: the marker does not match, the whole flow runs; the Blob of the old app (another last byte) differs from the copy in the vault: that run fails and keeps the old data
-    const second = await runMigration(page);
-    expect(second.status).toBe('failed');
-    expect(second.why).toContain('-j9.png');
-    expect((await page.evaluate(() => oldState())).rows).toBe(4);
-    await noProblems(page);
-    await ctx.close();
-  });
-}
-
-test('porting step 4: the settings are snapshots: changed in the old app meanwhile the rerun still finishes; once taken over they are never offered again, whatever the old app does afterwards', async ({ browser, stack, md }) => {
-  const url = migrationUrl(md, stack, stack.scope);
-  const ctx = await newContext(browser);
-  const page = await migrationPage(ctx, url, test.info());
-  await openVault(page, stack);
-  await page.evaluate(() => window.__unlock);
-  await page.evaluate(() => seedOld({ meta: true }));
-  // another tab of the old app changes the timer and a preference between the copy and the delete (the running timer of a meta store changes often)
-  await page.evaluate(() => { window.__onDownload = async (name) => { if (name === 'oldapp-backup.json') { window.__onDownload = null; await changeOldSettings({ prefs: { theme: 'light' }, timer: { project: 'p9', start: 1700000009999 } }); } }; });
-  const first = await runMigration(page);
-  expect(first).toMatchObject({ status: 'migrated', deleted: 'changed' });
-  const tag = first.tag;
-  expect(await page.evaluate((t) => store.get('migrated/' + t + '/meta', { fresh: true }), tag)).toMatchObject({ timer: { project: 'p1' } });      // the snapshot of the first run
-  // the rerun: the settings records of the vault differ from the old app's now: they are overwritten, the run is not "failed"
-  const second = await runMigration(page);
-  expect(second).toMatchObject({ status: 'migrated', deleted: 'deleted', tag });
-  expect(await page.evaluate((t) => store.get('migrated/' + t + '/meta', { fresh: true }), tag)).toEqual({ lang: 'de', timer: { project: 'p9', start: 1700000009999 } });
-  expect(await page.evaluate((t) => store.get('migrated/' + t + '/local', { fresh: true }), tag)).toEqual({ 'oldapp:prefs': '{"theme":"light"}' });
-  const old = await page.evaluate(() => R.migratedSettings());
-  expect(old.meta.timer.project).toBe('p9');
-  await page.evaluate(async () => { await store.set('settings', { lang: 'de', timer: null }); await R.settingsDone(await R.migratedSettings()); });   // the person stopped the timer in the new app
-  // the old app is used again (a stale tab), a full run follows: the stopped timer stays stopped
-  await page.evaluate(() => seedOld({ meta: true, timer: { project: 'p7', start: 1700000007777 }, prefs: { theme: 'blue' } }));
-  const third = await runMigration(page);
-  expect(third).toMatchObject({ status: 'migrated', deleted: 'deleted', tag });
-  expect(third.count).toBe(4);                                                          // 2 notes, the pdf and the avatar: the settings are not copied again
-  expect(await page.evaluate(() => R.migratedSettings())).toBeNull();
-  expect(await page.evaluate((t) => store.get('migrated/' + t + '/meta', { fresh: true }), tag)).toMatchObject({ timer: { project: 'p9' } });
-  expect(await page.evaluate(() => store.get('settings', { fresh: true }))).toEqual({ lang: 'de', timer: null });
-  await noProblems(page);
-  await ctx.close();
-});
-
-test('porting step 4 without the tag in the ids: they stay short; the same data from a second browser is one copy; settings and marker stay per browser, so different settings never collide; data that differs stops that run', async ({ browser, stack, md }) => {
-  const url = migrationUrl(md, stack, stack.scope, undefined, { untagged: true });
-  const ctx1 = await newContext(browser), ctx2 = await newContext(browser);
-  const one = await migrationPage(ctx1, url, test.info());
-  const accessId = await openVault(one, stack);
-  await one.evaluate(() => window.__unlock);
-  await one.evaluate(() => seedOld({ meta: true }));
-  const res = await runMigration(one);
-  expect(res).toMatchObject({ status: 'migrated', deleted: 'deleted', count: 6 });
-  expect(res.tag).toMatch(/^[0-9a-f]{8}$/);                                              // a tag per browser also here: the marker and the settings are named by it
-  expect((await one.evaluate(() => oldState())).tag).toBe(res.tag);
-  const ids = await one.evaluate(async () => { await R.notes.refresh(); await R.files.refresh(); return { notes: R.notes.items().map((i) => i.id), files: R.files.items().map((i) => i.id).sort() }; });
-  expect(ids.notes).toEqual(['j1', 'j2']);                                               // no tag in the item ids
-  expect(ids.files).toEqual(['j7.pdf', 'soldapp%3Aavatar']);
-
-  // a second browser holding the same items but other settings (another language, another theme): the items are one copy, the settings are its own
-  const two = await migrationPage(ctx2, url, test.info());
-  await unlockLater(two, accessId);
-  await two.evaluate(() => seedOld({ meta: true, lang: 'fr', prefs: { theme: 'light' } }));
-  const res2 = await runMigration(two);
-  expect(res2).toMatchObject({ status: 'migrated', deleted: 'deleted', count: 6 });      // not "again": its marker is its own
-  expect(res2.tag).not.toBe(res.tag);
-  expect((await two.evaluate(() => oldState())).rows).toBe(0);
-  await one.evaluate(async () => { await R.notes.refresh(); await R.files.refresh(); });
-  expect(await one.evaluate(() => [R.notes.items().length, R.files.items().length])).toEqual([2, 2]);
-  expect((await one.evaluate(() => R.migratedSettings())).meta.lang).toBe('de');
-  expect((await two.evaluate(() => R.migratedSettings())).meta.lang).toBe('fr');
-  expect((await two.evaluate(() => R.migratedSettings())).local).toEqual({ 'oldapp:prefs': '{"theme":"light"}' });
-
-  // the second browser changed one note: the ids meet, the values differ: that run fails, names the item, keeps the old data, overwrites nothing
-  await two.evaluate(() => seedOld({ meta: true, title1: 'Old one, edited in the second browser' }));
-  const clash = await runMigration(two);
-  expect(clash.status).toBe('failed');
-  expect(clash.why).toContain('did not come back');
-  expect(clash.why).toContain('notes/j1');
-  expect(clash.why).toContain('the old data was kept');
-  expect((await two.evaluate(() => oldState())).rows).toBe(5);
-  expect(await one.evaluate(() => R.notes.get('j1'))).toEqual({ title: 'Old one', text: 'text of the first old note, with Umlauts: äöü' });
-  await noProblems(one, two);
-  await ctx1.close(); await ctx2.close();
-});
-
-test('porting step 4: toNewRecords stops for a row it cannot map instead of copying something wrong; Dates, numeric keys and a Blob as the row value work', async ({ browser, stack, md }) => {
-  const url = migrationUrl(md, stack, stack.scope);
-  const ctx = await newContext(browser);
-  const page = await migrationPage(ctx, url, test.info());
-  const rows = (o) => ({ local: [], meta: [], notes: [], files: [], ...o });
-  const tryRows = (o) => page.evaluate((x) => { try { return { ok: R.toNewRecords(x, 'abcd1234').map((i) => ({ id: i.id, name: i.name, created: i.created, meta: i.meta, size: i.value instanceof Blob ? i.value.size : null })) }; } catch (e) { return { error: e.message }; } }, o);
-  // a field named like nothing the recipe knows: not "undefined" bytes, an error with the key
-  expect((await tryRows(rows({ files: [{ key: 5, value: { id: 5, noteId: 1, name: 'a.pdf', pdf: 'x' } }] }))).error).toMatch(/old row 5: neither a Blob nor bytes in \.data \(adapt toNewRecords\)/);
-  // a value that holds a Blob, a Map or a Set would be written as {}
-  for (const what of ['Blob', 'Map', 'Set']) {
-    const r = await page.evaluate((w) => {
-      const make = { Blob: () => new Blob(['x']), Map: () => new Map([[1, 2]]), Set: () => new Set([1]) }[w];
-      try { R.toNewRecords({ local: [], meta: [], files: [], notes: [{ key: 3, value: { title: 't', text: make() } }] }, 'abcd1234'); return 'accepted'; } catch (e) { return e.message; }
-    }, what);
-    expect(r, what).toContain('old row 3: the value holds a ' + what);
-  }
-  const meta = await page.evaluate(() => { try { R.toNewRecords({ local: [], files: [], notes: [], meta: [{ key: 'timer', value: new Set([1]) }] }, 'abcd1234'); return 'accepted'; } catch (e) { return e.message; } });
-  expect(meta).toContain('old row "meta"');
-  // a Date for created, an auto-increment key, a Blob as the row value (no name, no note)
-  const ok = await page.evaluate(() => R.toNewRecords({ local: [{ key: 'oldapp:flag', value: 'true' }], meta: [],
-    notes: [{ key: 12, value: { title: 't', text: 'x', created: new Date(1700000000000) } }, { key: 13, value: { title: 'u', text: 'y', created: '2023-11-14T22:13:21Z' } }],
-    files: [{ key: 14, value: new Blob(['abc'], { type: 'application/pdf' }) }] }, 'abcd1234').map((i) => ({ id: i.id, name: i.name, created: i.created, meta: i.meta, value: i.value instanceof Blob ? 'blob ' + i.value.size : i.value })));
-  expect(ok.find((i) => i.id === 'abcd1234-j12').created).toBe(1700000000000);
-  expect(ok.find((i) => i.id === 'abcd1234-j13').created).toBe(Date.parse('2023-11-14T22:13:21Z'));
-  expect(ok.find((i) => i.id === 'abcd1234-j14')).toMatchObject({ value: 'blob 3', meta: {} });
-  expect(ok.find((i) => i.name === 'migrated/abcd1234/local').value).toEqual({ 'oldapp:flag': 'true' });   // a string stays a string
-  await noProblems(page);
-  await ctx.close();
-});
-
 
 test('collections: set is an upsert (creates the list entry, keeps its place); created exists in the entry; set of a record the page has not read is a conflict', async ({ browser, stack, md }) => {
   const url = harness(md, stack, { recipe: 'const notes = store.collection("notes/", { meta: (n) => ({ title: n.title }) });', ret: ['notes'], scope: stack.scope });
@@ -993,10 +507,10 @@ test('the table of the library dialogs in the guide matches client/src/wds-ui.js
   const BT = '\x60';
   const rows = section.split('\n').filter((l) => l.startsWith('| ' + BT) && !l.startsWith('| ' + BT + 'data-wds-view')).map((l) => l.split(' | ').map((c) => c.replace(/^\| /, '').replace(/ \|$/, '')));
   const views = rows.map((r) => r[0].replaceAll(BT, ''));
-  expect(views).toEqual(['loading', 'error', 'unlock', 'create', 'redeem', 'sheet', 'conflict', 'history', 'share', 'revoke', 'progress', 'notice']);
+  expect(views).toEqual(['loading', 'error', 'unlock', 'create', 'redeem', 'sheet', 'conflict', 'history', 'share', 'revoke', 'progress', 'notice', 'migrate', 'migrate-discard', 'migrate-differs', 'migrate-large']);
   const names = (cell) => [...cell.matchAll(/\x60([a-z][a-z-]*)\x60/g)].map((m) => m[1]);
   // every view and every control of the table exists in the library
-  for (const view of views) expect(ui, 'view ' + view).toMatch(new RegExp("(view: |setView\\(|frame\\()'" + view + "'"));
+  for (const view of views) expect(ui, 'view ' + view).toMatch(new RegExp("(view: |setView\\(|frame\\(|migrateView\\(run, )'" + view + "'"));
   const listed = new Set();
   for (const row of rows) for (const name of names(row[2])) {
     listed.add(name);
@@ -1009,7 +523,7 @@ test('the table of the library dialogs in the guide matches client/src/wds-ui.js
   for (const line of header.split('\n').slice(1)) {
     const m = line.match(/^ \*\s+[a-z, ]+:\s*(.*)$/);
     if (!m) continue;
-    for (const name of m[1].split(/[,;]\s*/).map((s) => s.trim().replace(/^[a-z ]+:\s*/, '').replace(/[^a-z-].*$/, '')).filter(Boolean)) {
+    for (const name of m[1].split(/[,;]\s*/).map((s) => s.trim().replace(/^[a-z ]+:\s*/, '').replace(/[^a-z-].*$/, '')).filter((n) => n && !['toast', 'only'].includes(n))) {      // (the words of the prose in the toast line are no control names)
       expect(documented.has(name), 'the guide misses ' + name).toBe(true);
       checked++;
     }
@@ -1019,79 +533,184 @@ test('the table of the library dialogs in the guide matches client/src/wds-ui.js
   expect(section).toContain('tools/node_modules/playwright');
 });
 
-test('porting step 4: another tab holds the old database open: nothing is blocked, no delete stays pending', async ({ browser, stack, md }) => {
-  const url = migrationUrl(md, stack, stack.scope);
+// ---------------------------------------------------------------------------------------------------------------------------
+// tests: store.migrateLocal in the documented blocks of porting.md
+
+const LIT = (porting) => blockAfter(porting, /^### Example 1: /, 'js');
+const ZEIT = (porting) => blockAfter(porting, /^### Example 2: /, 'js');
+
+// The old Literaturliste in a browser: IndexedDB "literatur" with refs { id autoIncrement keyPath, title, ..., pdfId, pdfName, created } and pdfs { id, name, blob }, and the localStorage key with the settings.
+const LIT_SEED = String.raw`
+  window.seedLit = async function (opts) {
+    opts = opts || {};
+    await new Promise((ok, fail) => {
+      const req = indexedDB.open('literatur', 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        const refs = db.createObjectStore('refs', { keyPath: 'id', autoIncrement: true });
+        const pdfs = db.createObjectStore('pdfs', { keyPath: 'id', autoIncrement: true });
+        refs.add({ title: 'Alpha', authors: 'A. Author', year: 2001, pdfId: 1, pdfName: 'eins.pdf', created: '2024-03-01T10:00:00.000Z' });
+        refs.add({ title: 'Beta', authors: 'B. Author', year: 2002, pdfId: 99, pdfName: 'weg.pdf', created: '2024-03-02T10:00:00.000Z' });      // its pdf is gone
+        refs.add({ title: 'Gamma', authors: 'C. Author', year: 2003, created: '2024-03-03T10:00:00.000Z' });                                       // no pdf at all
+        const bytes = new Uint8Array([37, 80, 68, 70, 45, 49, 46, 52, 10, 1, 2, 3, 250, 251, 252]);
+        pdfs.add(opts.blobs ? { name: 'eins.pdf', blob: new Blob([bytes], { type: 'application/pdf' }) } : { name: 'eins.pdf', type: 'application/pdf', data: bytes.buffer });   // WebKit cannot keep a Blob in IndexedDB on file://
+      };
+      req.onsuccess = () => { req.result.close(); ok(); };
+      req.onerror = () => fail(req.error);
+    });
+    localStorage.setItem('literaturliste.einstellungen', JSON.stringify({ theme: 'dark', sort: 'year', statsOpen: true, filter: '' }));
+    localStorage.setItem('other.app.key', 'keep me');
+  };
+  window.oldLit = async function () {        // what is left of the old storage
+    const out = { local: {}, rows: null };
+    for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (!k.startsWith('wds:')) out.local[k] = localStorage.getItem(k); }
+    const db = await new Promise((resolve) => { const r = indexedDB.open('literatur'); r.onupgradeneeded = () => { r.transaction.abort(); resolve(null); }; r.onsuccess = () => resolve(r.result); r.onerror = () => resolve(null); });
+    if (db) {
+      out.rows = {};
+      for (const s of ['refs', 'pdfs']) out.rows[s] = await new Promise((resolve) => { const r = db.transaction(s).objectStore(s).count(); r.onsuccess = () => resolve(r.result); });
+      db.close();
+    }
+    return out;
+  };
+  window.tagOf = () => localStorage.getItem('wds:migrate:literatur:tag');
+`;
+
+async function canKeepBlobs(page) {         // an engine that cannot keep a Blob in IndexedDB for file:// pages: the seed uses bytes (h.blob takes value.data)
+  return page.evaluate(() => new Promise((res) => {
+    try {
+      const r = indexedDB.open('probe-' + Math.random());
+      r.onupgradeneeded = () => { r.result.createObjectStore('s').put(new Blob(['x']), 'k'); };
+      r.onsuccess = () => { r.result.close(); res(true); };
+      r.onerror = () => res(false);
+    } catch (e) { res(false); }
+  }));
+}
+async function idbAvailable(page) { return page.evaluate(() => { try { return typeof indexedDB !== 'undefined' && !!indexedDB.open('probe-' + Math.random()); } catch (e) { return false; } }); }
+
+function litUrl(md, porting, stack, { scope, origin, recipe } = {}) {
+  return harness(md, stack, { recipe: recipe || LIT(porting), ret: ['result', 'refs', 'pdfs'], scope: scope || stack.scope, origin, extraHead: '<script>' + LIT_SEED + '</script>' });
+}
+// Starts the block of the document (it calls store.migrateLocal at once) and returns; the dialogs are answered by the test.
+const startLit = (page) => page.evaluate(() => { window.__done = window.__recipe(store, {}).then((r) => (window.R = r), (e) => ({ rejected: e.name + ': ' + e.message })); });
+const finishLit = (page) => page.evaluate(() => window.__done);
+async function answerYes(page, { backup = false } = {}) {
+  const q = dlg(page, 'migrate');
+  await expect(q).toBeVisible({ timeout: 30000 });
+  await expect(q).not.toHaveAttribute('aria-busy', /.*/);
+  if (backup) {
+    const download = page.waitForEvent('download');
+    await q.locator('[data-wds="migrate-backup"]').click();
+    expect((await download).suggestedFilename()).toMatch(/^literatur-old-data-\d{4}-\d{2}-\d{2}\.zip$/);
+  }
+  await q.locator('[data-wds="migrate-yes"]').click();
+}
+const vaultOfLit = (page) => page.evaluate(async () => {
+  const tag = tagOf(), refs = R.refs, pdfs = R.pdfs;                  // the collections that the block of the document made
+  await refs.refresh(); await pdfs.refresh();
+  const all = await refs.getAll(), files = [];
+  for (const e of pdfs.items()) { const b = await store.getBlob('pdfs/' + e.id); files.push({ id: e.id, meta: e.meta, type: b.type, bytes: [...new Uint8Array(await b.arrayBuffer())] }); }
+  return { tag, refs: all.map((r) => ({ id: r.id, meta: r.meta, value: r.value, created: refs.items().find((i) => i.id === r.id).created })), files, settings: await store.get('settings', { fresh: true }), records: (await store.list()).map((r) => r.name) };
+});
+const PDF_BYTES = [37, 80, 68, 70, 45, 49, 46, 52, 10, 1, 2, 3, 250, 251, 252];
+
+test('porting.md example 1 (references both ways, a dead reference, a Blob, settings): the real server migrates and deletes; the person asked once; a second start finds nothing', async ({ browser, stack, md, porting }) => {
+  const url = litUrl(md, porting, stack);
   const ctx = await newContext(browser);
-  const page = await migrationPage(ctx, url, test.info());
+  const page = await open(ctx, url);
+  if (!(await idbAvailable(page))) test.skip(true, 'this engine has no IndexedDB for file:// pages');
+  const accessId = await openVault(page, stack);
+  await page.evaluate(() => window.__unlock);
+  // the person has started the new app already: a setting of its own that the old settings must not overwrite
+  await page.evaluate(async () => { await store.set('settings', { theme: 'light' }); });
+  await page.evaluate((blobs) => seedLit({ blobs }), await canKeepBlobs(page));
+  await startLit(page);
+  await answerYes(page, { backup: true });
+  const res = await finishLit(page);
+  expect(res.result).toEqual({ status: 'migrated', deleted: 'deleted', copied: 4, total: 4, sandbox: false });
+  const st = await vaultOfLit(page);
+  expect(st.refs).toHaveLength(3);
+  const byTitle = Object.fromEntries(st.refs.map((r) => [r.value.title, r]));
+  expect(byTitle.Alpha.id).toBe(st.tag + '-j1');
+  expect(byTitle.Alpha.value.pdfId).toBe(st.tag + '-j1.pdf');           // the reference computes the id of its pdf as the pdf side does
+  expect(byTitle.Alpha.value.pdfName).toBe('eins.pdf');
+  expect(byTitle.Alpha.value.id).toBeUndefined();                       // the old counter is the key now
+  expect(byTitle.Beta.value.pdfId).toBeNull();                          // a reference to a pdf that is gone
+  expect(byTitle.Beta.value.pdfName).toBeNull();
+  expect(byTitle.Gamma.value.pdfId).toBeNull();
+  expect(byTitle.Alpha.meta).toEqual({ title: 'Alpha' });
+  expect(byTitle.Alpha.created).toBe(Date.parse('2024-03-01T10:00:00.000Z'));
+  expect(st.refs.slice().sort((a, b) => a.created - b.created).map((r) => r.value.title)).toEqual(['Alpha', 'Beta', 'Gamma']);
+  expect(st.files).toEqual([{ id: st.tag + '-j1.pdf', meta: { name: 'eins.pdf', ref: st.tag + '-j1' }, type: 'application/pdf', bytes: PDF_BYTES }]);   // the other direction, byte for byte
+  expect(st.settings).toEqual({ theme: 'light', sort: 'year', statsOpen: true, filter: '' });      // the old settings fill only what the vault lacks
+  expect(st.records).not.toContain('.wds/migration/literatur/' + st.tag);                          // the marker is hidden
+  const old = await page.evaluate(() => oldLit());
+  expect(old.rows).toEqual({ refs: 0, pdfs: 0 });
+  expect(old.local).toEqual({ 'other.app.key': 'keep me' });            // only the configured keys are gone
+  await expect(page.locator('[data-wds-toast=migration]')).toBeVisible();
+  // a second start: nothing to take over, no dialog, no question
+  const page2 = await open(ctx, url);
+  await page2.evaluate(() => { window.R = null; });
+  await unlockLater(page2, accessId);
+  await startLit(page2);
+  expect((await finishLit(page2)).result).toEqual({ status: 'nothing', sandbox: false });
+  await expect(page2.locator('dialog[data-wds-view]')).toHaveCount(0);
+  await noProblems(page, page2);
+  await ctx.close();
+});
+
+test('porting.md example 1 with tagged: false: the ids are the ones that the import of section 3 builds (j1, j1.pdf)', async ({ browser, stack, md, porting }) => {
+  const recipe = LIT(porting);
+  expect(recipe).toContain('id: "literatur",');
+  const url = litUrl(md, porting, stack, { recipe: recipe.replace('id: "literatur",', 'id: "literatur", tagged: false,') });
+  const ctx = await newContext(browser);
+  const page = await open(ctx, url);
+  if (!(await idbAvailable(page))) test.skip(true, 'this engine has no IndexedDB for file:// pages');
   await openVault(page, stack);
   await page.evaluate(() => window.__unlock);
-  await page.evaluate(() => seedOld());
-  await page.evaluate(() => new Promise((ok) => { const r = indexedDB.open('oldapp'); r.onsuccess = () => { window.__hold = r.result; ok(); }; }));   // "the old app in another tab"
-  const res = await runMigration(page);
-  expect(res).toMatchObject({ status: 'migrated', deleted: 'deleted', count: 5 });
-  expect(await page.evaluate(() => oldState())).toMatchObject({ rows: 0, prefs: null, avatar: null });
-  // the old tab writes after the delete: that row is simply there, with the next start it is copied (nothing a pending delete could swallow)
-  await page.evaluate(() => addOldRow());
-  expect((await page.evaluate(() => oldState())).rows).toBe(1);
-  await page.evaluate(() => window.__hold.close());
-  expect(await runMigration(page)).toMatchObject({ status: 'migrated', deleted: 'deleted', count: 1 });
-  expect(await page.evaluate(() => R.notes.refresh().then((l) => l.length))).toBe(3);
+  await page.evaluate((blobs) => seedLit({ blobs }), await canKeepBlobs(page));
+  await startLit(page);
+  await answerYes(page);
+  expect((await finishLit(page)).result).toMatchObject({ status: 'migrated', deleted: 'deleted', copied: 4 });
+  const st = await vaultOfLit(page);
+  const newId = (oldId) => (typeof oldId === 'string' ? 's' : 'j') + encodeURIComponent(typeof oldId === 'string' ? oldId : JSON.stringify(oldId));     // the function of the import in section 3
+  expect(st.refs.map((r) => r.id).sort()).toEqual([newId(1), newId(2), newId(3)]);
+  expect(st.files.map((f) => f.id)).toEqual([newId(1) + '.pdf']);
   await noProblems(page);
   await ctx.close();
 });
 
-test('porting step 4 in the sandbox: the data is copied, the old data is kept, a rerun deletes nothing; the sandbox shows what it is', async ({ browser, stack, md }) => {
-  const url = migrationUrl(md, stack, SANDBOX_ID, stack.sandbox.origin);
-  const ctx = await newContext(browser);
-  const page = await migrationPage(ctx, url, test.info());
+async function sandboxVault(page) {
   await page.evaluate(() => { window.__unlock = store.unlock(); });
-  // the library says Sandbox: banner, title, the create button, no recovery contact
   await expect(dlg(page, 'unlock')).toContainText('Sandbox');
-  await expect(dlg(page, 'unlock').locator('[data-wds="sandbox-banner"]')).toBeVisible();
-  await dlg(page, 'unlock').locator('[data-wds="to-create"]').click();
-  await expect(dlg(page, 'create').locator('[data-wds="join-code"]')).toHaveCount(0);
-  await expect(dlg(page, 'create').locator('[data-wds="recovery-contact"]')).toHaveCount(0);
-  await expect(dlg(page, 'create').locator('[data-wds="create-submit"]')).toContainText('sandbox');
-  const c = dlg(page, 'create');
-  await c.locator('[data-wds="passphrase"]').fill(PASS);
-  await c.locator('[data-wds="passphrase-repeat"]').fill(PASS);
-  await c.locator('[data-wds="create-submit"]').click();
-  await expect(dlg(page, 'sheet')).toBeVisible({ timeout: 60000 });
-  await expect(dlg(page, 'sheet').locator('[data-wds="recovery-code"]')).toHaveCount(0);
-  await dlg(page, 'sheet').locator('[data-wds="sheet-confirm"]').check();
-  await dlg(page, 'sheet').locator('[data-wds="sheet-continue"]').click();
+  await createVault(page);
   await page.evaluate(() => window.__unlock);
   await expect(page.locator('[data-wds="sandbox-bar"]')).toBeVisible();
   expect(await page.evaluate(() => store.status().sandbox)).toBe(true);
+}
 
-  await page.evaluate(() => seedOld());
-  const res = await runMigration(page);
-  expect(res).toMatchObject({ status: 'migrated', deleted: 'kept', count: 5 });
-  expect((await page.evaluate(() => window.__questions))[0]).toContain('sandbox: the old data stays');
-  const state = await page.evaluate(() => oldState());
-  expect(state.rows).toBe(3);                                         // the old data is still there
-  expect(state.prefs).not.toBeNull();
-  expect(state.avatar).not.toBeNull();
-  expect(state.tag).not.toBeNull();
-  expect(await page.evaluate(() => R.notes.refresh().then((l) => l.length))).toBe(2);
-  // a rerun recognises the marker: nothing is written, nothing is deleted
-  expect(await runMigration(page)).toMatchObject({ status: 'migrated', deleted: 'kept', again: true });
-  expect((await page.evaluate(() => oldState())).rows).toBe(3);
-  // the shortcut does not trust the marker: a record of the copy that is gone from the vault since sends the run through the whole flow again (it asks, and copies it back)
-  await page.evaluate((t) => R.files.remove(t + '-j7.pdf'), res.tag);
-  const asked = (await page.evaluate(() => window.__questions)).length;
-  const refilled = await runMigration(page);
-  expect(refilled).toMatchObject({ status: 'migrated', deleted: 'kept' });
-  expect(refilled.again).toBeUndefined();
-  expect((await page.evaluate(() => window.__questions)).length).toBe(asked + 1);
-  expect(await page.evaluate((t) => store.get('files/' + t + '-j7.pdf', { fresh: true }).then((b) => [...b]), res.tag)).toEqual([37, 80, 68, 70, 1, 2, 3, 250, 251, 252]);
-  // a record above the (small) limit of the sandbox: it is offered as a download, the rest is copied, nothing is deleted
-  await page.evaluate(() => seedOld({ bigBytes: 600 * 1024 }));
-  const big = await runMigration(page);
-  expect(big).toMatchObject({ status: 'migrated', deleted: 'kept' });
-  expect(big.tooLarge).toHaveLength(1);
-  expect((await page.evaluate(() => window.__questions)).at(-2)).toContain('too large for the vault');
-  expect((await page.evaluate(() => oldState())).rows).toBe(4);
+test('porting.md example 1 in the sandbox: the data is copied and the old data is kept (the question says so); a rerun asks nothing and deletes nothing', async ({ browser, stack, md, porting }) => {
+  const url = litUrl(md, porting, stack, { scope: SANDBOX_ID, origin: stack.sandbox.origin });
+  const ctx = await newContext(browser);
+  const page = await open(ctx, url);
+  if (!(await idbAvailable(page))) test.skip(true, 'this engine has no IndexedDB for file:// pages');
+  await sandboxVault(page);
+  await page.evaluate((blobs) => seedLit({ blobs }), await canKeepBlobs(page));
+  await startLit(page);
+  await expect(dlg(page, 'migrate')).toContainText('Sandbox');
+  await answerYes(page);
+  const res = await finishLit(page);
+  expect(res.result).toEqual({ status: 'migrated', deleted: 'kept', copied: 4, total: 4, sandbox: true });
+  const old = await page.evaluate(() => oldLit());
+  expect(old.rows).toEqual({ refs: 3, pdfs: 1 });                        // still there
+  expect(Object.keys(old.local).sort()).toEqual(['literaturliste.einstellungen', 'other.app.key']);
+  expect((await vaultOfLit(page)).refs).toHaveLength(3);
+  // what the person does in the new app stays: an edit and a deletion survive the next start, and nothing is asked again
+  await page.evaluate(async () => { const all = R.refs.items(); await R.refs.remove(all[0].id); });
+  await startLit(page);
+  const again = await finishLit(page);
+  expect(again.result).toMatchObject({ status: 'migrated', again: true, deleted: 'kept' });
+  await expect(page.locator('dialog[data-wds-view="migrate"]')).toHaveCount(0);
+  expect((await vaultOfLit(page)).refs).toHaveLength(2);
   // the documents of a server with a sandbox name it
   const llms = await (await fetch(stack.sandbox.origin + '/datastore/llms.txt')).text();
   expect(llms).toContain(SANDBOX_ID);
@@ -1100,43 +719,291 @@ test('porting step 4 in the sandbox: the data is copied, the old data is kept, a
   expect(llms).not.toContain('{{');
   const op = await (await fetch(stack.sandbox.origin + '/datastore/docs/operator.md')).text();
   expect(op).toContain('**' + SANDBOX_ID + '**');
+  const portingSandbox = await (await fetch(stack.sandbox.origin + '/datastore/docs/porting.md')).text();
+  expect(portingSandbox).toContain('512 KB per record');
+  expect(portingSandbox).not.toContain('{{');
   await noProblems(page);
   await ctx.close();
 });
 
-test('porting step 4 in the sandbox with window.__WDS_MIGRATION_TEST__ (what wds-verify --migration-delete sets): the question says the data is deleted, and it is', async ({ browser, stack, md }) => {
-  const url = migrationUrl(md, stack, SANDBOX_ID, stack.sandbox.origin);
+test('porting.md, the test global: an automated test that sets window.__WDS_MIGRATION_TEST__ sees the deletion in the sandbox', async ({ browser, stack, md, porting }) => {
+  const url = litUrl(md, porting, stack, { scope: SANDBOX_ID, origin: stack.sandbox.origin });
   const ctx = await newContext(browser);
-  await ctx.addInitScript(() => { window.__WDS_MIGRATION_TEST__ = true; Object.defineProperty(navigator, 'webdriver', { get: () => true, configurable: true }); });      // what wds-verify --migration-delete does (an automated browser)
-  const page = await migrationPage(ctx, url, test.info());
-  await page.evaluate(() => { window.__unlock = store.unlock(); });
-  await dlg(page, 'unlock').locator('[data-wds="to-create"]').click();
-  const c = dlg(page, 'create');
-  await c.locator('[data-wds="passphrase"]').fill(PASS);
-  await c.locator('[data-wds="passphrase-repeat"]').fill(PASS);
-  await c.locator('[data-wds="create-submit"]').click();
-  await expect(dlg(page, 'sheet')).toBeVisible({ timeout: 60000 });
-  await dlg(page, 'sheet').locator('[data-wds="sheet-confirm"]').check();
-  await dlg(page, 'sheet').locator('[data-wds="sheet-continue"]').click();
-  await page.evaluate(() => window.__unlock);
-  expect(await page.evaluate(() => store.status().sandbox)).toBe(true);
-  // a person's browser is not automated (navigator.webdriver is false): the global alone changes nothing, the recipe keeps the old data
-  await page.evaluate(() => Object.defineProperty(navigator, 'webdriver', { get: () => false, configurable: true }));
-  expect(await page.evaluate(() => R.removeOldData({ local: [] }, { sandbox: true }))).toBe('kept');
-  await page.evaluate(() => Object.defineProperty(navigator, 'webdriver', { get: () => true, configurable: true }));
-  await page.evaluate(() => seedOld());
-  expect(await runMigration(page)).toMatchObject({ status: 'migrated', deleted: 'deleted', count: 5 });
-  expect((await page.evaluate(() => window.__questions))[0]).toContain('delete them from this browser');
-  expect((await page.evaluate(() => oldState())).rows).toBe(0);
+  // what the block of porting.md says to do, in the developer's own automated browser
+  const block = blockAfter(porting, /^### The deletion path in the sandbox: the test global$/, 'js');
+  expect(block).toContain('context.addInitScript');
+  await ctx.addInitScript(() => { window.__WDS_MIGRATION_TEST__ = true; });
+  const warnings = [];
+  const page = await open(ctx, url);
+  page.on('console', (m) => { if (m.type() === 'warning') warnings.push(m.text()); });
+  if (!(await idbAvailable(page))) test.skip(true, 'this engine has no IndexedDB for file:// pages');
+  await sandboxVault(page);
+  await page.evaluate((blobs) => seedLit({ blobs }), await canKeepBlobs(page));
+  await startLit(page);
+  await answerYes(page);                                                         // (the question is the sandbox's and still says that the old data stays; the result says what happened)
+  expect((await finishLit(page)).result).toMatchObject({ status: 'migrated', deleted: 'deleted', copied: 4, sandbox: true });
+  expect((await page.evaluate(() => oldLit())).rows).toEqual({ refs: 0, pdfs: 0 });
+  expect(warnings.filter((w) => /__WDS_MIGRATION_TEST__/.test(w))).toHaveLength(1);
   await noProblems(page);
   await ctx.close();
 });
 
-// ---- wds-verify on what the documents print ----
+test('porting.md, the call: the options of the block are valid, and without old data there is no dialog and no request (status nothing)', async ({ browser, stack, md, porting }) => {
+  const recipe = blockAfter(porting, /^### The call$/, 'js');
+  const url = harness(md, stack, { recipe, ret: ['result'], scope: stack.scope });
+  const ctx = await newContext(browser);
+  const page = await open(ctx, url);
+  let requests = 0;
+  page.on('request', (r) => { if (/\/api\//.test(r.url())) requests++; });
+  const before = requests;
+  const res = await page.evaluate(() => window.__recipe(store, {}));
+  expect(res.result).toEqual({ status: 'nothing', sandbox: false });
+  await expect(page.locator('dialog[data-wds-view]')).toHaveCount(0);
+  expect(requests - before).toBeLessThanOrEqual(1);                       // at most the scope document that tells whether this is a sandbox
+  await noProblems(page);
+  await ctx.close();
+});
 
-const OLD_APP = "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><title>Old notes (local only)</title></head>\n<body>\n<input id=\"title\" aria-label=\"Title\"> <textarea id=\"text\" aria-label=\"Text\"></textarea> <button id=\"save\">Save</button>\n<script>\n\"use strict\";\n// the old, local-only version of the app: one IndexedDB database \"oldapp\", the store \"notes\" (the recipe's OLD names)\ndocument.getElementById(\"save\").onclick = () => {\n  const req = indexedDB.open(\"oldapp\", 1);\n  req.onupgradeneeded = () => { for (const name of [\"notes\", \"files\"]) req.result.createObjectStore(name, { keyPath: \"id\" }); req.result.createObjectStore(\"meta\"); };\n  req.onsuccess = () => {\n    const db = req.result, tx = db.transaction(\"notes\", \"readwrite\");\n    tx.objectStore(\"notes\").put({ id: Date.now(), title: document.getElementById(\"title\").value, text: document.getElementById(\"text\").value, created: Date.now() });\n    tx.oncomplete = () => db.close();\n  };\n};\n</script>\n</body></html>\n";
-const NEWAPP_BODY = "<body>\n<h1>Notes</h1>\n<div id=\"ask\" hidden><p id=\"question\"></p><button id=\"migrate-yes\">Copy and delete</button> <button id=\"migrate-no\">Not now</button></div>\n<ul id=\"list\"></ul>\n<span id=\"status\" role=\"status\"></span>\n";
-const NEWAPP_SCRIPT = "<script>\n\"use strict\";\nconst store = WDS.connect({ scope: \"myapp-k7m2a9\" });\n__RECIPE__\nconst $ = (id) => document.getElementById(id);\nconst ui = {\n  confirm: (question) => new Promise((ok) => {\n    $(\"question\").textContent = question; $(\"ask\").hidden = false;\n    $(\"migrate-yes\").onclick = () => { $(\"ask\").hidden = true; ok(true); };\n    $(\"migrate-no\").onclick = () => { $(\"ask\").hidden = true; ok(false); };\n  }),\n  offerDownload: async (blob, name) => { const a = document.createElement(\"a\"); a.href = URL.createObjectURL(blob); a.download = name; document.body.append(a); a.click(); a.remove(); },   // a backup of the old data\n};\nasync function show() {\n  const items = await notes.refresh();\n  const rows = [];\n  for (const it of items) { const note = await store.get(\"notes/\" + it.id); rows.push(((note && note.title) || \"\") + \": \" + ((note && note.text) || \"\")); }\n  $(\"list\").replaceChildren(...rows.map((r) => { const li = document.createElement(\"li\"); li.textContent = r; return li; }));\n}\nasync function start() {\n  const result = await migrateOldData(ui);\n  $(\"status\").textContent = result.status === \"migrated\" ? \"Migrated (\" + result.deleted + \")\" : \"\";\n  await show();\n}\nstore.onUnlock(start);\nstore.unlock();\n</script>\n</body>\n</html>\n";
+test('porting.md, what your app does with the result: the start function asks once per page and loads afterwards', async ({ browser, stack, md, porting }) => {
+  const recipe = blockAfter(porting, /^### What your app does with the result$/, 'js');
+  const url = harness(md, stack, { recipe, params: ['takeOverOldData', 'renderList', 'refs'], ret: ['start'], scope: stack.scope });
+  const ctx = await newContext(browser);
+  const page = await open(ctx, url);
+  const warned = [];
+  page.on('console', (m) => { if (m.type() === 'warning') warned.push(m.text()); });
+  const calls = await page.evaluate(async () => {
+    const log = [];
+    const R = await window.__recipe(store, {
+      takeOverOldData: async () => { log.push('migrate'); return { status: 'failed', why: 'a reason for the developer' }; },
+      renderList: (items) => log.push('render ' + items.join(',')),
+      refs: { load: async () => { log.push('load'); return ['a', 'b']; } },
+    });
+    await R.start(); await R.start();
+    return log;
+  });
+  expect(calls).toEqual(['migrate', 'load', 'render a,b', 'load', 'render a,b']);
+  expect(warned.join('\n')).toContain('a reason for the developer');
+  await ctx.close();
+});
+
+test('porting.md example 2 is the code of examples/zeit-notizen/index.html, and the app uses it', async ({ porting }) => {
+  const app = readFileSync(join(HERE, 'zeit-notizen', 'index.html'), 'utf8');
+  const m = app.match(/\n( *)\/\/ migrateLocal: begin\n([\s\S]*?)\n *\/\/ migrateLocal: end\n/);
+  expect(m, 'the markers in index.html').not.toBeNull();
+  const fromApp = m[2].split('\n').map((l) => l.slice(m[1].length)).join('\n');
+  expect(fromApp).toBe(ZEIT(porting));
+  expect(app).toContain('await takeOverOldData()');
+  expect(app).not.toMatch(/indexedDB\.open|localStorage\.(getItem|removeItem|setItem)/);              // the app itself never touches the old storage
+  for (const name of ['projectsCol', 'timeCol', 'notesCol', 'filesCol']) expect(app).toContain('var ' + name + ' = store.collection');
+});
+
+test('the seed block of porting.md and of section 12 is the one of examples/zeit-notizen/wds-verify.json, and the old app has the elements it names', async ({ md, porting }) => {
+  const file = JSON.parse(readFileSync(join(HERE, 'zeit-notizen', 'wds-verify.json'), 'utf8'));
+  const fromPorting = JSON.parse(blockAfter(porting, /^### The migration test in wds-verify /, 'json'));
+  expect(fromPorting.seed).toEqual(file.seed);
+  const printed = JSON.parse(blockAfter(md, /^### Writing wds-verify\.json$/, 'json', 1));
+  expect(printed.seed).toEqual(file.seed);
+  const old = readFileSync(join(HERE, 'zeit-notizen', 'old', 'index.html'), 'utf8');
+  for (const step of file.seed.steps) {
+    const sel = step.fill ? step.fill[0] : step.click || (step.upload && step.upload[0]);
+    if (sel) expect(old, 'the old page has ' + sel).toContain('id="' + sel.slice(1) + '"');
+  }
+  expect(file.seed.steps.some((s) => s.upload)).toBe(true);
+  expect(file.seed.steps.some((s) => s.fill && /\{canary\}/.test(s.fill[1]))).toBe(true);
+});
+
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// tests: the other code blocks (checklist, popup, autosave, role)
+
+const POPUP_HEADING = /^### Files$/;
+test('the popup block of integration.md (Files) and porting.md (checklist) is one and the same, opens the window inside the click and falls back to a download link', async ({ browser, stack, md, porting }) => {
+  const fromGuide = blockAfter(md, POPUP_HEADING, 'js', 1);
+  const fromPorting = blockAfter(porting, /^## 7\. Checklist for apps with forms and modal dialogs$/, 'js', 1);
+  expect(fromGuide).toBe(fromPorting);
+  const url = harness(md, stack, { recipe: fromGuide, params: ['openButton', 'id', 'name', 'offerDownloadLink', 'showError'], ret: [], scope: stack.scope });
+  const ctx = await newContext(browser);
+  const page = await open(ctx, url);
+  await page.evaluate(async () => {
+    window.__links = []; window.__errors = [];
+    window.openButton = document.createElement('button'); window.openButton.id = 'open-file'; window.openButton.textContent = 'Open'; document.body.append(window.openButton);
+    await window.__recipe(store, { openButton: window.openButton, id: 'doc1', name: 'doc1.txt', offerDownloadLink: (url, name) => window.__links.push([url.slice(0, 5), name]), showError: (e) => window.__errors.push(e.message) });
+  });
+  await openVault(page, stack);
+  await page.evaluate(() => window.__unlock);
+  await page.evaluate(() => store.set('pdfs/doc1', new Blob(['hello popup'], { type: 'text/plain' })));
+  // the click opens the (empty) window at once, the file arrives in it
+  const [popup] = await Promise.all([ctx.waitForEvent('page'), page.locator('#open-file').click()]);
+  await expect.poll(() => popup.url(), { timeout: 20000 }).toMatch(/^blob:/);
+  expect(await popup.locator('body').innerText()).toContain('hello popup');
+  expect(await page.evaluate(() => [window.__links, window.__errors])).toEqual([[], []]);
+  await popup.close();
+  // a blocker that refuses the empty window: the download link is offered instead
+  await page.evaluate(() => { window.__realOpen = window.open; window.open = () => null; });
+  await page.locator('#open-file').click();
+  await expect.poll(() => page.evaluate(() => window.__links.length)).toBe(1);
+  expect(await page.evaluate(() => window.__links[0])).toEqual(['blob:', 'doc1.txt']);
+  // a file that is gone: the window is closed again and the error shown
+  await page.evaluate(() => { window.open = window.__realOpen; return store.remove('pdfs/doc1'); });
+  const [popup2] = await Promise.all([ctx.waitForEvent('page'), page.locator('#open-file').click()]);
+  await expect.poll(() => page.evaluate(() => window.__errors.length)).toBe(1);
+  await expect.poll(() => popup2.isClosed()).toBe(true);
+  expect(await page.evaluate(() => window.__errors[0])).toContain('does not exist any more');
+  await noProblems(page);
+  await ctx.close();
+});
+
+test('porting.md checklist for apps with forms: own dialogs are closed on lock, the typed values stay after a failed save, the button is disabled while saving and enabled again', async ({ browser, stack, md, porting }) => {
+  const recipe = blockAfter(porting, /^## 7\. Checklist for apps with forms and modal dialogs$/, 'js', 0);
+  const url = harness(md, stack, { recipe, params: ['refs', 'form', 'saveButton', 'readForm', 'showSaved', 'showError', 'closeForm', 'clearScreen', 'id'], ret: [], scope: stack.scope,
+    extraBody: '<dialog id="mine"><p>my own modal dialog</p></dialog><form id="f"><input id="title" value="typed text"><button id="save" type="submit">Save</button></form>' });
+  const ctx = await newContext(browser);
+  const page = await open(ctx, url);
+  await page.evaluate(async () => {
+    window.__log = []; window.__gate = null;
+    window.refs = store.collection('refs/', { meta: (r) => ({ title: r.title }) });
+    window.__realSet = window.refs.set.bind(window.refs);
+    window.refs.set = async (id, v) => { window.__log.push('set ' + v.title); if (window.__gate) await window.__gate; if (window.__fail) throw Object.assign(new Error('offline'), { name: 'OfflineError' }); return window.__realSet(id, v); };
+    await window.__recipe(store, {
+      refs: window.refs, form: document.getElementById('f'), saveButton: document.getElementById('save'), id: 'item-1.pdf',
+      readForm: () => ({ title: document.getElementById('title').value }),
+      showSaved: (v) => window.__log.push('saved ' + v.title), showError: (e) => window.__log.push('error ' + e.message), closeForm: () => window.__log.push('closed'),
+      clearScreen: () => window.__log.push('cleared'),
+    });
+  });
+  await openVault(page, stack);
+  await page.evaluate(() => window.__unlock);
+  // (3) while the save is in flight the button is disabled; (4) the submit does not navigate
+  await page.evaluate(() => { window.__gate = new Promise((r) => { window.__openGate = r; }); });
+  await page.locator('#save').click();
+  await expect(page.locator('#save')).toBeDisabled();
+  await page.evaluate(() => window.__openGate());
+  await expect(page.locator('#save')).toBeEnabled();
+  expect(await page.evaluate(() => window.__log)).toEqual(['set typed text', 'closed', 'saved typed text']);
+  expect(page.url()).toBe(url);
+  // (2) a failed save keeps the form: nothing is closed, the error is shown, the button is enabled again
+  await page.evaluate(() => { window.__log.length = 0; window.__gate = null; window.__fail = true; });
+  await page.locator('#save').click();
+  await expect.poll(() => page.evaluate(() => window.__log.length)).toBe(2);
+  expect(await page.evaluate(() => window.__log)).toEqual(['set typed text', 'error offline']);
+  await expect(page.locator('#save')).toBeEnabled();
+  expect(await page.locator('#title').inputValue()).toBe('typed text');
+  // (1) an own modal dialog is closed by the onLock handler, which the library calls on every lock
+  await page.evaluate(() => { window.__log.length = 0; document.getElementById('mine').showModal(); });
+  expect(await page.evaluate(() => document.querySelectorAll('dialog:not(.wds-dialog)[open]').length)).toBe(1);
+  await page.evaluate(() => store.lock());
+  await expect.poll(() => page.evaluate(() => document.querySelectorAll('dialog:not(.wds-dialog)[open]').length)).toBe(0);
+  expect(await page.evaluate(() => window.__log)).toContain('cleared');
+  // (6) an id with "." and a percent sign goes into a selector through CSS.escape
+  expect(await page.evaluate(() => { const el = document.createElement('li'); el.id = 'item-a%2Fb.pdf'; document.body.append(el); return document.querySelector('#item-' + CSS.escape('a%2Fb.pdf')) === el; })).toBe(true);
+  await noProblems(page);
+  await ctx.close();
+});
+
+test('the library dialog opens above a modal dialog of the app, as the checklist says: a conflict while an own <dialog> is open stays answerable', async ({ browser, stack, md }) => {
+  const url = harness(md, stack, { recipe: '', ret: [], scope: stack.scope, extraBody: '<dialog id="mine"><p>my own modal dialog</p><button id="inner">inner</button></dialog>' });
+  const ctx = await newContext(browser);
+  const a = await open(ctx, url);
+  await a.evaluate(async () => { await window.__recipe(store, {}); });
+  const accessId = await openVault(a, stack);
+  await a.evaluate(() => window.__unlock);
+  const b = await open(ctx, url);
+  await b.evaluate(async () => { await window.__recipe(store, {}); });
+  await unlockLater(b, accessId);
+  await a.evaluate(() => store.set('shared', { v: 1 }));
+  await b.evaluate(async () => { await store.get('shared'); await store.set('shared', { v: 2 }); });
+  await a.evaluate(() => { document.getElementById('mine').showModal(); window.__p = store.set('shared', { v: 3 }); });
+  const conflict = dlg(a, 'conflict');
+  await expect(conflict).toBeVisible({ timeout: 30000 });
+  await conflict.locator('[data-wds="conflict-theirs"]').click();                 // no force: the dialog is on top and not inert
+  expect((await a.evaluate(() => window.__p)).resolution).toBe('theirs');
+  await expect(a.locator('#inner')).toBeVisible();
+  await noProblems(a, b);
+  await ctx.close();
+});
+
+test('integration.md: the autosave block saves the state it is given, and the role block hides nothing for the owner', async ({ browser, stack, md }) => {
+  const autosave = blockAfter(md, /^### Autosave$/, 'js');
+  const role = blockAfter(md, /^## 8\. Members and sharing$/, 'js');
+  const url = harness(md, stack, { recipe: autosave + '\n' + role, params: ['state', 'statusEl', 'textarea', 'saveButton'], ret: ['saver'], scope: stack.scope });
+  const ctx = await newContext(browser);
+  const page = await open(ctx, url);
+  await openVault(page, stack);
+  await page.evaluate(() => window.__unlock);
+  const out = await page.evaluate(async () => {
+    const statusEl = document.createElement('span'), textarea = document.createElement('textarea'), saveButton = document.createElement('button');
+    const R = await window.__recipe(store, { state: { text: 'draft text' }, statusEl, textarea, saveButton });
+    // the block itself ran changed(), flush() and stop(): the draft is in the vault, the handle is stopped by the person's own call
+    return { stopReason: R.saver.stopReason, readOnly: textarea.readOnly, hidden: saveButton.hidden, saved: await store.get('draft', { fresh: true }) };
+  });
+  expect(out).toEqual({ stopReason: 'stop', readOnly: false, hidden: false, saved: { text: 'draft text' } });
+  await noProblems(page);
+  await ctx.close();
+});
+
+test('every code block of integration.md and porting.md is run or at least parsed, and a new block must be classified here', async ({ md, porting }) => {
+  const blocks = (text) => {
+    const out = []; let heading = '';
+    const lines = text.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const h = lines[i].match(/^#+ (.*)/); if (h) heading = h[1];
+      const f = lines[i].match(/^```(\w*)$/);
+      if (!f) continue;
+      const body = [];
+      for (i++; i < lines.length && !/^```$/.test(lines[i]); i++) body.push(lines[i]);
+      out.push({ lang: f[1], heading, code: body.join('\n') });
+    }
+    return out;
+  };
+  // [document, heading prefix, index inside that heading] -> how the block is tested
+  const RUN = 'run (a test above or in the example app)', PARSE = 'parsed only';
+  const registry = {
+    'integration|2. The script tag|0': 'run: the example of section 14 carries it (wds-verify static check)',
+    'integration|3. Content-Security-Policy|0': 'run: the example of section 14 carries it',
+    'integration|4. API reference|0': PARSE,
+    'integration|Autosave|0': RUN,
+    'integration|Lock and unlock again|0': RUN,
+    'integration|Collections|0': RUN,
+    'integration|Files|0': RUN,
+    'integration|Files|1': RUN,
+    'integration|Conflicts in code|0': RUN,
+    'integration|8. Members and sharing|0': RUN,
+    'integration|12. wds-verify|0': 'shell: text only',
+    'integration|12. wds-verify|1': 'shell: text only',
+    'integration|Writing wds-verify.json|0': 'json: parsed below',
+    'integration|Writing wds-verify.json|1': 'json: equal to the file of the example app',
+    'integration|13. What to tell users|0': 'text: the sentences are compared in test_docs.py',
+    'integration|14. Complete minimal example|0': 'run: wds-verify (mock and sandbox)',
+    'porting|3. Own export and import|0': RUN,
+    'porting|3. Own export and import|1': RUN,
+    'porting|The call|0': RUN,
+    'porting|Example 1: references in both directions, files, settings in localStorage|0': RUN,
+    'porting|Example 2: a localStorage JSON, notes, files and a key-value store|0': 'identical to the app, which app.spec.mjs runs against a seeded old browser',
+    'porting|What your app does with the result|0': RUN,
+    'porting|The migration test in wds-verify (the seed block)|0': 'json: equal to the example, run by wds-verify below',
+    'porting|The deletion path in the sandbox: the test global|0': PARSE,
+    'porting|The join code for tests (a real scope)|0': 'shell: text only',
+    'porting|7. Checklist for apps with forms and modal dialogs|0': RUN,
+    'porting|7. Checklist for apps with forms and modal dialogs|1': RUN,
+  };
+  const Async = Object.getPrototypeOf(async function () {}).constructor;
+  const seen = new Set();
+  for (const [doc, text] of [['integration', md], ['porting', porting]]) {
+    const counts = {};
+    for (const b of blocks(text)) {
+      const heading = b.heading.replaceAll(String.fromCharCode(96), '');
+      const key = doc + '|' + heading + '|' + (counts[heading] = (counts[heading] === undefined ? 0 : counts[heading] + 1));
+      expect(registry[key], 'a code block that is not classified: ' + key).toBeTruthy();
+      seen.add(key);
+      if (b.lang === 'js') expect(() => new Async(b.code), 'the block does not parse: ' + key).not.toThrow();
+      if (b.lang === 'json') expect(() => JSON.parse(b.code), 'the block is not JSON: ' + key).not.toThrow();
+    }
+  }
+  for (const key of Object.keys(registry)) expect(seen.has(key), 'classified but gone: ' + key).toBe(true);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// tests: wds-verify on what the documents print
 
 function verify(file, ...args) {
   return spawnSync('node', [join(ROOT, 'tools', 'wds-verify.mjs'), file, ...args], { encoding: 'utf8', env: { ...process.env, WDS_VERIFY_OFFLINE: '1' }, timeout: 280000 });
@@ -1189,33 +1056,44 @@ test('the example app of section 14 runs against the sandbox with wds-verify --t
   expect(s.stdout).toContain('Sandbox scope ID in the app');
 });
 
-test('wds-verify tests the migration of the recipe: a "seed" block with the old app, mock target deletes, sandbox keeps, --migration-delete deletes there too', async ({ stack, md }) => {
-  test.setTimeout(290000);
-  const dir = join(stack.pages, 'verify-seed');
-  mkdirSync(join(dir, 'old'), { recursive: true });
+test('the Literaturliste block of porting.md uses the library for the old data: no static finding, an info that says so; the same app with hand-made code is warned about', async ({ stack, md, porting }) => {
+  const dir = join(stack.pages, 'verify-static');
+  mkdirSync(dir, { recursive: true });
   const base = section14(md);
-  const head = base.slice(0, base.indexOf('<body>'));
-  const libTag = base.slice(base.indexOf('</textarea>') + '</textarea>'.length, base.indexOf('<script>\n"use strict";')).trim();
-  const app = head + NEWAPP_BODY + libTag + '\n' + NEWAPP_SCRIPT.replace('__RECIPE__', () => MIGRATION(md));
-  writeFileSync(join(dir, 'index.html'), productionPage(stack, app));
-  writeFileSync(join(dir, 'old', 'index.html'), OLD_APP);
-  writeFileSync(join(dir, 'wds-verify.json'), JSON.stringify({
-    seed: { page: 'old/index.html', steps: [{ fill: ['#title', 'old title {canary}'] }, { fill: ['#text', 'old text {canary}'] }, { click: '#save' }, { wait: 800 }] },
-    steps: [{ click: '#migrate-yes' }, { wait: 4000 }],
-  }));
-  // mock target: the migration runs as in production, the old data is gone, nothing unencrypted left the page
-  const r = verify(join(dir, 'index.html'));
+  const page = (script) => productionPage(stack, base.replace(/<script>\n"use strict";[\s\S]*<\/script>/, '<script>\n"use strict";\nconst store = WDS.connect({ scope: "myapp-k7m2a9" });\n' + script + '\n</script>'));
+  const good = 'async function takeOverOldData() {\n' + LIT(porting) + '\n  return result;\n}\nstore.onUnlock(async () => { await takeOverOldData(); });\nstore.unlock();';
+  writeFileSync(join(dir, 'good.html'), page(good));
+  const r = verify(join(dir, 'good.html'), '--static-only');
+  expect(r.status, r.stdout + r.stderr).toBe(0);
+  expect(r.stdout).toContain('store.migrateLocal');
+  expect(r.stdout).not.toContain('taken over by hand');
+  expect(r.stdout).not.toContain('Deleting local data');
+  expect(r.stdout).not.toContain('localStorage.clear()');
+  // the hand-made way: reading and deleting the old storage in the app
+  const bad = 'async function takeOver() {\n  const req = indexedDB.open("literatur");\n  req.onsuccess = () => { localStorage.removeItem("literaturliste.einstellungen"); };\n}\nstore.unlock();';
+  writeFileSync(join(dir, 'bad.html'), page(bad));
+  const u = verify(join(dir, 'bad.html'), '--static-only');
+  expect(u.stdout).toContain('taken over by hand');
+});
+
+// The example app with its older version as the seed: the tool opens the old page, the new app, answers the library's migration dialogs, reloads, and looks at the old storage.
+test('wds-verify runs the migration of examples/zeit-notizen with its seed: mock target deletes the old data, sandbox keeps it, --migration-delete deletes it there too', async ({ stack }) => {
+  test.setTimeout(590000);
+  const app = join(HERE, 'zeit-notizen', 'index.html');
+  const r = verify(app);
   expect(r.status, r.stdout + r.stderr).toBe(0);
   expect(r.stdout).toMatch(/Target: \*\*mock\*\*/);
   expect(r.stdout).toMatch(/Seed: the old app \| pass/);
   expect(r.stdout).toMatch(/Migration: old data visible \| pass/);
   expect(r.stdout).toMatch(/Migration: old data only encrypted \| pass/);
   expect(r.stdout).toMatch(/Migration: old data deleted \| pass/);
-  // sandbox target: the recipe keeps the old data; with --migration-delete (the global the recipe honours) it deletes
+  expect(r.stdout).toMatch(/Data after reload \| pass/);
+  // the sandbox: a copy of the example with the hash of the bundle that this server serves (its escrow pins are its own)
+  const dir = join(stack.pages, 'verify-zeit');
+  cpSync(join(HERE, 'zeit-notizen'), dir, { recursive: true });
+  writeFileSync(join(dir, 'index.html'), readFileSync(join(dir, 'index.html'), 'utf8').replaceAll(publishedSri(), stack.sri));
   const env = { ...process.env, WDS_VERIFY_SERVICE: stack.sandbox.service, WDS_VERIFY_LIBRARY: stack.bundleFile, WDS_VERIFY_OFFLINE: '1' };
   const hashes = join(stack.bundleDir, 'hashes.json');
-  const page = app.replaceAll(stack.docs.origin + '/datastore', 'https://wiai.uni-bamberg.de/datastore');
-  writeFileSync(join(dir, 'index.html'), page);
   const sandbox = (...extra) => spawnSync('node', [join(ROOT, 'tools', 'wds-verify.mjs'), join(dir, 'index.html'), '--target', 'sandbox', '--hashes', hashes, ...extra], { encoding: 'utf8', env, timeout: 280000 });
   const kept = sandbox();
   expect(kept.status, kept.stdout + kept.stderr).toBe(0);
@@ -1226,26 +1104,7 @@ test('wds-verify tests the migration of the recipe: a "seed" block with the old 
   expect(deleted.stdout).toMatch(/Migration: old data deleted \| pass/);
 });
 
-test('the migration recipe has no static finding: deleting is guarded by the sandbox, no localStorage.clear()', async ({ stack, md }) => {
-  const dir = join(stack.pages, 'verify-migration');
-  mkdirSync(dir, { recursive: true });
-  const base = section14(md);
-  const app = base.replace(/<script>\n"use strict";[\s\S]*<\/script>/, '<script>\n"use strict";\nconst store = WDS.connect({ scope: "myapp-k7m2a9" });\n' + MIGRATION(md) + '\n</script>');
-  expect(app).toContain('localStorage.removeItem');
-  writeFileSync(join(dir, 'index.html'), productionPage(stack, app));
-  const r = verify(join(dir, 'index.html'), '--static-only');
-  expect(r.status, r.stdout + r.stderr).toBe(0);
-  expect(r.stdout).not.toContain('Deleting local data');
-  expect(r.stdout).not.toContain('localStorage.clear()');
-  // the same code without the guard is reported (the check works on this text)
-  const unguarded = app.replace('if (keepInSandbox(st)) return "kept";', '');
-  expect(unguarded).not.toBe(app);
-  writeFileSync(join(dir, 'unguarded.html'), productionPage(stack, unguarded));
-  const u = verify(join(dir, 'unguarded.html'), '--static-only');
-  expect(u.stdout).toContain('Deleting local data');
-});
-
-test('wds-verify.json of the example app is the one printed in section 12, and it is valid', async ({ md }) => {
+test('wds-verify.json of the example app is the one printed in section 12 (with its seed block), and it is valid', async ({ md }) => {
   const printed = JSON.parse(blockAfter(md, /^### Writing wds-verify\.json$/, 'json', 1));
   const file = JSON.parse(readFileSync(join(HERE, 'zeit-notizen', 'wds-verify.json'), 'utf8'));
   expect(printed).toEqual(file);
@@ -1253,4 +1112,6 @@ test('wds-verify.json of the example app is the one printed in section 12, and i
   expect(file.steps.length).toBeGreaterThanOrEqual(20);
   expect(file.steps.length).toBeLessThanOrEqual(30);
   expect(file.steps.map((s) => Object.keys(s)[0])).toEqual(expect.arrayContaining(['click', 'fill', 'press', 'upload', 'download', 'wait']));
+  expect(file.seed.page).toBe('old/index.html');
+  expect(existsSync(join(HERE, 'zeit-notizen', file.seed.page))).toBe(true);
 });

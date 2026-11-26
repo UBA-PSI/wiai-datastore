@@ -1,9 +1,9 @@
 {
   "1.0.0": {
     "file": "wds-1.0.0.js",
-    "sri": "sha384-0chMIOOURpY8WD83X6US8o2hr2LtE5f9IAqz9OtBfXG3bDMeJa4dvx++OyqoEu0F",
-    "sha256": "7d1543ff043e6f21d301996799f13b52705357ac3dd0d1d12d3080903a80e2a6",
-    "bytes": 361902,
+    "sri": "sha384-pJ91rXyzYaiJ3rU07TvKd6mFiHItRn/yEdLkmWDqay83HLMh+OKnmlOAOz16I/xs",
+    "sha256": "1c65750fe3b6acfc626c8bcd695690e11de32f0645bf3497bf893e94fa3a9818",
+    "bytes": 458006,
     "escrow_pins": [
       "jPpQPgYBsi1_jbhpXomvO_qDGg6B_oqL8t8qCEU7AAg",
       "tVvmpc-8Du0iPnpniKhKa3vmXgL4uJ0atqDP6dOY1ic"
