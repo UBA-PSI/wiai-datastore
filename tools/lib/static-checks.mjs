@@ -319,6 +319,18 @@ export function setsTestGlobal(code, name = '__WDS_MIGRATION_TEST__') {
 // The handler of the library's script tag (the same text as the server prints in the docs, server/wds_server/docs.py ONERROR).
 export const ONERROR = "document.body.textContent='Storage service unreachable. Check your connection and reload this page.'";
 
+// The shape of the handler that an app may carry: the English text of ONERROR, or the same code with a message in the language of the app
+// (integration.md, section 2). One short message, no quote marks, backslash, angle brackets, ampersand or line break inside.
+const ONERROR_SHAPE = /^document\.body\.textContent\s*=\s*'([^'"\\<>&\r\n`]{1,300})'\s*;?$/;
+export function onerrorState(attr) {
+  const code = String(attr === undefined || attr === null ? '' : attr).trim();
+  if (!code) return { state: 'missing' };
+  if (code === ONERROR) return { state: 'exact' };
+  const m = ONERROR_SHAPE.exec(code);
+  if (m && m[1].trim()) return { state: 'translated', message: m[1] };
+  return { state: 'other', code };
+}
+
 // ---- the official privacy sentence ----
 const PRIVACY = [
   'Data is end-to-end encrypted; the faculty holds a recovery key for emergencies.',
@@ -377,6 +389,11 @@ export function staticChecks(html, known, { readme = '' } = {}) {
       }
       if ((tag.attrs.crossorigin || '').toLowerCase() !== 'anonymous') add('library-crossorigin', 'fail', 'crossorigin attribute', 'The library tag needs crossorigin="anonymous", otherwise the browser cannot check the integrity hash of a file from another origin.');
       else add('library-crossorigin', 'pass', 'crossorigin attribute', 'crossorigin="anonymous" is set.');
+      const oe = onerrorState(unentity(tag.attrs.onerror === undefined ? '' : tag.attrs.onerror));
+      if (oe.state === 'missing') add('library-onerror', 'warn', 'onerror fallback', 'The library tag has no onerror handler, so the page stays blank when the library cannot be loaded. Keep the one of integration.md, section 2: onerror="' + ONERROR + '" (the message text may be translated).');
+      else if (oe.state === 'other') add('library-onerror', 'warn', 'onerror fallback', 'The onerror handler of the library tag is not document.body.textContent=\'<message>\'. Keep the code of integration.md, section 2; only the message text may change (no quote marks, backslash, <, > or & in it).');
+      else if (oe.state === 'exact') add('library-onerror', 'pass', 'onerror fallback', 'The library tag has the onerror handler of integration.md, section 2.');
+      else if (oe.state === 'translated') add('library-onerror', 'info', 'onerror fallback', 'The onerror message is not the English one (“' + oe.message.slice(0, 80) + '”). That is fine: integration.md, section 2 allows a message in the language of the app, with the code unchanged.');
     }
   }
   const libTag = libTags.length === 1 ? libTags[0] : null;

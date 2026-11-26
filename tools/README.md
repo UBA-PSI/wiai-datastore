@@ -44,6 +44,7 @@ match. Vault IDs are on the key file of the user (`"vault"`), and in the dashboa
 git clone https://github.com/UBA-PSI/wiai-datastore && cd wiai-datastore       # the tool lives in the public repository
 node tools/wds-verify.mjs path/to/app.html            # or a directory with index.html
 node tools/wds-verify.mjs app.html --out REPORT.md    # the Markdown report goes into the app's README
+node tools/wds-verify.mjs app.html --heading-level 3 --out REPORT.md   # its title as ###, its sections as ####: to paste under "## Verification" of a README
 node tools/wds-verify.mjs app.html --target sandbox   # run against the public sandbox: no Python, no build
 node tools/wds-verify.mjs app.html --sandbox-copy app-sandbox.html   # a copy for a person to open in a browser
 node tools/wds-verify.mjs app.html --static-only      # no browser, no Python
@@ -69,6 +70,7 @@ only Node.
   the sandbox size (a quota error becomes "sandbox limit, not tested"); the library's sandbox banner and bar must stay visible to a person
   (an app that hides them fails); at the end the tool deletes its vault if the library offers a way (else it is left for the nightly wipe).
   When the sandbox is rate limited, full or switched off, the run stops with "sandbox unavailable, not an app finding" and exit code 3: try again later.
+- What only the mock checks (the server's database, the real deletion of a migration, the default limits instead of the sandbox's, an unreleased library) and what only the sandbox shows (its bar and banners, `--wds-sandbox-bar`, the published library with the tag's hash): integration.md, section 12, "Targets".
 - **auto**: mock when Python 3.13 with the server packages is found; otherwise the sandbox if its scope document is reachable and enabled; otherwise only the static checks run, with a warning that says why.
 
 `--sandbox-copy <out.html>` writes a copy of the app with the scope of its `WDS.connect` call replaced by the sandbox ID and exits (the file name must contain
@@ -78,7 +80,7 @@ the static checks fail a file that contains it.
 ### Checks
 
 Static: one script tag `https://wiai.uni-bamberg.de/datastore/client/wds-<version>.js` with `crossorigin="anonymous"` and the
-`integrity` hash of that version. The published hashes come from `https://wiai.uni-bamberg.de/datastore/client/hashes.json` first (3 s timeout),
+`integrity` hash of that version, and the `onerror` fallback of integration.md, section 2: `document.body.textContent='<message>'`. The message may be in the language of the app (info **onerror fallback**: "not the English one"); no `onerror` or other code in it warns. The published hashes come from `https://wiai.uni-bamberg.de/datastore/client/hashes.json` first (3 s timeout),
 then from `client/dist/hashes.json` of the clone; the report names the source and warns when they differ (the clone is outdated; `git pull`).
 `--hashes <file>` overrides both. A CSP meta tag that is not broader than the recommended one (the policy of `docs.csp_policy`, printed in
 integration.md; additions of `font-src data:`, `media-src blob: data:` and `img-src https://host` are accepted, `'self'` in `script-src` or a missing
@@ -105,7 +107,7 @@ in the mock, the server's database: raw, URL-encoded, base64 (three alignments),
 second without a button press in between (use `store.autosave`) and about one record that holds the data of several items or the whole app state. It fails
 when nothing was stored at all, because then it proved nothing.
 
-**Library dialogs are waited for.** A dialog of the library is *ready* when it has a `data-wds-view` and no `aria-busy="true"` (the library sets the view after the controls are rendered, and marks the dialog busy while a submit runs, for example the key derivation of an unlock). The tool does nothing to a dialog that is not ready (it is not an "unexpected dialog"), fills a field only when it is visible and editable (up to three tries, checking what the field holds), and a failure note keeps up to 8 lines (800 characters) of the Playwright message, call log included. The library's dialogs are `<dialog>` elements in the top layer: the newest is on top and everything below it, the app included, is inert. The tool therefore answers every open library dialog before it types into the app or presses a button, and a field behind a modal dialog of the app itself is not typed into (the report says so when that left nothing to type into: add a first step that closes the app's dialog).
+**Library dialogs are waited for.** A dialog of the library is *ready* when it has a `data-wds-view` and no `aria-busy="true"` (the library sets the view after the controls are rendered, and marks the dialog busy while a submit runs, for example the key derivation of an unlock). The tool does nothing to a dialog that is not ready (it is not an "unexpected dialog"), presses `retry` in a dialog in the view `error` (three times at most), puts the state of the dialog (view, `aria-busy`, classes, text) into the note when it is not ready for 20 s, stays open or is not answered, fills a field only when it is visible and editable (up to three tries, checking what the field holds), and a failure note keeps up to 8 lines (800 characters) of the Playwright message, call log included. The library's dialogs are `<dialog>` elements in the top layer: the newest is on top and everything below it, the app included, is inert. The tool therefore answers every open library dialog before it types into the app or presses a button, and a field behind a modal dialog of the app itself is not typed into (the report says so when that left nothing to type into: add a first step that closes the app's dialog).
 
 **Data after reload.** After the reload the tool looks at what a person can read (the page text and the values of the inputs on screen) once right after the unlock and once after **every**
 `afterReload` step, and takes all of them together: an app with tabs passes when one `afterReload` step per tab opens each view. Pass: at least one typed value of every round
@@ -198,7 +200,7 @@ What the report says (ids `seed`, `migration-visible`, `migration-encrypted`, `m
 
 ### Options
 
-Options: `--target`, `--locale`, `--sandbox-copy`, `--migration-delete`, `--static-only`, `--hashes <file>`, `--out <file>`, `--strict` (warnings fail), `--headed`, `--wait-ms <n>` (time for debounced
+Options: `--target`, `--locale`, `--sandbox-copy`, `--migration-delete`, `--static-only`, `--hashes <file>`, `--out <file>`, `--heading-level <1-5>` (the report's title gets that many `#`, its sections one more: 3 under a `## Verification` heading), `--strict` (warnings fail), `--headed`, `--wait-ms <n>` (time for debounced
 saves, default 2800), `--script-tag [version]`, `--scope-check off` (no request for the scope document: for an app whose scope is not registered yet or a run of an unreleased library; the mock creates the scope it needs), `--json`. An unreleased library: static checks with `--hashes client/dist/hashes.json`; the report says "your clone has a library build that the service does not publish yet" when the clone is newer than the service and "outdated; run git pull" only when it is older. Exit codes: 0 passed, 1 a check failed, 2 the tool could not run (no Python venv for `--target mock`, no Playwright, bad arguments),
 3 the sandbox is unavailable (rate limited, full, switched off): not an app finding, try again later. The result is a smoke test, not a proof.
 
@@ -225,7 +227,7 @@ await page.reload();
 await unlock(page, { accessId, passphrase });         // the unlock dialog of the second visit
 ```
 
-A dialog is **ready** when it has a `data-wds-view` and no `aria-busy="true"`. Every fill waits for the field to be visible and editable and tries again (`fillWhenReady`), so a dialog that is still being built does not make a call fail.
+A dialog is **ready** when it has a `data-wds-view` and no `aria-busy="true"`. The library never leaves a dialog without a view and never waits for ever: a request that does not answer in 30 s fails (`OfflineError`, code `timeout`) and a dialog that cannot go on shows the view `error` with a `retry` button. Every fill waits for the field to be visible and editable and tries again (`fillWhenReady`), so a dialog that is still being built does not make a call fail.
 
 | Export | |
 |---|---|
@@ -236,9 +238,9 @@ A dialog is **ready** when it has a `data-wds-view` and no `aria-busy="true"`. E
 | `answerMigration(page, { backup = true, timeout, downloads? })` | `store.migrateLocal` asked: download the backup (`migrate-backup`), press `migrate-yes`; for `migrate-large` download every file and press `migrate-delete`. Resolves `{ backup, large }`. |
 | `deleteVault(page, { accessId, passphrase, baseUrl?, scope?, store = "store" })` | Delete the test vault that `createVault` made, at the end of a test in a real scope (the library's store has no call for this: the helper opens a second client of the page's library, as the owner). Resolves `"deleted"`. Name the vault in your report so that nobody has to guess which one in the dashboard was the test. |
 | `enableMigrationDelete(context)` | In your own automated browser: `window.__WDS_MIGRATION_TEST__ = true` before any script runs, so that `store.migrateLocal` deletes the old data in the sandbox too (it honours the global only when `navigator.webdriver` is true). Never in the app. |
-| `dialog(page)`, `viewOf(page)`, `waitForView(page, view \| [views] \| null, { timeout })`, `dialogState(d)` | The topmost dialog (a locator), its `data-wds-view` (`null` when none is visible, `""` when one is visible but has no view yet), waiting for a view (`null`: for no dialog), and `{ view, busy, ready }` of one dialog. |
+| `dialog(page)`, `viewOf(page)`, `waitForView(page, view \| [views] \| null, { timeout })`, `dialogState(d)`, `describeDialog(page, { timeout })`, `dialogSummary(page)` | The topmost dialog (a locator), its `data-wds-view` (`null` when none is visible, `""` when one is visible but has no view value, which a library dialog never has: it opens as `loading`), waiting for a view (`null`: for no dialog), `{ view, busy, ready }` of one dialog, one look at the topmost dialog in a single call (`{ view, busy, visible, classes, text, count }` or `null`) and a sentence for error messages. |
 | `formError(d)`, `chooseCreate(d)`, `submitCreate(d, { passphrase, joinCode? })`, `submitUnlock(d, { accessId?, passphrase })`, `submitRedeem(d, { code, passphrase })`, `fillWhenReady(locator, text, { timeout, attempts, check })`, `briefError(e)` | The single steps (`d` is the dialog locator) that wds-verify calls one by one, because it also reacts to other dialogs in between; the fill that waits for an editable field; a short error text (8 lines, 800 characters, no colour codes). |
-| `newPassphrase()`, `DriveError` | A passphrase that passes the library's rules; the error that every function throws, with the text of the dialog (`unlocking failed: ...`, `the access sheet could not be confirmed: ...`). |
+| `newPassphrase()`, `DriveError` | A passphrase that passes the library's rules; the error that every function throws, with the text of the dialog and, when a wait timed out, the state of the topmost dialog (view, `aria-busy`, classes, text) (`unlocking failed: ...`, `the access sheet could not be confirmed: ...`). |
 
 Do not `await store.unlock()` before calling the helper: that promise settles only after the dialogs are answered. Start it (`page.evaluate(() => { window.p = store.unlock(); })`), drive, then await it.
 

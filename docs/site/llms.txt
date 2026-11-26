@@ -17,6 +17,15 @@ Content-Security-Policy that works, the complete API and a working example app. 
 Current library: version {{version}}, {{library_url}}
 Source code, PROTOCOL.md and the verifier wds-verify (public): {{repo_url}}
 
+## Reading the guides in parts
+
+integration.md and porting.md are long, more than one read of a file tool returns. These are their sections with the line ranges of the files as the service serves them (the Read tool takes `offset` and `limit`; a "###" subsection is listed when it is 20 lines or longer).
+A new app needs the checklist and sections 2 to 8 and 14 of integration.md; an existing app also porting.md, sections 1 to 4 and 7; before you hand an app over, sections 12 and 13 of integration.md. Read a section whole: the rules sit inside it.
+
+{{index_integration}}
+
+{{index_porting}}
+
 ## The rules that matter
 
 1. Load the library with exactly one script tag from integration.md (URL, integrity hash, crossorigin). Never copy,
@@ -29,10 +38,10 @@ Source code, PROTOCOL.md and the verifier wds-verify (public): {{repo_url}}
 4. One record per entity. Many items or files: store.collection() (integration.md, "Collections"), which keeps the list and merges changes of several devices without losing items.
    Editors: store.autosave(), never store.set() on every keystroke, never the whole app state in one record.
 5. Put the Content-Security-Policy meta tag from integration.md into the head, before every script, and keep the
-   onerror fallback on the library tag. Never add hosts to script-src or connect-src. Forms whose submit handler calls preventDefault() are fine.
+   onerror fallback on the library tag (its message text may be in the app's language, integration.md section 2). Never add hosts to script-src or connect-src. Forms whose submit handler calls preventDefault() are fine.
 6. Before you hand the app over, run wds-verify from a clone of {{repo_url}}: (cd tools && npm install && npx playwright install chromium), then, from the root of the clone,
    node tools/wds-verify.mjs <app.html> (integration.md, section "wds-verify"). Static checks need only Node and the clone. Without Python it tests against the public sandbox (below).
-   Without Node, follow integration.md, "Without wds-verify". Add a wds-verify.json when inputs are hidden until the user acts, the app has tabs or a file input ("Writing wds-verify.json"). Fix what it reports and put the report into the app's README.
+   Without Node, follow integration.md, "Without wds-verify". Add a wds-verify.json when inputs are hidden until the user acts, the app has tabs or a file input ("Writing wds-verify.json"). Fix what it reports and put the report into the app's README (`--heading-level 3` fits it under a "## Verification" heading).
    If you cannot run it, say so in the README. Tell the users what they need (integration.md, section "What to tell users").
 7. Porting an existing app? Read {{base}}/docs/porting.md before you change anything (inventory, the replacement of the storage calls, the import of an old export, tests, a checklist for apps with forms and modal dialogs). Data that old versions left in IndexedDB or localStorage is taken over with ONE call,
    store.migrateLocal({ id, indexedDB, localStorage, map }): the library asks the person, copies into the vault, checks, and deletes the old data (it keeps it in the sandbox). Do not write that code yourself, and replace "saved locally" texts. h.skip deletes the row with the old data: copy everything a person made, skip only caches. It rejects only for wrong options; a mistake in map is a "failed" result with the message in the console.

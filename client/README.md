@@ -110,7 +110,9 @@ device is back online, on focus, and on lock. Records under the prefix that the 
 
 Every button, input, select, textarea and summary inside the library's dialogs carries `data-wds="<name>"`, and every dialog carries `data-wds-view="<view>"`
 (`loading`, `error`, `unlock`, `create`, `redeem`, `sheet`, `conflict`, `history`, `share`, `revoke`, `progress`, `notice`, `migrate`, `migrate-discard`, `migrate-differs`, `migrate-large`), set when the view is rendered.
-A dialog that waits (view `loading` or `progress`, or a submit in flight such as Argon2id and the request) carries `aria-busy="true"`: view present and no `aria-busy` means ready for input. Examples:
+A dialog is never without a view: it opens as `loading` (busy) and gets its real view when the controls are in place. A request that does not answer within 30 s fails like a lost
+connection (`OfflineError`, code `timeout`), and a dialog that cannot go on (a failed request, a view that cannot be built) shows the view `error` with a `retry` button, so a dialog never waits for ever
+(`test/dialog-stress.spec.mjs` reloads and unlocks with slow, failing and stalled requests). A dialog that waits (view `loading` or `progress`, or a submit in flight such as Argon2id and the request) carries `aria-busy="true"`: view present and no `aria-busy` means ready for input. Examples:
 `unlock-submit`, `to-create`, `passphrase`, `passphrase-repeat`, `create-submit`, `sheet-confirm`, `sheet-continue`, `conflict-mine`, `conflict-theirs`, `invite-create`,
 `revoke-confirm`, `migrate-yes`, `migrate-backup`, `migrate-no`, `migrate-skip-ack` (only when rows are left out with `h.skip`), `migrate-discard`, `migrate-discard-confirm`, `migrate-discard-back`, `migrate-differs-keep-vault`, `migrate-differs-keep-both`, `migrate-differs-later`, `migrate-large-download` (with `data-wds-index`), `migrate-large-ack`, `migrate-delete`, `migrate-keep`. Toasts have `data-wds-toast="<key>"` (the migration uses `migration`) and the buttons `toast-action` and `toast-dismiss`. The names do not change with the language; they are listed in the
 header comment of `src/wds-ui.js` and covered by `test/ui-attrs.spec.mjs`.
@@ -139,16 +141,16 @@ and the sandbox bar are `popover="manual"` elements. They all live in the browse
 ### Taking over old local data: `store.migrateLocal`
 
 ```js
-const refCol = store.collection("refs/", { meta: (r) => ({ title: String(r.title || "").slice(0, 80) }) });
-const pdfCol = store.collection("pdfs/");
+const recipeCol = store.collection("recipes/", { meta: (r) => ({ title: String(r.title || "").slice(0, 80) }) });
 const result = await store.migrateLocal({
-  id: "literatur",                                           // names this migration (lock, tag, marker): 1-40 characters [a-z0-9-]
-  indexedDB: { name: "literatur", stores: ["refs", "pdfs"] }, // one object or an array; only these stores are read and emptied
-  localStorage: { keys: ["literaturliste.einstellungen"], prefixes: [] },
+  id: "cookbook",                                            // names this migration (lock, tag, marker): 1-40 characters [a-z0-9-]
+  indexedDB: { name: "cookbook", stores: ["recipes"] },      // one object or an array; only these stores are read and emptied
+  localStorage: { keys: ["cookbook.prefs"], prefixes: [] },
   map(old, h) {
-    const items = old.rows("refs").map((row) => ({ col: refCol, id: h.id(row.key), value: { ...row.value, pdfId: h.ref("pdfs", row.value.pdfId, ".pdf") }, from: row }));
-    for (const row of old.rows("pdfs")) items.push({ col: pdfCol, id: h.id(row.key, ".pdf"), value: h.blob(row.value), meta: { name: row.value.name }, from: row });
-    return { items, settings: { record: "settings", value: old.json("literaturliste.einstellungen") || {}, from: "literaturliste.einstellungen" } };
+    const items = old.rows("recipes").map((row) => ({ col: recipeCol, id: h.id(row.key), value: row.value, from: row }));
+    const prefs = old.json("cookbook.prefs") || {};
+    // only what is a setting of the person; the last search or filter stays behind
+    return { items, settings: { record: "settings", value: { units: prefs.units, view: prefs.view }, from: "cookbook.prefs" } };
   },
 });
 ```

@@ -25,6 +25,8 @@
 //   --static-only       skip the dynamic checks (no Python, no browser needed)
 //   --hashes <file>     published library hashes (default: <service>/client/hashes.json, then client/dist/hashes.json of the clone)
 //   --out <file>        also write the report to a file
+//   --heading-level <n> 1 to 5 (default 1): the report's title gets n "#" and its sections n+1, so that it can be pasted under a heading of the README
+//                       (under "## Verification": --heading-level 3)
 //   --migration-delete  with a "seed" in wds-verify.json (a test of the migration of old local data), sandbox target: set window.__WDS_MIGRATION_TEST__ = true
 //                       (and navigator.webdriver) in the app's page, so that store.migrateLocal, which keeps the old data in the sandbox, deletes it (as in production) and
 //                       the tool checks that the old storage is empty afterwards. Without the flag the sandbox run checks that it was kept. No effect on the mock
@@ -50,7 +52,7 @@ export { UsageError };
 
 export function parseArgs(argv) {
   const o = { positional: [], flags: {} };
-  const withValue = new Set(['hashes', 'out', 'wait-ms', 'target', 'locale', 'sandbox-copy', 'scope-check']);
+  const withValue = new Set(['hashes', 'out', 'wait-ms', 'target', 'locale', 'sandbox-copy', 'scope-check', 'heading-level']);
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a.startsWith('--')) {
@@ -145,12 +147,20 @@ export function notTested({ info = {}, config = {}, html = '', target = {} }) {
 }
 
 // With --strict a warning counts as a failure and is shown as one (under "Failures", marked "(warn, fails with --strict)").
-export function renderReport({ appPath, findings, info, strict, target, notTestedLines }) {
+export function headingLevel(flag) {
+  if (flag === undefined) return 1;
+  const n = typeof flag === 'string' && /^\d+$/.test(flag) ? Number(flag) : NaN;
+  if (!(n >= 1 && n <= 5)) throw new UsageError('--heading-level needs a number from 1 to 5 (the title gets that many #, its sections one more), not "' + flag + '"');
+  return n;
+}
+
+export function renderReport({ appPath, findings, info, strict, target, notTestedLines, headingLevel: level = 1 }) {
+  const h = (depth) => '#'.repeat(level + depth) + ' ';   // depth 0: the title, 1: its sections
   const failed = findings.filter((f) => f.level === 'fail' || (strict && f.level === 'warn'));
   const warned = strict ? [] : findings.filter((f) => f.level === 'warn');
   const mark = (f) => (strict && f.level === 'warn' ? '**FAIL** (warn, fails with --strict)' : ICON[f.level]);
   const out = [];
-  out.push('# wds-verify report: ' + basename(appPath), '');
+  out.push(h(0) + 'wds-verify report: ' + basename(appPath), '');
   if (target) out.push('Target: **' + target.name + '** (' + target.reason + ')', '');
   const unavailable = info && info.unavailable;
   out.push('**Result: ' + (unavailable ? 'NOT RUN, sandbox unavailable' : failed.length ? 'FAILED' : 'passed') + '** (' + findings.filter((f) => f.level === 'pass').length + ' checks passed, ' + failed.length + ' failed, '
@@ -159,7 +169,7 @@ export function renderReport({ appPath, findings, info, strict, target, notTeste
   out.push('This is a smoke test, not a proof. It catches the usual mistakes (plaintext in storage or requests, wrong script tag, wide CSP); it cannot see what it did not trigger.', '');
   const section = (title, items) => {
     if (!items.length) return;
-    out.push('## ' + title, '');
+    out.push(h(1) + title, '');
     for (const f of items) {
       out.push('- **' + f.title + '** (' + mark(f) + ')' + (f.detail ? ': ' + f.detail.split('\n')[0] : ''));
       f.detail.split('\n').slice(1).forEach((l) => out.push('  ' + l));
@@ -168,12 +178,12 @@ export function renderReport({ appPath, findings, info, strict, target, notTeste
   };
   section('Failures', failed);
   section('Warnings', warned);
-  out.push('## All checks', '', '| Check | Result | Details |', '|---|---|---|');
+  out.push(h(1) + 'All checks', '', '| Check | Result | Details |', '|---|---|---|');
   for (const f of findings) out.push('| ' + f.title + ' | ' + mark(f) + ' | ' + f.detail.replace(/\|/g, '\\|').replace(/\n/g, '<br>').slice(0, 300) + ' |');
   out.push('');
   if (info && info.durationMs) out.push('Dynamic run: ' + (info.durationMs / 1000).toFixed(1) + ' s, ' + (info.fields || 0) + ' canary field(s), ' + (info.recordWrites || 0) + ' record write(s).', '');
   if (notTestedLines) {
-    out.push('## Not tested', '', 'This run cannot see the following. Test each by hand before you hand the app over:', '');
+    out.push(h(1) + 'Not tested', '', 'This run cannot see the following. Test each by hand before you hand the app over:', '');
     for (const l of notTestedLines) out.push('- ' + l);
     out.push('');
   }
@@ -181,6 +191,7 @@ export function renderReport({ appPath, findings, info, strict, target, notTeste
 }
 
 export async function verify(target, flags = {}) {
+  const level = headingLevel(flags['heading-level']);   // checked before anything runs
   const hashes = await loadKnownHashes(flags);
   const appPath = findApp(target);
   const html = readFileSync(appPath, 'utf8');
@@ -223,7 +234,7 @@ export async function verify(target, flags = {}) {
   const notTestedLines = notTested({ info, config, html, target: tg });
   const code = info.unavailable ? 3 : failed ? 1 : 0;
   return { appPath, findings, info, failed, code, target: tg, notTested: notTestedLines,
-    report: renderReport({ appPath, findings, info, strict: !!flags.strict, target: tg, notTestedLines }) };
+    report: renderReport({ appPath, findings, info, strict: !!flags.strict, target: tg, notTestedLines, headingLevel: level }) };
 }
 
 // --sandbox-copy: the app with every scope ID replaced by the sandbox ID, for a person to open in a browser.

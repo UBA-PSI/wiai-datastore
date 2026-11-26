@@ -17,6 +17,12 @@
  *     fetch        injectable (tests); storage: localStorage-like {getItem,setItem,removeItem}, default localStorage
  *     argon2       injectable Argon2id (default: the vendored build). escrowPins / retiredEscrow: escrow key IDs the library
  *                  accepts (tests only: a build with escrow pins ignores both options, see BUILTIN_ESCROW_PINS)
+ *     timeout      ms a request may take until the answer (and its body) has arrived, default Client.defaultTimeout (30000), 0 = no limit;
+ *                  an upload gets one more second per 10 KB (the budget assumes at least 80 kbit/s), creating a vault and redeeming an
+ *                  invite three times the time. A request that does not answer in time fails with an OfflineError (code "timeout"),
+ *                  so a stalled connection can never keep a dialog waiting for ever. After a timeout of a write the client looks at
+ *                  the record before it reports the failure: an answer that was lost after the server had stored the write counts as saved.
+ *                  Client.defaultTimeout is a plain static (a test page sets it before the library connects; an app has no reason to).
  *   c.getScopeInfo(force?)                    GET /scopes/{scope} (kdf defaults, limits, enrollment, privacy_url)
  *   c.createVault({passphrase, joinCode?, recoveryContact?})
  *        -> {accessId, accessIdDisplay, vaultId, recoveryCode:{canonical,display}, keyFile:{text,filename}}; unlocks
@@ -958,9 +964,11 @@
     var f = opts.fetch || root.fetch;
     if (typeof f !== 'function') throw new WDSError('no fetch implementation available');
     this.fetch = opts.fetch ? opts.fetch : f.bind(root);
+    this._defaultFetch = !opts.fetch;   // only the browser's own fetch gets an AbortSignal (an injected one is raced against the timeout only)
     this.storage = opts.storage || defaultStorage();
     this.now = opts.now || function () { return Date.now(); };
     this.argon2 = opts.argon2 || null;
+    this.timeoutMs = opts.timeout === undefined ? Math.max(0, Number(Client.defaultTimeout) || 0) : Math.max(0, Number(opts.timeout) || 0);
     // A build that pins escrow keys ignores the options: app code cannot replace the pinned faculty escrow keys.
     if (BUILTIN_ESCROW_PINS.length) {
       if ((opts.escrowPins || opts.retiredEscrow) && typeof console !== 'undefined' && console.warn) console.warn('wds: the escrowPins and retiredEscrow options are ignored by a library build with pinned escrow keys');
@@ -971,6 +979,7 @@
     this.s = null;
     this._scopeInfo = null;
   }
+  Client.defaultTimeout = 30000;   // ms; see the option "timeout"
   var CP = Client.prototype;
 
   // ---- HTTP ----
@@ -983,19 +992,44 @@
     var headers = Object.assign({}, o.headers), body = o.body;
     if (o.auth) headers.Authorization = bearerHeader(o.auth.accessId, o.auth.token);
     if (o.json !== undefined) { headers['Content-Type'] = 'application/json'; body = JSON.stringify(o.json); }
-    var res;
-    try { res = await this.fetch(this.apiBase + path, { method: method, headers: headers, body: body }); }
-    catch (e) { throw new OfflineError('network error: ' + (e && e.message ? e.message : e), { cause: e }); }
+    var res, init = { method: method, headers: headers, body: body }, ctl = null;
+    if (this.timeoutMs > 0 && typeof AbortController === 'function' && this._defaultFetch) { ctl = new AbortController(); init.signal = ctl.signal; }
+    var sent = body && typeof body.byteLength === 'number' ? body.byteLength : body && typeof body.length === 'number' ? body.length : 0;
+    try { res = await this._within(this.fetch(this.apiBase + path, init), sent, ctl, o.timeout); }
+    catch (e) {
+      if (e instanceof OfflineError) throw e;
+      throw new OfflineError('network error: ' + (e && e.message ? e.message : e), { cause: e });
+    }
     if (res.ok) return res;
     throw await this._httpError(res);
   };
+  // Waits for a promise (the answer of a request, or the reading of its body) for at most the timeout (ms: a number replaces the client's
+  // timeout for this call, 0 = no limit); "bytes" (an upload or a body of known size) adds one second per 10 KB. A request that does not
+  // answer in time is aborted and fails with an OfflineError.
+  CP._within = function (promise, bytes, ctl, ms) {
+    if (typeof ms !== 'number') ms = this.timeoutMs;
+    if (!(ms > 0)) return promise;
+    ms += Math.floor((bytes || 0) / 10000) * 1000;
+    return new Promise(function (resolve, reject) {
+      var timer = setTimeout(function () {
+        if (ctl) { try { ctl.abort(); } catch (e) { /* already done */ } }
+        reject(new OfflineError('network error: no answer within ' + Math.round(ms / 1000) + ' s', { code: 'timeout' }));
+      }, ms);
+      if (timer && typeof timer === 'object' && typeof timer.unref === 'function') timer.unref();   // Node: a pending request timer must not keep a process alive
+      promise.then(function (v) { clearTimeout(timer); resolve(v); }, function (e) { clearTimeout(timer); reject(e); });
+    });
+  };
+  // The time for the two requests that decide about a whole vault (create, redeem): the answer may take longer, and one that is lost after the
+  // server has committed cannot be recovered by the client, so it is better to wait than to give up early.
+  CP._patientMs = function () { return this.timeoutMs > 0 ? this.timeoutMs * 3 : 0; };
   CP._json = async function (method, path, o) {
     var res = await this._req(method, path, o);
-    try { return await res.json(); } catch (e) { throw new IntegrityError('server sent invalid JSON'); }
+    try { return await this._within(res.json()); }
+    catch (e) { if (e instanceof OfflineError) throw e; throw new IntegrityError('server sent invalid JSON'); }
   };
   CP._httpError = async function (res) {
     var b = null;
-    try { b = await res.json(); } catch (e) { /* no body */ }
+    try { b = await this._within(res.json()); } catch (e) { /* no body */ }
     var code = b && typeof b.error === 'string' ? b.error : null;
     var msg = (b && typeof b.message === 'string' ? b.message : 'HTTP ' + res.status) + (code ? ' (' + code + ')' : '');
     var props = { status: res.status, code: code, body: b, retryAfter: res.headers && res.headers.get ? res.headers.get('Retry-After') : null };
@@ -1090,7 +1124,7 @@
       keyring: keyring, recovery_hash: rec.hash,
       recovery_contact: o.recoveryContact || null, join_code: o.joinCode || null,
     };
-    await this._json('POST', '/scopes/' + scope + '/vaults', { json: req });
+    await this._json('POST', '/scopes/' + scope + '/vaults', { json: req, timeout: this._patientMs() });
     await this._openSession({ accessId: accessId, ikm: kek, kdf: kdf, expectedVault: vaultId });
     this.rememberAccessId(accessId);
     var kf = makeKeyFile({ scope: scope, accessId: accessId, vaultId: vaultId, service: this.service });
@@ -1250,7 +1284,7 @@
 
   CP.status = function () {
     var s = this.s;
-    if (!s) return { unlocked: false };
+    if (!s || !s.head) return { unlocked: false };   // the session exists while the unlock is still running (its roster head is not there yet): not unlocked
     return {
       unlocked: true, scope: this.scope, accessId: s.accessId, vaultId: s.vaultId, slotId: s.slotId, role: s.role, kind: s.kind,
       epoch: s.epoch, rosterVersion: s.head.body.version, rekeyPending: s.rekeyPending,
@@ -1292,7 +1326,7 @@
     if (!m || !commit) throw new IntegrityError('record response lacks ETag or commitment');
     var v = Number(m[1]);
     if (version && v !== version) throw new IntegrityError('server returned a different version than requested');
-    return { version: v, commit: commit, bytes: new Uint8Array(await res.arrayBuffer()) };
+    return { version: v, commit: commit, bytes: new Uint8Array(await this._within(res.arrayBuffer(), Number(res.headers.get('Content-Length')) || 0)) };
   };
   CP._openFetched = async function (rid, name, f) {
     var s = this.s;
@@ -1395,15 +1429,18 @@
       var env = await sealRecord({ key: await this._encKey(s.epoch), epoch: s.epoch, scope: this.scope, vault: s.vaultId, rid: rid, version: version, plaintext: built.plaintext });
       var headers = { 'Content-Type': 'application/octet-stream', 'WDS-Commit': await commitment(s.keys.kCommit, rid, version, built.plaintext) };
       if (base === null) headers['If-None-Match'] = '*'; else headers['If-Match'] = '"' + base + '"';
-      var res;
+      var res, r = null;
       try { res = await this._req('PUT', '/vaults/' + s.vaultId + '/records/' + rid, { auth: this._auth(), headers: headers, body: env }); }
       catch (e) {
         if (e.status === 409 && e.code === 'epoch_changed' && attempt === 0) { await this._syncHead(); continue; }
         if (e.status === 412) throw await this._conflict(name, rid, { value: value, kind: enc.kind, mime: enc.mime }, e);
-        throw e;
+        // No answer (a timeout, a lost connection): the server may have stored the write all the same. Look at the record before reporting a failure.
+        if (e instanceof OfflineError && await this._landed(rid, version, headers['WDS-Commit'])) r = { version: version, size: env.length };
+        else throw e;
       }
-      var r;
-      try { r = await res.json(); } catch (e2) { throw new IntegrityError('server sent invalid JSON'); }
+      if (!r) {
+        try { r = await this._within(res.json()); } catch (e2) { if (e2 instanceof OfflineError) throw e2; throw new IntegrityError('server sent invalid JSON'); }
+      }
       if (r.version !== version) throw new IntegrityError('server stored a different version than requested');
       this._dropListed(rid);
       s.known.set(rid, { version: version, deleted: false });
@@ -1412,6 +1449,15 @@
       await this._persist();
       return { name: name, version: version, size: r.size, epoch: s.epoch };
     }
+  };
+  // True when the server holds the record at exactly this version with this commitment: our own write, whose answer was lost.
+  // A short look (10 s); any failure counts as "not known to have landed", so the caller reports the original error.
+  CP._landed = async function (rid, version, commit) {
+    try {
+      var res = await this._req('GET', '/vaults/' + this.s.vaultId + '/records/' + rid, { auth: this._auth(), timeout: 10000 });
+      var m = /^"(\d+)"$/.exec(res.headers.get('ETag') || '');
+      return !!m && Number(m[1]) === version && res.headers.get('WDS-Commit') === commit;
+    } catch (e) { return false; }
   };
   CP._conflict = async function (name, rid, mine, err) {
     var s = this.s, theirs = null, f = await this._fetchRecord(rid);
@@ -1448,7 +1494,7 @@
       if (e.status === 412) throw await this._conflict(name, rid, { deleted: true }, e);
       throw e;
     }
-    var r = await res.json();
+    var r = await this._within(res.json());
     if (r.version !== base + 1) throw new IntegrityError('server stored a different version than requested');
     this._dropListed(rid);
     s.known.set(rid, { version: r.version, deleted: true });
@@ -1669,7 +1715,7 @@
     var kek = await argon2idKey(o.passphrase, kdf, this.argon2);
     var sk = await deriveSlotKeys(kek);
     var wrapped = await wrapSlot({ kWrapRaw: sk.kWrap, scope: this.scope, vault: slotRes.vault, accessId: p.accessId, kdf: kdf, slotId: slotRes.slot, keySets: [old, { e: eN, s: sN }] });
-    await this._json('POST', '/slots/' + p.accessId + '/redeem', { auth: auth, json: { kdf: kdf, token_hash: b64u(sk.tokenHash), wrapped: b64u(wrapped), renewal: renewal } });
+    await this._json('POST', '/slots/' + p.accessId + '/redeem', { auth: auth, json: { kdf: kdf, token_hash: b64u(sk.tokenHash), wrapped: b64u(wrapped), renewal: renewal }, timeout: this._patientMs() });
     await this._openSession({ accessId: p.accessId, ikm: kek, kdf: kdf, expectedVault: slotRes.vault, maintain: o.maintain });
     this.rememberAccessId(p.accessId);
     return Object.assign(this.status(), { keyFile: makeKeyFile({ scope: this.scope, accessId: p.accessId, vaultId: slotRes.vault, service: this.service }) });

@@ -41,6 +41,46 @@ test('script tag: integrity must match the published hash, crossorigin, version,
   assert.match(check(variant(h, SRI, 'sha384-AAAA')).findings.find((f) => f.id === 'library-integrity').detail, new RegExp(SRI.replace(/[+/]/g, '.')));
 });
 
+test('onerror fallback: the text of the documentation and a message in the language of the app are accepted, no handler or other code warns', async () => {
+  const { onerrorState, ONERROR } = await import('../lib/static-checks.mjs');
+  const h = good();
+  assert.match(h, /onerror="document\.body\.textContent='Storage service unreachable\. Check your connection and reload this page\.'"/);
+  assert.equal(level(check(h), 'library-onerror'), 'pass', 'the documented handler passes');
+  const german = h.replace(/onerror="[^"]*"/, 'onerror="document.body.textContent=\'Der Speicherdienst ist nicht erreichbar. Bitte prüfen Sie die Verbindung und laden Sie die Seite neu.\'"');
+  const r = check(german);
+  assert.equal(level(r, 'library-onerror'), 'info');
+  assert.match(r.findings.find((f) => f.id === 'library-onerror').detail, /Speicherdienst/);
+  assert.deepEqual(r.findings.filter((f) => f.level === 'fail' || f.level === 'warn'), [], 'a translated message is no warning');
+  assert.equal(level(check(h.replace(/\n\s*onerror="[^"]*"/, '')), 'library-onerror'), 'warn');
+  for (const code of ["document.title = 'x'", "document.body.innerHTML='<b>x</b>'", "document.body.textContent=message", "document.body.textContent='it\\'s'", "alert(1)", "document.body.textContent=''"])
+    assert.equal(level(check(h.replace(/onerror="[^"]*"/, 'onerror="' + code.replace(/"/g, '&quot;') + '"')), 'library-onerror'), 'warn', code);
+  assert.equal(onerrorState(ONERROR).state, 'exact');
+  assert.equal(onerrorState("document.body.textContent = 'Kein Dienst';").state, 'translated');
+  assert.equal(onerrorState('').state, 'missing');
+});
+
+test('--heading-level moves the headings of the report so that it can be pasted under a heading of a README', async () => {
+  const findings = [{ id: 'a', level: 'pass', title: 'Fine', detail: '' }, { id: 'w', level: 'warn', title: 'Some warning', detail: 'not good' }, { id: 'f', level: 'fail', title: 'Broken', detail: 'x' }];
+  const headings = (text) => text.split('\n').filter((l) => /^#{1,6} /.test(l));
+  const plain = renderReport({ appPath: '/x/app.html', findings, info: {}, strict: false, notTestedLines: ['a thing'] });
+  assert.deepEqual(headings(plain), ['# wds-verify report: app.html', '## Failures', '## Warnings', '## All checks', '## Not tested']);
+  const three = renderReport({ appPath: '/x/app.html', findings, info: {}, strict: false, notTestedLines: ['a thing'], headingLevel: 3 });
+  assert.deepEqual(headings(three), ['### wds-verify report: app.html', '#### Failures', '#### Warnings', '#### All checks', '#### Not tested']);
+  assert.equal(three.replace(/^#+ /gm, ''), plain.replace(/^#+ /gm, ''), 'only the heading marks differ');
+  const dir = writeApp(good());
+  const out = join(tmpDir(), 'report.md');
+  const r = await run('wds-verify.mjs', [dir, '--static-only', '--heading-level', '3', '--out', out], { env: { WDS_VERIFY_HASHES_URL: 'off' } });
+  assert.match(r.stdout, /^### wds-verify report: /m);
+  assert.doesNotMatch(r.stdout, /^#{1,2} /m);
+  assert.equal(readFileSync(out, 'utf8'), r.stdout);
+  for (const bad of ['0', '6', 'x', '2.5']) {
+    const u = await run('wds-verify.mjs', [dir, '--static-only', '--heading-level', bad]);
+    assert.equal(u.code, 2, bad);
+    assert.match(u.stderr, /--heading-level needs a number from 1 to 5/);
+  }
+  assert.equal((await run('wds-verify.mjs', [dir, '--static-only', '--heading-level'])).code, 2);
+});
+
 test('CSP: the recommended policy and stricter ones pass, broader ones fail', () => {
   const tpl = CSP_TEMPLATE;
   assert.deepEqual(cspBroaderThan(parseCsp(tpl), tpl), []);

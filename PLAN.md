@@ -31,7 +31,9 @@ and changes made during the implementation are recorded, in order, in [`IMPLEMEN
   The rebuilt library has a new hash (1.0.0 is not frozen).
   `wds-verify --target sandbox` on the example app passes against production. The repository is public at
   https://github.com/UBA-PSI/wiai-datastore (MIT, fresh history). The first dashboard login with a university account works.
-- *Pending:* a porting trial by a Claude without access to the repository checkout; escrow private keys
+- *Clean-room porting trials* (a Claude with only the public documents and a clone of the public repository): round E (the predecessor of the
+  example app), rounds F and G (the "Literaturliste"; in round G porting.md Example 1 still had its shape). All passed wds-verify in the sandbox.
+- *Pending:* a clean-room trial with an app unrelated to the examples (§16); escrow private keys
   into KeePassXC (current and spare apart) and deletion of the generated files; review of the privacy page by the data
   protection officer; freezing library version 1.0.0; a pilot with one real app; the open points in §16.
 
@@ -528,7 +530,8 @@ Current version: 1.0.0, not frozen yet. Served at `https://wiai.uni-bamberg.de/d
 The dashboard shows this line ready to copy (taken from `client/dist/hashes.json` next to the server). Because SRI defends
 against this very server, the hashes are also published in this repository (`client/dist/hashes.json`), and `wds-verify`
 checks the tag against that file. The tag in the developer documentation (`{{script_tag}}`, filled in at request time)
-adds an `onerror` fallback that shows "Storage service unreachable" instead of a blank page.
+adds an `onerror` fallback that shows "Storage service unreachable" instead of a blank page. The message may be in the language of the app;
+the code of the handler stays as documented (wds-verify: the exact handler passes, a translated message is info, a missing or other handler warns).
 
 ### 8.1 API (the only thing app code uses)
 
@@ -581,7 +584,7 @@ await store.lock(); store.setLocale("de"); store.status() /* incl. sandbox: bool
   unsaved backups stay downloadable. `onLock`, `onUnlock` and `onChange` registrations are idempotent per function.
 - Dialogs: German/English by `navigator.language` (German formal "Sie"), themeable via CSS custom properties (`--wds-bg`, `--wds-fg`,
   `--wds-accent`, `--wds-font`, `--wds-radius`, …) and the `wds-` class prefix, no Shadow DOM, light and dark by `prefers-color-scheme`.
-  Every dialog is a modal `<dialog>` opened with `showModal()` (round F): it lives in the browser's top layer, so it opens above the modal dialogs of the app, the browser makes everything below it inert, draws the backdrop and returns the focus, and Escape closes only a dialog that has a close button; toasts and the sandbox bar are `popover="manual"` elements that the library keeps inside the topmost modal dialog while one is open. The box is reset with `all: initial` so that app CSS for `dialog` cannot change it. Accessibility: labelled by the title, focus returns to the previous element, every input has a label, errors are `role="alert"`, a dialog that waits has `aria-busy="true"`. The API offers no hook that hands over
+  Every dialog is a modal `<dialog>` opened with `showModal()` (round F): it lives in the browser's top layer, so it opens above the modal dialogs of the app, the browser makes everything below it inert, draws the backdrop and returns the focus, and Escape closes only a dialog that has a close button; toasts and the sandbox bar are `popover="manual"` elements that the library keeps inside the topmost modal dialog while one is open. The box is reset with `all: initial` so that app CSS for `dialog` cannot change it. Accessibility: labelled by the title, focus returns to the previous element, every input has a label, errors are `role="alert"`, a dialog that waits has `aria-busy="true"`, a dialog is never without a view (it opens as `loading`), a request that does not answer within 30 s (Client option `timeout`, 0 = none, +1 s per 10 KB of upload, three times as long to create or join a vault) fails with `OfflineError` code `timeout`; a write that got no answer is looked up before it is reported (an answer lost after the server stored it counts as saved), and a dialog that cannot go on (a failed request, a view that cannot be built) shows the view `error` with a `retry` button (`test/dialog-stress.spec.mjs`; the history dialog is `loading` until its list is built). The API offers no hook that hands over
   the passphrase. (The dialogs run in the app's JavaScript realm, so a malicious app could still read the input; this
   protects against careless code, not hostile code.)
 
@@ -681,12 +684,12 @@ bundler) into `client/dist/wds-<version>.js` (version from `client/package.json`
 `client/escrow-pins.json`, `WDS_ESCROW_PINS` or `--escrow-pins=` and are written into the bundle, retired sets from the `retired` list of that file,
 `WDS_RETIRED_ESCROW` or `--retired-escrow=ID:UNTIL,…`; without pins vault creation fails unless the app passes
 `escrowPins` (tests only; a bundle with pins ignores the option). The browser tests build their own pinless bundle into `client/test-results/bundle`, so `dist/` always holds the production build. `--freeze` marks a released version: later builds with different bytes fail. `scripts/test-client.sh` runs the node tests
-(protocol, vectors, UI helpers, build) and the Playwright UI tests (`client/test/ui.spec.mjs`, Chromium only, `file://` page,
+(protocol, vectors, UI helpers, build, request timeouts and lost answers: `request-timeout.test.mjs`) and the Playwright UI tests (`client/test/ui.spec.mjs`, Chromium only, `file://` page,
 in-memory fake server over HTTP): create,
 passphrase rules, unlock, key file, records, conflict, autosave, share/redeem/revoke, export, offline, history, recovery notices,
 German texts, accessibility, SRI, the top layer (`ui-layers.spec.mjs`: library dialogs above app modals, also a reused app `<dialog>`, toasts inside
 the topmost modal) and `store.migrateLocal` (`migrate.spec.mjs`, 32 cases served over `http://127.0.0.1` in Chromium, Firefox and WebKit; WebKit runs
-in a persistent profile because an ephemeral context aborts Blob writes to IndexedDB; `migrate-unit.test.mjs` for the pure parts).
+in a persistent profile because an ephemeral context aborts Blob writes to IndexedDB; `migrate-unit.test.mjs` for the pure parts) and the dialogs under slow, failing and stalled requests (`dialog-stress.spec.mjs`, round G: 16 seeded rounds, a watcher for a dialog without a view, a long `loading`, more than one dialog and gaps of the page timer; a reload followed by the drive-library `unlock()`; key files dropped on busy views; a view whose build throws).
 
 **Integration tests** (`scripts/test-integration.sh`, `client/test/integration.spec.mjs`, config `client/playwright.integration.config.mjs`).
 They start the REAL server (project venv, temporary database, scope made with the dev CLI, escrow keys generated for the run) and
@@ -770,11 +773,11 @@ The alternative that was rejected: last-writer-wins with timestamps and tombston
      app that assigns the global fails statically, a page that has it set without the flag fails dynamically. The sandbox run cannot prove that
      visible values came from the vault (the old data stays there); the mock or `--migration-delete` run is that proof;
    - "Library version released" (version not frozen) is information, not a warning; "Privacy sentence" (info) says when neither the page nor
-     the README next to it has the official sentence;
+     the README next to it has the official sentence; "onerror fallback" passes for the documented handler, is info for a translated message
+     and warns for a missing or different handler;
    - scope check: the app's own scope document is fetched; breach check on without `https://api.pwnedpasswords.com` in
      `connect-src` fails; the report prints enrollment, breach check and limits;
-   - robust dialog handling (round F, after the flaky "dialog handling failed" warning of the second clean-room trial): a library dialog without a
-     view, with `aria-busy` or in `loading`/`progress` is "not ready" (wait), not unexpected; fields are filled through `fillWhenReady` (waits
+   - robust dialog handling (round F, after the flaky "dialog handling failed" warning of the second clean-room trial): a library dialog with `aria-busy` or in `loading`/`progress` is "not ready" (wait), not unexpected, one in the view `error` gets `retry` (three times at most) and every timeout names the state of the dialog (`describeDialog`, `dialogSummary`). Round G: `describeDialog` tells "no dialog" (`null`) from "the page did not answer" (`{ unresponsive: true }`, e.g. while Argon2id blocks the main thread), `viewOf` turns the latter into `''` (not ready), `formError` is one bounded `evaluate`, and `unlock`, `waitForSheet` and `answerMigration` accept "closed" only from a look that was answered; fields are filled through `fillWhenReady` (waits
      for an editable field, retries, checks the value), an error caused by the page changing under the call is retried, and a note keeps
      several lines of Playwright's call log (`briefError`). A click that a library notice covers is retried after dismissing the notice and
      noted (the notice sits bottom right above dialogs); another cover is named in the error. "Typed values neither shown nor written" names
@@ -801,7 +804,7 @@ The alternative that was rejected: last-writer-wins with timestamps and tombston
    Targets: `--target auto|mock|sandbox` (auto: mock when Python is there, else the sandbox if reachable, else static checks only);
    `--sandbox-copy <out.html>` writes a copy whose `WDS.connect` scope is the sandbox, for trying the app by hand. Static checks also fail
    the sandbox ID in an app file and CSS that hides library elements, and warn about deleting old local data without a sandbox guard.
-   Further options: `--migration-delete` (needs a `seed`; no effect on the mock, which deletes anyway; the report names it in its first lines), `--strict` (warnings fail), `--out`, `--json`, `--script-tag` (prints the complete tag with its `onerror` handler, the text of `docs.py`, and the CSP meta tag; with `--hashes client/dist/hashes.json` the tag of an unreleased build), `--scope-check off` (no scope lookup, for a scope that is not registered yet). A clone whose library is newer than the service is reported as "clone is newer than the service", not as outdated.
+   Further options: `--migration-delete` (needs a `seed`; no effect on the mock, which deletes anyway; the report names it in its first lines), `--strict` (warnings fail), `--out`, `--json`, `--heading-level <1-5>` (the report title gets that many `#`, its sections one more: 3 under a README's `## Verification`), `--script-tag` (prints the complete tag with its `onerror` handler, the text of `docs.py`, and the CSP meta tag; with `--hashes client/dist/hashes.json` the tag of an unreleased build), `--scope-check off` (no scope lookup, for a scope that is not registered yet). A clone whose library is newer than the service is reported as "clone is newer than the service", not as outdated.
    `tools/lib/drive-library.mjs` is the API for a developer's own Playwright tests too: `createVault`, `redeemInvite`, `unlock`, `deleteVault`, `waitForView`, `confirmSheet`, `answerMigration`, `enableMigrationDelete`, `newPassphrase`, `readJoinCode` (the join-code file of §8.5).
    Exit codes: 0 passed, 1 a check failed, 2 the tool could not run, 3 the sandbox is unavailable (not an app finding). Tests: `scripts/test-tools.sh` with a correct and a
    deliberately leaky example app (`tools/test-apps/good`, `bad`).
@@ -968,7 +971,8 @@ filled in at request time). Their public source is the repository https://github
 
 - `/datastore/llms.txt` – index for LLMs: what this is, the escrow exception, the rules that matter, links to the pages
   below, facts to quote correctly, the public repository for wds-verify, and the sandbox scope ID with its limits and wipe time (only when
-  the server has a `[sandbox]` section).
+  the server has a `[sandbox]` section), and an index of integration.md and porting.md (sections with their line ranges) that the server computes from the
+  served text (`docs.py`), so that an agent whose file tool cuts long files can read them in parts and the ranges cannot go stale.
 - `/datastore/docs/integration.md` (also as HTML at `/datastore/docs/integration`) – for the developer's Claude: register a
   scope; the script tag and CSP; the API; where data lives; data modelling (one record per entity, files as separate
   records, `autosave` for editors); conflicts; members and sharing; export; errors; forbidden patterns (own crypto, own
@@ -977,7 +981,7 @@ filled in at request time). Their public source is the repository https://github
 a short section 16 that points to porting.md; collections, two devices, files, conflicts in code,
   lock and unlock again, the library's dialogs above modal dialogs of the app; the sandbox; the table of the library's dialogs and `drive-library.mjs` for own end-to-end tests. Downloads the person asks for and forms with `preventDefault` under `form-action 'none'` are
   allowed and say so. The code recipes run in three engines against the real server (`examples/docs-recipes.spec.mjs`).
-- `/datastore/docs/porting.md` (HTML at `/datastore/docs/porting`; round F moved section 16 of integration.md here and rewrote it) – porting an existing app: inventory and mapping, replacing the storage calls, an import of the old export file that keeps ids and rewrites references, `store.migrateLocal` (options, `map(old, h)`, `from`, ids and the tag, two complete examples: references in both directions with files and localStorage settings, and a localStorage JSON with notes, files and a key-value store; the result and what the app does with it; what the person sees; the safety rules), the same-origin condition, the tests (wds-verify `seed` in its exact order, `--migration-delete`, the test global in an own automated test, the join code file for tests, the test vault, `redeemInvite`), and the checklist for apps with forms and modal dialogs (own dialogs closed in `onLock`, typed values kept, no double save, `preventDefault`, restored filters, ids in selectors, a file in a new tab inside the click).
+- `/datastore/docs/porting.md` (HTML at `/datastore/docs/porting`; round F moved section 16 of integration.md here and rewrote it) – porting an existing app: inventory and mapping, replacing the storage calls, an import of the old export file that keeps ids and rewrites references, `store.migrateLocal` (options, `map(old, h)`, `from`, ids and the tag, two complete examples: Example 1, a cookbook (string keys, a list of photos inside a recipe, references in both directions, settings in localStorage, a search field that is not taken over; since round G no longer the shape of a trial app), and Example 2, a localStorage JSON with notes, files and a key-value store where only the file points to its owner; the result and what the app does with it; what the person sees; the safety rules), the same-origin condition, the tests (wds-verify `seed` in its exact order, `--migration-delete`, the test global in an own automated test, the join code file for tests, the test vault, `redeemInvite`), and the checklist for apps with forms and modal dialogs (own dialogs closed in `onLock`, typed values kept, no double save, `preventDefault`, restored filters, ids in selectors, a file in a new tab inside the click).
 - `/datastore/docs/users.de.md` and `users.en.md` – for app users: passphrase, access ID, key file and recovery code, new
   device, sharing, conflicts, what the faculty can see (escrow), recovery, export.
 - `/datastore/docs/operator.md` – places, escrow key handling, recovery, quotas, read-only mode, deploy and releasing a
@@ -1013,14 +1017,16 @@ a short section 16 that points to porting.md; collections, two devices, files, c
 | 5 | Dashboard (login.psi, de/en), audit, privacy page | Built, tested and deployed; login.psi application registered; first real login pending. |
 | 6 | Escrow tools `wds-keygen`, `wds-recover`; operator documentation | Done; production escrow keys generated and pinned. |
 | 7 | Infrastructure (§12) | VM, proxy, deployment role and script done; monitoring open. |
-| 8 | Documentation, example app, pilot with one real app | Documentation, export page and example app done and deployed; porting trial of an existing app done (round D); clean-room porting trial done (round E); public sandbox deployed; pilot with one real app open. |
+| 8 | Documentation, example app, pilot with one real app | Documentation, export page and example app done and deployed; porting trial of an existing app done (round D); clean-room porting trials done (rounds E, F, G); public sandbox deployed; pilot with one real app open. |
 
 ## 16. Open points
 
-- **A clean-room trial with an unrelated app.** The clean-room trial of round E (a Claude with only the public documents and repository)
-  passed wds-verify in the public sandbox, but its app was the predecessor of `examples/zeit-notizen`, so it copied the example and wrote only
-  scope, privacy text, import and migration. It says little about how far the documents carry an app that does not derive from the example
-  (conflict UI, roles, lock were not thought through anew). Next trial: an app with its own structure.
+- **A clean-room trial with an unrelated app.** Three clean-room trials (a Claude with only the public documents and repository) passed
+  wds-verify in the public sandbox, but none was representative: round E ported the predecessor of `examples/zeit-notizen`, and rounds F and G
+  ported the "Literaturliste", whose shape porting.md Example 1 had until round G (the round G trial took over its `map` almost unchanged).
+  Example 1 is now a cookbook. Next: a fourth trial with an app unrelated to the example app and to both porting examples.
+- **The hang of the round G trial is not proven.** One of four runs of the trial's own test timed out in `unlock()` after a reload with an
+  empty `data-wds-view`; it was not reproduced. The most plausible cause, in drive-library, is fixed (IMPLEMENTATION-LOG, round G).
 - **Deferred from round D:** `wds-verify --role read` (testing an app as a read-only member) and a Claude skill/plugin for the service.
 - **Freeze library version 1.0.0** (`node client/build.mjs --freeze`) before the first app embeds its tag; every later
   change then needs a new version number.

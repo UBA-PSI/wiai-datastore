@@ -2,9 +2,9 @@
 // Every block is taken from the served document (by its heading), put into a page that carries the documented Content-Security-Policy and script tag,
 // and run from a file:// page. Nothing here re-types a block: if the document changes, the test runs the new text.
 //  - integration.md: collections (several devices, concurrent adds, err.stored after a lost index write), conflicts in code (settings merge, keepTheirs, c.ask()),
-//    lock and unlock again (onLock/onUnlock registered once, a pending edit survives the lock), autosave, files (delete with attachments, the file in a new tab inside the click),
+//    lock and unlock again (onLock/onUnlock registered once, a pending edit survives the lock), autosave, files (delete with attachments, save with a new or replaced attachment, the file in a new tab inside the click),
 //    set and created, the table of the library's dialogs against client/src/wds-ui.js, the example app of section 14 and the wds-verify.json of section 12 under wds-verify,
-//  - porting.md: the import of an old export, the options of store.migrateLocal, the Literaturliste block against a seeded old database (real server: migrated and deleted, the sandbox
+//  - porting.md: the import of an old export, the options of store.migrateLocal, the Cookbook block (Example 1) against a seeded old database, the type of a file (mime), the box of the library's notices (real server: migrated and deleted, the sandbox
 //    keeps, the test global deletes), the zeit-notizen block (identical to the one in examples/zeit-notizen/index.html), the start function, the checklist for apps with forms and
 //    modal dialogs, the popup block, the seed block (identical to the one of the example), the migration under wds-verify (mock deletes, sandbox keeps, --migration-delete deletes),
 //    static findings of the blocks,
@@ -422,6 +422,104 @@ test('files: deleting a note removes its attachments first, then the note', asyn
   await noProblems(page);
   await ctx.close();
 });
+test('files: saving a note with a new or replaced attachment writes file, note, then removes the old file; a lost or failed note write takes the new file away again', async ({ browser, stack, md }) => {
+  const recipe = blockAfter(md, /^### Files$/, 'js', 1);
+  expect(recipe).toContain('async function saveNoteWithFile(');
+  const url = harness(md, stack, { recipe, params: ['notes', 'files'], ret: ['saveNoteWithFile'], scope: stack.scope });
+  const ctx = await newContext(browser);
+  const page = await open(ctx, url);
+  const setup = (p) => p.evaluate(async () => {
+    window.notes = store.collection('notes/', { meta: (n) => ({ title: n.title }) });
+    window.files = store.collection('files/');
+    window.R = await window.__recipe(store, { notes: window.notes, files: window.files });
+    window.save = (id, note, text) => R.saveNoteWithFile(id, note, text === null ? null : new File([text], text + '.txt', { type: 'text/plain' }));
+    window.fileIds = async () => { await files.refresh(); return files.items().map((f) => f.id).sort(); };
+  });
+  await setup(page);
+  const accessId = await openVault(page, stack);
+  await page.evaluate(() => window.__unlock);
+  await page.evaluate(() => files.load());
+
+  // a new note with a file: the file is there, the note names it, the file's meta names the note
+  const first = await page.evaluate(() => save('n1', { title: 'one' }, 'first'));
+  expect(first.resolution).toBe('saved');
+  const f1 = (await page.evaluate(() => notes.get('n1'))).fileId;
+  expect(await page.evaluate(() => fileIds())).toEqual([f1]);
+  expect(await page.evaluate(() => files.items()[0].meta)).toEqual({ note: 'n1', name: 'first.txt' });
+  expect(await page.evaluate(async (id) => (await store.getBlob('files/' + id)).text(), f1)).toBe('first');
+
+  // replaced: the new file is written, the note names it, the old file is gone
+  await page.evaluate((id) => save('n1', { title: 'one', fileId: id }, 'second'), f1);
+  const f2 = (await page.evaluate(() => notes.get('n1'))).fileId;
+  expect(f2).not.toBe(f1);
+  expect(await page.evaluate(() => fileIds())).toEqual([f2]);
+  expect(await page.evaluate((id) => store.get('files/' + id, { fresh: true }), f1)).toBeUndefined();
+
+  // no new file: the file stays, only the note changes
+  await page.evaluate((id) => save('n1', { title: 'one, renamed', fileId: id }, null), f2);
+  expect(await page.evaluate(() => fileIds())).toEqual([f2]);
+  expect(await page.evaluate(() => notes.get('n1'))).toEqual({ title: 'one, renamed', fileId: f2 });
+
+  // the note write fails for a reason that leaves the note unwritten (quota, no right to write): the error reaches the caller, the new file is taken away again, the old one stays
+  await page.evaluate(() => { window.__realSet = notes.set.bind(notes); notes.set = async () => { throw new WDS.errors.QuotaError('too large'); }; });
+  const failed = await page.evaluate((id) => save('n1', { title: 'never saved', fileId: id }, 'third').then(() => 'resolved', (e) => e.name), f2);
+  expect(failed).toBe('QuotaError');
+  expect(await page.evaluate(() => fileIds())).toEqual([f2]);
+  // an OfflineError may mean that the write reached the server and only its answer was lost: the note may name the new file, so the file stays (an orphan costs space only)
+  await page.evaluate(() => { notes.set = async () => { throw new WDS.errors.OfflineError('offline'); }; });
+  const offline = await page.evaluate((id) => save('n1', { title: 'maybe saved', fileId: id }, 'third-b').then(() => 'resolved', (e) => e.name), f2);
+  expect(offline).toBe('OfflineError');
+  const kept = (await page.evaluate(() => fileIds())).filter((id) => id !== f2);
+  expect(kept).toHaveLength(1);
+  await page.evaluate((id) => files.remove(id), kept[0]);
+  await page.evaluate(() => { notes.set = window.__realSet; });
+
+  // the note write loses with "theirs": the other device's note is stored, so the new file is unreferenced and goes; the file the other note names stays
+  const b = await open(ctx, url);
+  await setup(b);
+  await unlockLater(b, accessId);
+  await b.evaluate(() => files.load());
+  await b.evaluate(async () => { await notes.get('n1'); await notes.set('n1', { title: 'written on the other device', fileId: (await notes.get('n1')).fileId }); });
+  await page.evaluate(() => { store.onConflict('notes/', (c) => c.keepTheirs()); });
+  const lost = await page.evaluate((id) => save('n1', { title: 'mine', fileId: id }, 'fourth'), f2);
+  expect(lost.resolution).toBe('theirs');
+  expect(lost.value).toEqual({ title: 'written on the other device', fileId: f2 });
+  expect(await page.evaluate(() => fileIds())).toEqual([f2]);
+  expect(await page.evaluate(() => store.get('notes/n1', { fresh: true }))).toEqual({ title: 'written on the other device', fileId: f2 });
+
+  // the note is stored and only its list entry is lost (err.stored): the note names the new file, so the file stays
+  const pattern = /\/api\/v1\/vaults\/[^/]+\/records\/[^/]+$/;
+  let puts = 0;
+  page.ignoreAborted = true;
+  await ctx.route(pattern, (route) => {
+    if (route.request().method() === 'PUT' && ++puts === 4) return route.abort('failed');   // 1: the file, 2: its list entry, 3: the note, 4: the note's list entry
+    return route.continue();
+  });
+  const indexLost = await page.evaluate((id) => save('n1', { title: 'five', fileId: id }, 'fifth').then(() => 'resolved', (e) => ({ stored: e.stored === true })), f2);
+  await ctx.unroute(pattern);
+  expect(indexLost).toEqual({ stored: true });
+  const five = await page.evaluate(() => store.get('notes/n1', { fresh: true }));
+  expect(five.title).toBe('five');
+  expect(five.fileId).not.toBe(f2);
+  expect(await page.evaluate(async (id) => (await store.getBlob('files/' + id)).text(), five.fileId)).toBe('fifth');   // the note's file is there
+
+  // the answer of the note write is lost after the server stored it: the library looks at the record and counts it as saved; the old file goes, the new one stays
+  puts = 0;
+  await ctx.route(pattern, async (route) => {
+    if (route.request().method() === 'PUT' && ++puts === 3) { await route.fetch(); return route.abort('failed'); }   // the server has the note, the page never hears of it
+    return route.continue();
+  });
+  const dropped = await page.evaluate((id) => save('n1', { title: 'six', fileId: id }, 'sixth').then((r) => r.resolution, (e) => e.name), five.fileId);
+  await ctx.unroute(pattern);
+  expect(dropped).toBe('saved');
+  const six = await page.evaluate(() => store.get('notes/n1', { fresh: true }));
+  expect(six.title).toBe('six');
+  expect(await page.evaluate(async (id) => (await store.getBlob('files/' + id)).text(), six.fileId)).toBe('sixth');
+  expect(await page.evaluate((id) => store.get('files/' + id, { fresh: true }), five.fileId)).toBeUndefined();   // step 3 removed the old file
+  await noProblems(page, b);
+  await ctx.close();
+});
+
 test('porting.md section 3: the import of an old export reads a file the person chose', async ({ browser, stack, md, porting }) => {
   const recipe = blockAfter(porting, /^## 3\. Own export and import$/, 'js');
   const url = harness(md, stack, { recipe, ret: ['notes', 'importOldExport'], scope: stack.scope });
@@ -536,46 +634,46 @@ test('the table of the library dialogs in the guide matches client/src/wds-ui.js
 // ---------------------------------------------------------------------------------------------------------------------------
 // tests: store.migrateLocal in the documented blocks of porting.md
 
-const LIT = (porting) => blockAfter(porting, /^### Example 1: /, 'js');
+const COOK = (porting) => blockAfter(porting, /^### Example 1: /, 'js');
 const ZEIT = (porting) => blockAfter(porting, /^### Example 2: /, 'js');
 
-// The old Literaturliste in a browser: IndexedDB "literatur" with refs { id autoIncrement keyPath, title, ..., pdfId, pdfName, created } and pdfs { id, name, blob }, and the localStorage key with the settings.
-const LIT_SEED = String.raw`
-  window.seedLit = async function (opts) {
+// The old Cookbook in a browser: IndexedDB "cookbook" with recipes (out-of-line string keys; { title, portions, steps, photos: [{ image, caption }], saved }) and images (a File per key), and the localStorage key with the preferences.
+const COOK_SEED = String.raw`
+  window.seedCook = async function (opts) {
     opts = opts || {};
     await new Promise((ok, fail) => {
-      const req = indexedDB.open('literatur', 1);
+      const req = indexedDB.open('cookbook', 1);
       req.onupgradeneeded = () => {
         const db = req.result;
-        const refs = db.createObjectStore('refs', { keyPath: 'id', autoIncrement: true });
-        const pdfs = db.createObjectStore('pdfs', { keyPath: 'id', autoIncrement: true });
-        refs.add({ title: 'Alpha', authors: 'A. Author', year: 2001, pdfId: 1, pdfName: 'eins.pdf', created: '2024-03-01T10:00:00.000Z' });
-        refs.add({ title: 'Beta', authors: 'B. Author', year: 2002, pdfId: 99, pdfName: 'weg.pdf', created: '2024-03-02T10:00:00.000Z' });      // its pdf is gone
-        refs.add({ title: 'Gamma', authors: 'C. Author', year: 2003, created: '2024-03-03T10:00:00.000Z' });                                       // no pdf at all
-        const bytes = new Uint8Array([37, 80, 68, 70, 45, 49, 46, 52, 10, 1, 2, 3, 250, 251, 252]);
-        pdfs.add(opts.blobs ? { name: 'eins.pdf', blob: new Blob([bytes], { type: 'application/pdf' }) } : { name: 'eins.pdf', type: 'application/pdf', data: bytes.buffer });   // WebKit cannot keep a Blob in IndexedDB on file://
+        const recipes = db.createObjectStore('recipes'), images = db.createObjectStore('images');
+        recipes.put({ title: 'Apple pie', portions: 8, steps: ['Peel the apples', 'Bake for 45 minutes'], photos: [{ image: 'img-1', caption: 'Fresh from the oven' }, { image: 'img-2', caption: 'The first slice' }], saved: '2024-03-01T10:00:00.000Z' }, 'apple-pie');
+        recipes.put({ title: 'Tarte Tatin', portions: 6, steps: ['Caramelise'], photos: [{ image: 'img-gone', caption: 'A photo that was lost' }], saved: '2024-03-02T10:00:00.000Z' }, 'Tarte Tatin');   // its image row is gone
+        recipes.put({ title: 'Plain rice', portions: 2, steps: ['Boil'], saved: '2024-03-03T10:00:00.000Z' }, 'rice');                                                                       // no photos at all
+        const one = new Uint8Array([255, 216, 255, 224, 1, 2, 3, 250, 251, 252]), two = new Uint8Array([255, 216, 255, 224, 9, 8, 7]);
+        const put = (key, name, bytes) => images.put(opts.blobs ? new File([bytes], name, { type: 'image/jpeg' }) : { name, type: 'image/jpeg', data: bytes.buffer }, key);   // WebKit cannot keep a File in IndexedDB on file://
+        put('img-1', 'apple-pie.jpg', one); put('img-2', 'slice.jpg', two);
       };
       req.onsuccess = () => { req.result.close(); ok(); };
       req.onerror = () => fail(req.error);
     });
-    localStorage.setItem('literaturliste.einstellungen', JSON.stringify({ theme: 'dark', sort: 'year', statsOpen: true, filter: '' }));
+    localStorage.setItem('cookbook.prefs', JSON.stringify({ units: 'imperial', view: 'grid', search: 'pie' }));
     localStorage.setItem('other.app.key', 'keep me');
   };
-  window.oldLit = async function () {        // what is left of the old storage
+  window.oldCook = async function () {        // what is left of the old storage
     const out = { local: {}, rows: null };
     for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (!k.startsWith('wds:')) out.local[k] = localStorage.getItem(k); }
-    const db = await new Promise((resolve) => { const r = indexedDB.open('literatur'); r.onupgradeneeded = () => { r.transaction.abort(); resolve(null); }; r.onsuccess = () => resolve(r.result); r.onerror = () => resolve(null); });
+    const db = await new Promise((resolve) => { const r = indexedDB.open('cookbook'); r.onupgradeneeded = () => { r.transaction.abort(); resolve(null); }; r.onsuccess = () => resolve(r.result); r.onerror = () => resolve(null); });
     if (db) {
       out.rows = {};
-      for (const s of ['refs', 'pdfs']) out.rows[s] = await new Promise((resolve) => { const r = db.transaction(s).objectStore(s).count(); r.onsuccess = () => resolve(r.result); });
+      for (const s of ['recipes', 'images']) out.rows[s] = await new Promise((resolve) => { const r = db.transaction(s).objectStore(s).count(); r.onsuccess = () => resolve(r.result); });
       db.close();
     }
     return out;
   };
-  window.tagOf = () => localStorage.getItem('wds:migrate:literatur:tag');
+  window.tagOf = () => localStorage.getItem('wds:migrate:cookbook:tag');
 `;
 
-async function canKeepBlobs(page) {         // an engine that cannot keep a Blob in IndexedDB for file:// pages: the seed uses bytes (h.blob takes value.data)
+async function canKeepBlobs(page) {         // an engine that cannot keep a Blob or File in IndexedDB for file:// pages: the seed uses bytes (h.blob takes value.data and value.type)
   return page.evaluate(() => new Promise((res) => {
     try {
       const r = indexedDB.open('probe-' + Math.random());
@@ -587,12 +685,12 @@ async function canKeepBlobs(page) {         // an engine that cannot keep a Blob
 }
 async function idbAvailable(page) { return page.evaluate(() => { try { return typeof indexedDB !== 'undefined' && !!indexedDB.open('probe-' + Math.random()); } catch (e) { return false; } }); }
 
-function litUrl(md, porting, stack, { scope, origin, recipe } = {}) {
-  return harness(md, stack, { recipe: recipe || LIT(porting), ret: ['result', 'refs', 'pdfs'], scope: scope || stack.scope, origin, extraHead: '<script>' + LIT_SEED + '</script>' });
+function cookUrl(md, porting, stack, { scope, origin, recipe } = {}) {
+  return harness(md, stack, { recipe: recipe || COOK(porting), ret: ['result', 'recipes', 'images'], scope: scope || stack.scope, origin, extraHead: '<script>' + COOK_SEED + '</script>' });
 }
 // Starts the block of the document (it calls store.migrateLocal at once) and returns; the dialogs are answered by the test.
-const startLit = (page) => page.evaluate(() => { window.__done = window.__recipe(store, {}).then((r) => (window.R = r), (e) => ({ rejected: e.name + ': ' + e.message })); });
-const finishLit = (page) => page.evaluate(() => window.__done);
+const startCook = (page) => page.evaluate(() => { window.__done = window.__recipe(store, {}).then((r) => (window.R = r), (e) => ({ rejected: e.name + ': ' + e.message })); });
+const finishCook = (page) => page.evaluate(() => window.__done);
 async function answerYes(page, { backup = false } = {}) {
   const q = dlg(page, 'migrate');
   await expect(q).toBeVisible({ timeout: 30000 });
@@ -600,81 +698,167 @@ async function answerYes(page, { backup = false } = {}) {
   if (backup) {
     const download = page.waitForEvent('download');
     await q.locator('[data-wds="migrate-backup"]').click();
-    expect((await download).suggestedFilename()).toMatch(/^literatur-old-data-\d{4}-\d{2}-\d{2}\.zip$/);
+    expect((await download).suggestedFilename()).toMatch(/^cookbook-old-data-\d{4}-\d{2}-\d{2}\.zip$/);
   }
   await q.locator('[data-wds="migrate-yes"]').click();
 }
-const vaultOfLit = (page) => page.evaluate(async () => {
-  const tag = tagOf(), refs = R.refs, pdfs = R.pdfs;                  // the collections that the block of the document made
-  await refs.refresh(); await pdfs.refresh();
-  const all = await refs.getAll(), files = [];
-  for (const e of pdfs.items()) { const b = await store.getBlob('pdfs/' + e.id); files.push({ id: e.id, meta: e.meta, type: b.type, bytes: [...new Uint8Array(await b.arrayBuffer())] }); }
-  return { tag, refs: all.map((r) => ({ id: r.id, meta: r.meta, value: r.value, created: refs.items().find((i) => i.id === r.id).created })), files, settings: await store.get('settings', { fresh: true }), records: (await store.list()).map((r) => r.name) };
+const vaultOfCook = (page) => page.evaluate(async () => {
+  const tag = tagOf(), recipes = R.recipes, images = R.images;          // the collections that the block of the document made
+  await recipes.refresh(); await images.refresh();
+  const all = await recipes.getAll(), files = [];
+  for (const e of images.items()) { const b = await store.getBlob('images/' + e.id); files.push({ id: e.id, meta: e.meta, type: b.type, bytes: [...new Uint8Array(await b.arrayBuffer())] }); }
+  files.sort((x, y) => (x.id < y.id ? -1 : 1));
+  return { tag, recipes: all.map((r) => ({ id: r.id, meta: r.meta, value: r.value, created: recipes.items().find((i) => i.id === r.id).created })), files, settings: await store.get('settings', { fresh: true }), records: (await store.list()).map((r) => r.name) };
 });
-const PDF_BYTES = [37, 80, 68, 70, 45, 49, 46, 52, 10, 1, 2, 3, 250, 251, 252];
+const IMAGE_1 = [255, 216, 255, 224, 1, 2, 3, 250, 251, 252], IMAGE_2 = [255, 216, 255, 224, 9, 8, 7];
 
-test('porting.md example 1 (references both ways, a dead reference, a Blob, settings): the real server migrates and deletes; the person asked once; a second start finds nothing', async ({ browser, stack, md, porting }) => {
-  const url = litUrl(md, porting, stack);
+test('porting.md example 1 (string keys, a list of photos, references both ways, a dead reference, images, settings): the real server migrates and deletes; the person asked once; a second start finds nothing', async ({ browser, stack, md, porting }) => {
+  const url = cookUrl(md, porting, stack);
   const ctx = await newContext(browser);
   const page = await open(ctx, url);
   if (!(await idbAvailable(page))) test.skip(true, 'this engine has no IndexedDB for file:// pages');
   const accessId = await openVault(page, stack);
   await page.evaluate(() => window.__unlock);
   // the person has started the new app already: a setting of its own that the old settings must not overwrite
-  await page.evaluate(async () => { await store.set('settings', { theme: 'light' }); });
-  await page.evaluate((blobs) => seedLit({ blobs }), await canKeepBlobs(page));
-  await startLit(page);
+  await page.evaluate(async () => { await store.set('settings', { units: 'metric' }); });
+  await page.evaluate((blobs) => seedCook({ blobs }), await canKeepBlobs(page));
+  await startCook(page);
   await answerYes(page, { backup: true });
-  const res = await finishLit(page);
-  expect(res.result).toEqual({ status: 'migrated', deleted: 'deleted', copied: 4, total: 4, sandbox: false });
-  const st = await vaultOfLit(page);
-  expect(st.refs).toHaveLength(3);
-  const byTitle = Object.fromEntries(st.refs.map((r) => [r.value.title, r]));
-  expect(byTitle.Alpha.id).toBe(st.tag + '-j1');
-  expect(byTitle.Alpha.value.pdfId).toBe(st.tag + '-j1.pdf');           // the reference computes the id of its pdf as the pdf side does
-  expect(byTitle.Alpha.value.pdfName).toBe('eins.pdf');
-  expect(byTitle.Alpha.value.id).toBeUndefined();                       // the old counter is the key now
-  expect(byTitle.Beta.value.pdfId).toBeNull();                          // a reference to a pdf that is gone
-  expect(byTitle.Beta.value.pdfName).toBeNull();
-  expect(byTitle.Gamma.value.pdfId).toBeNull();
-  expect(byTitle.Alpha.meta).toEqual({ title: 'Alpha' });
-  expect(byTitle.Alpha.created).toBe(Date.parse('2024-03-01T10:00:00.000Z'));
-  expect(st.refs.slice().sort((a, b) => a.created - b.created).map((r) => r.value.title)).toEqual(['Alpha', 'Beta', 'Gamma']);
-  expect(st.files).toEqual([{ id: st.tag + '-j1.pdf', meta: { name: 'eins.pdf', ref: st.tag + '-j1' }, type: 'application/pdf', bytes: PDF_BYTES }]);   // the other direction, byte for byte
-  expect(st.settings).toEqual({ theme: 'light', sort: 'year', statsOpen: true, filter: '' });      // the old settings fill only what the vault lacks
-  expect(st.records).not.toContain('.wds/migration/literatur/' + st.tag);                          // the marker is hidden
-  const old = await page.evaluate(() => oldLit());
-  expect(old.rows).toEqual({ refs: 0, pdfs: 0 });
+  const res = await finishCook(page);
+  expect(res.result).toEqual({ status: 'migrated', deleted: 'deleted', copied: 5, total: 5, sandbox: false });
+  // the notice of the library: the box that integration.md, section 4 describes (26rem wide, 1rem from the right and bottom edge of the window, 5 to 8rem high)
+  const toast = page.locator('[data-wds-toast=migration]');
+  await expect(toast).toBeVisible();
+  const box = await toast.boundingBox(), view = page.viewportSize();
+  expect(Math.round(view.width - (box.x + box.width))).toBe(16);
+  expect(Math.round(view.height - (box.y + box.height))).toBe(16);
+  expect(Math.round(box.width)).toBe(416);
+  expect(box.height).toBeGreaterThanOrEqual(5 * 16);
+  expect(box.height).toBeLessThanOrEqual(8 * 16);
+  // in a window narrower than 36rem: the window width minus 1rem, .5rem from the left, right and bottom edge
+  await page.setViewportSize({ width: 400, height: 700 });
+  const narrow = await toast.boundingBox();
+  expect(Math.round(narrow.x)).toBe(8);
+  expect(Math.round(400 - (narrow.x + narrow.width))).toBe(8);
+  expect(Math.round(700 - (narrow.y + narrow.height))).toBe(8);
+  expect(Math.round(narrow.width)).toBe(384);
+  await page.setViewportSize(view);
+  const st = await vaultOfCook(page);
+  expect(st.recipes).toHaveLength(3);
+  const byTitle = Object.fromEntries(st.recipes.map((r) => [r.value.title, r]));
+  expect(byTitle['Apple pie'].id).toBe(st.tag + '-sapple-pie');          // a string key: "s" and the URL-encoded text
+  expect(byTitle['Tarte Tatin'].id).toBe(st.tag + '-sTarte%20Tatin');
+  expect(byTitle['Apple pie'].value).toEqual({ title: 'Apple pie', portions: 8, steps: ['Peel the apples', 'Bake for 45 minutes'],
+    photos: [{ image: st.tag + '-simg-1.jpg', caption: 'Fresh from the oven' }, { image: st.tag + '-simg-2.jpg', caption: 'The first slice' }] });   // the references compute the ids of their images as the image side does
+  expect(byTitle['Tarte Tatin'].value.photos).toEqual([{ image: null, caption: 'A photo that was lost' }]);   // a dead reference keeps what the person wrote
+  expect(byTitle['Plain rice'].value.photos).toEqual([]);
+  expect(byTitle['Apple pie'].meta).toEqual({ title: 'Apple pie' });
+  expect(byTitle['Apple pie'].created).toBe(Date.parse('2024-03-01T10:00:00.000Z'));
+  expect(st.recipes.slice().sort((x, y) => x.created - y.created).map((r) => r.value.title)).toEqual(['Apple pie', 'Tarte Tatin', 'Plain rice']);
+  expect(st.files).toEqual([
+    { id: st.tag + '-simg-1.jpg', meta: { name: 'apple-pie.jpg', recipe: st.tag + '-sapple-pie' }, type: 'image/jpeg', bytes: IMAGE_1 },   // the other direction, byte for byte; the type of the File is kept without a mime in the block
+    { id: st.tag + '-simg-2.jpg', meta: { name: 'slice.jpg', recipe: st.tag + '-sapple-pie' }, type: 'image/jpeg', bytes: IMAGE_2 }]);
+  expect(st.settings).toEqual({ units: 'metric', view: 'grid' });        // the old settings fill only what the vault lacks; "search" was left out on purpose
+  expect(st.records).not.toContain('.wds/migration/cookbook/' + st.tag);   // the marker is hidden
+  const old = await page.evaluate(() => oldCook());
+  expect(old.rows).toEqual({ recipes: 0, images: 0 });
   expect(old.local).toEqual({ 'other.app.key': 'keep me' });            // only the configured keys are gone
-  await expect(page.locator('[data-wds-toast=migration]')).toBeVisible();
   // a second start: nothing to take over, no dialog, no question
   const page2 = await open(ctx, url);
   await page2.evaluate(() => { window.R = null; });
   await unlockLater(page2, accessId);
-  await startLit(page2);
-  expect((await finishLit(page2)).result).toEqual({ status: 'nothing', sandbox: false });
+  await startCook(page2);
+  expect((await finishCook(page2)).result).toEqual({ status: 'nothing', sandbox: false });
   await expect(page2.locator('dialog[data-wds-view]')).toHaveCount(0);
   await noProblems(page, page2);
   await ctx.close();
 });
 
-test('porting.md example 1 with tagged: false: the ids are the ones that the import of section 3 builds (j1, j1.pdf)', async ({ browser, stack, md, porting }) => {
-  const recipe = LIT(porting);
-  expect(recipe).toContain('id: "literatur",');
-  const url = litUrl(md, porting, stack, { recipe: recipe.replace('id: "literatur",', 'id: "literatur", tagged: false,') });
+test('porting.md example 1 with tagged: false: the ids are the ones that the import of section 3 builds (sapple-pie, simg-1.jpg)', async ({ browser, stack, md, porting }) => {
+  const recipe = COOK(porting);
+  expect(recipe).toContain('id: "cookbook",');
+  const url = cookUrl(md, porting, stack, { recipe: recipe.replace('id: "cookbook",', 'id: "cookbook", tagged: false,') });
   const ctx = await newContext(browser);
   const page = await open(ctx, url);
   if (!(await idbAvailable(page))) test.skip(true, 'this engine has no IndexedDB for file:// pages');
   await openVault(page, stack);
   await page.evaluate(() => window.__unlock);
-  await page.evaluate((blobs) => seedLit({ blobs }), await canKeepBlobs(page));
-  await startLit(page);
+  await page.evaluate((blobs) => seedCook({ blobs }), await canKeepBlobs(page));
+  await startCook(page);
   await answerYes(page);
-  expect((await finishLit(page)).result).toMatchObject({ status: 'migrated', deleted: 'deleted', copied: 4 });
-  const st = await vaultOfLit(page);
+  expect((await finishCook(page)).result).toMatchObject({ status: 'migrated', deleted: 'deleted', copied: 5 });
+  const st = await vaultOfCook(page);
   const newId = (oldId) => (typeof oldId === 'string' ? 's' : 'j') + encodeURIComponent(typeof oldId === 'string' ? oldId : JSON.stringify(oldId));     // the function of the import in section 3
-  expect(st.refs.map((r) => r.id).sort()).toEqual([newId(1), newId(2), newId(3)]);
-  expect(st.files.map((f) => f.id)).toEqual([newId(1) + '.pdf']);
+  expect(st.recipes.map((r) => r.id).sort()).toEqual([newId('apple-pie'), newId('Tarte Tatin'), newId('rice')].sort());
+  expect(st.files.map((f) => f.id)).toEqual([newId('img-1') + '.jpg', newId('img-2') + '.jpg']);
+  expect(st.recipes.find((r) => r.value.title === 'Apple pie').value.photos[0].image).toBe(newId('img-1') + '.jpg');
+  await noProblems(page);
+  await ctx.close();
+});
+
+// What type a file gets in the vault: the table row "items" of porting.md says that the type of the Blob or File is kept, and that mime overrides it.
+const MIME_SEED = String.raw`
+  window.seedMimes = async function (opts) {
+    opts = opts || {};
+    await new Promise((ok, fail) => {
+      const req = indexedDB.open('mimes', 1);
+      req.onupgradeneeded = () => {
+        const rows = req.result.createObjectStore('rows'), bytes = (n) => new Uint8Array([n, n + 1, n + 2]);
+        rows.put({ data: bytes(1).buffer, type: 'image/png' }, 'typed');            // h.blob: a Blob of the type of the row
+        rows.put({ data: bytes(2).buffer }, 'untyped');                             // no type anywhere
+        rows.put({ data: bytes(3).buffer, type: 'text/plain' }, 'override');        // the entry says mime: image/webp
+        rows.put({ data: bytes(4).buffer, type: 'image/gif' }, 'raw');              // the entry passes the bytes themselves, not h.blob(...)
+        rows.put({ data: 'data:image/svg+xml;base64,' + btoa('<svg/>') }, 'dataurl');   // h.blob: the type of the data: URL
+        if (opts.blobs) rows.put(new File([bytes(5)], 'plan.pdf', { type: 'application/pdf' }), 'file');   // a File: its own type
+      };
+      req.onsuccess = () => { req.result.close(); ok(); };
+      req.onerror = () => fail(req.error);
+    });
+  };
+`;
+const MIME_RECIPE = String.raw`
+const blobs = store.collection("blobs/");
+const result = await store.migrateLocal({
+  id: "mimes", tagged: false,
+  indexedDB: { name: "mimes", stores: ["rows"] },
+  map(old, h) {
+    return { items: old.rows("rows").map((row) => ({ col: blobs, id: h.id(row.key), from: row,
+      value: row.key === "raw" ? new Uint8Array(row.value.data) : h.blob(row.value),
+      ...(row.key === "override" ? { mime: "image/webp" } : {}) })) };
+  },
+});
+`;
+
+test('porting.md, the items table: without mime the type of the Blob or File is stored, an untyped Blob or raw bytes get none (getBlob: application/octet-stream), mime overrides', async ({ browser, stack, md, porting }) => {
+  const table = porting.split('\n').find((l) => l.startsWith('| ' + String.fromCharCode(96) + 'items' + String.fromCharCode(96) + ' |'));
+  expect(table).toContain('Without ' + String.fromCharCode(96) + 'mime' + String.fromCharCode(96) + ', the ' + String.fromCharCode(96) + 'type' + String.fromCharCode(96) + ' of the Blob or File is stored');
+  expect(table).toContain('application/octet-stream');
+  const url = harness(md, stack, { recipe: MIME_RECIPE, ret: ['result', 'blobs'], scope: stack.scope, extraHead: '<script>' + MIME_SEED + '</script>' });
+  const ctx = await newContext(browser);
+  const page = await open(ctx, url);
+  if (!(await idbAvailable(page))) test.skip(true, 'this engine has no IndexedDB for file:// pages');
+  await openVault(page, stack);
+  await page.evaluate(() => window.__unlock);
+  const withFile = await canKeepBlobs(page);
+  await page.evaluate((blobs) => seedMimes({ blobs }), withFile);
+  await page.evaluate(() => { window.__done = window.__recipe(store, {}).then((r) => (window.R = r), (e) => ({ rejected: e.name + ': ' + e.message })); });
+  await answerYes(page);
+  const res = await page.evaluate(() => window.__done);
+  expect(res.result).toMatchObject({ status: 'migrated', deleted: 'deleted', copied: withFile ? 6 : 5 });
+  const types = await page.evaluate(async () => {
+    const out = {};
+    for (const key of ['typed', 'untyped', 'override', 'raw', 'dataurl', 'file']) {
+      const rec = await store.getRecord('blobs/s' + key, { fresh: true });
+      out[key] = rec ? { mime: rec.mime || null, blobType: (await store.getBlob('blobs/s' + key)).type } : null;
+    }
+    return out;
+  });
+  expect(types.typed).toEqual({ mime: 'image/png', blobType: 'image/png' });
+  expect(types.untyped).toEqual({ mime: null, blobType: 'application/octet-stream' });
+  expect(types.override).toEqual({ mime: 'image/webp', blobType: 'image/webp' });
+  expect(types.raw).toEqual({ mime: null, blobType: 'application/octet-stream' });     // the bytes themselves: no type, whatever the row says
+  expect(types.dataurl).toEqual({ mime: 'image/svg+xml', blobType: 'image/svg+xml' });
+  if (withFile) expect(types.file).toEqual({ mime: 'application/pdf', blobType: 'application/pdf' });
   await noProblems(page);
   await ctx.close();
 });
@@ -689,28 +873,28 @@ async function sandboxVault(page) {
 }
 
 test('porting.md example 1 in the sandbox: the data is copied and the old data is kept (the question says so); a rerun asks nothing and deletes nothing', async ({ browser, stack, md, porting }) => {
-  const url = litUrl(md, porting, stack, { scope: SANDBOX_ID, origin: stack.sandbox.origin });
+  const url = cookUrl(md, porting, stack, { scope: SANDBOX_ID, origin: stack.sandbox.origin });
   const ctx = await newContext(browser);
   const page = await open(ctx, url);
   if (!(await idbAvailable(page))) test.skip(true, 'this engine has no IndexedDB for file:// pages');
   await sandboxVault(page);
-  await page.evaluate((blobs) => seedLit({ blobs }), await canKeepBlobs(page));
-  await startLit(page);
+  await page.evaluate((blobs) => seedCook({ blobs }), await canKeepBlobs(page));
+  await startCook(page);
   await expect(dlg(page, 'migrate')).toContainText('Sandbox');
   await answerYes(page);
-  const res = await finishLit(page);
-  expect(res.result).toEqual({ status: 'migrated', deleted: 'kept', copied: 4, total: 4, sandbox: true });
-  const old = await page.evaluate(() => oldLit());
-  expect(old.rows).toEqual({ refs: 3, pdfs: 1 });                        // still there
-  expect(Object.keys(old.local).sort()).toEqual(['literaturliste.einstellungen', 'other.app.key']);
-  expect((await vaultOfLit(page)).refs).toHaveLength(3);
+  const res = await finishCook(page);
+  expect(res.result).toEqual({ status: 'migrated', deleted: 'kept', copied: 5, total: 5, sandbox: true });
+  const old = await page.evaluate(() => oldCook());
+  expect(old.rows).toEqual({ recipes: 3, images: 2 });                   // still there
+  expect(Object.keys(old.local).sort()).toEqual(['cookbook.prefs', 'other.app.key']);
+  expect((await vaultOfCook(page)).recipes).toHaveLength(3);
   // what the person does in the new app stays: an edit and a deletion survive the next start, and nothing is asked again
-  await page.evaluate(async () => { const all = R.refs.items(); await R.refs.remove(all[0].id); });
-  await startLit(page);
-  const again = await finishLit(page);
+  await page.evaluate(async () => { const all = R.recipes.items(); await R.recipes.remove(all[0].id); });
+  await startCook(page);
+  const again = await finishCook(page);
   expect(again.result).toMatchObject({ status: 'migrated', again: true, deleted: 'kept' });
   await expect(page.locator('dialog[data-wds-view="migrate"]')).toHaveCount(0);
-  expect((await vaultOfLit(page)).refs).toHaveLength(2);
+  expect((await vaultOfCook(page)).recipes).toHaveLength(2);
   // the documents of a server with a sandbox name it
   const llms = await (await fetch(stack.sandbox.origin + '/datastore/llms.txt')).text();
   expect(llms).toContain(SANDBOX_ID);
@@ -727,7 +911,7 @@ test('porting.md example 1 in the sandbox: the data is copied and the old data i
 });
 
 test('porting.md, the test global: an automated test that sets window.__WDS_MIGRATION_TEST__ sees the deletion in the sandbox', async ({ browser, stack, md, porting }) => {
-  const url = litUrl(md, porting, stack, { scope: SANDBOX_ID, origin: stack.sandbox.origin });
+  const url = cookUrl(md, porting, stack, { scope: SANDBOX_ID, origin: stack.sandbox.origin });
   const ctx = await newContext(browser);
   // what the block of porting.md says to do, in the developer's own automated browser
   const block = blockAfter(porting, /^### The deletion path in the sandbox: the test global$/, 'js');
@@ -738,11 +922,11 @@ test('porting.md, the test global: an automated test that sets window.__WDS_MIGR
   page.on('console', (m) => { if (m.type() === 'warning') warnings.push(m.text()); });
   if (!(await idbAvailable(page))) test.skip(true, 'this engine has no IndexedDB for file:// pages');
   await sandboxVault(page);
-  await page.evaluate((blobs) => seedLit({ blobs }), await canKeepBlobs(page));
-  await startLit(page);
+  await page.evaluate((blobs) => seedCook({ blobs }), await canKeepBlobs(page));
+  await startCook(page);
   await answerYes(page);                                                         // (the question is the sandbox's and still says that the old data stays; the result says what happened)
-  expect((await finishLit(page)).result).toMatchObject({ status: 'migrated', deleted: 'deleted', copied: 4, sandbox: true });
-  expect((await page.evaluate(() => oldLit())).rows).toEqual({ refs: 0, pdfs: 0 });
+  expect((await finishCook(page)).result).toMatchObject({ status: 'migrated', deleted: 'deleted', copied: 5, sandbox: true });
+  expect((await page.evaluate(() => oldCook())).rows).toEqual({ recipes: 0, images: 0 });
   expect(warnings.filter((w) => /__WDS_MIGRATION_TEST__/.test(w))).toHaveLength(1);
   await noProblems(page);
   await ctx.close();
@@ -766,7 +950,7 @@ test('porting.md, the call: the options of the block are valid, and without old 
 
 test('porting.md, what your app does with the result: the start function asks once per page and loads afterwards', async ({ browser, stack, md, porting }) => {
   const recipe = blockAfter(porting, /^### What your app does with the result$/, 'js');
-  const url = harness(md, stack, { recipe, params: ['takeOverOldData', 'renderList', 'refs'], ret: ['start'], scope: stack.scope });
+  const url = harness(md, stack, { recipe, params: ['takeOverOldData', 'renderList', 'recipes'], ret: ['start'], scope: stack.scope });
   const ctx = await newContext(browser);
   const page = await open(ctx, url);
   const warned = [];
@@ -776,7 +960,7 @@ test('porting.md, what your app does with the result: the start function asks on
     const R = await window.__recipe(store, {
       takeOverOldData: async () => { log.push('migrate'); return { status: 'failed', why: 'a reason for the developer' }; },
       renderList: (items) => log.push('render ' + items.join(',')),
-      refs: { load: async () => { log.push('load'); return ['a', 'b']; } },
+      recipes: { load: async () => { log.push('load'); return ['a', 'b']; } },
     });
     await R.start(); await R.start();
     return log;
@@ -818,7 +1002,7 @@ test('the seed block of porting.md and of section 12 is the one of examples/zeit
 
 const POPUP_HEADING = /^### Files$/;
 test('the popup block of integration.md (Files) and porting.md (checklist) is one and the same, opens the window inside the click and falls back to a download link', async ({ browser, stack, md, porting }) => {
-  const fromGuide = blockAfter(md, POPUP_HEADING, 'js', 1);
+  const fromGuide = blockAfter(md, POPUP_HEADING, 'js', 2);
   const fromPorting = blockAfter(porting, /^## 7\. Checklist for apps with forms and modal dialogs$/, 'js', 1);
   expect(fromGuide).toBe(fromPorting);
   const url = harness(md, stack, { recipe: fromGuide, params: ['openButton', 'id', 'name', 'offerDownloadLink', 'showError'], ret: [], scope: stack.scope });
@@ -853,19 +1037,45 @@ test('the popup block of integration.md (Files) and porting.md (checklist) is on
   await ctx.close();
 });
 
+test('headless Chromium has no PDF viewer: a popup filled with a PDF blob stays at about:blank and the file is a download, a text blob is shown (integration.md, section 12)', async ({ browser, browserName }) => {
+  test.skip(browserName !== 'chromium', 'the sentence in the guide is about Chromium');
+  const ctx = await newContext(browser);
+  const page = await ctx.newPage();
+  await page.setContent('<p>page</p>');
+  const fill = async (type, body) => {
+    const [popup] = await Promise.all([ctx.waitForEvent('page'), page.evaluate(([type, body]) => { const w = window.open('', '_blank'); w.location.href = URL.createObjectURL(new Blob([body], { type })); }, [type, body])]);
+    const seen = { download: null };
+    popup.on('download', (d) => { seen.download = d.suggestedFilename(); });
+    await popup.waitForTimeout(1500);
+    const out = { url: popup.url(), download: seen.download, text: type === 'text/plain' ? await popup.locator('body').innerText() : null };
+    await popup.close();
+    return out;
+  };
+  const pdf = await fill('application/pdf', '%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF');
+  expect(pdf.url).toBe('about:blank');
+  expect(pdf.download).toMatch(/\.pdf$/);
+  const text = await fill('text/plain', 'hello popup');
+  expect(text.url).toMatch(/^blob:/);
+  expect(text.download).toBeNull();
+  expect(text.text).toContain('hello popup');
+  const guide = readFileSync(join(ROOT, 'docs', 'site', 'integration.md'), 'utf8');
+  expect(guide).toContain('**Headless Chromium has no PDF viewer.**');
+  await ctx.close();
+});
+
 test('porting.md checklist for apps with forms: own dialogs are closed on lock, the typed values stay after a failed save, the button is disabled while saving and enabled again', async ({ browser, stack, md, porting }) => {
   const recipe = blockAfter(porting, /^## 7\. Checklist for apps with forms and modal dialogs$/, 'js', 0);
-  const url = harness(md, stack, { recipe, params: ['refs', 'form', 'saveButton', 'readForm', 'showSaved', 'showError', 'closeForm', 'clearScreen', 'id'], ret: [], scope: stack.scope,
+  const url = harness(md, stack, { recipe, params: ['recipes', 'form', 'saveButton', 'readForm', 'showSaved', 'showError', 'closeForm', 'clearScreen', 'id'], ret: [], scope: stack.scope,
     extraBody: '<dialog id="mine"><p>my own modal dialog</p></dialog><form id="f"><input id="title" value="typed text"><button id="save" type="submit">Save</button></form>' });
   const ctx = await newContext(browser);
   const page = await open(ctx, url);
   await page.evaluate(async () => {
     window.__log = []; window.__gate = null;
-    window.refs = store.collection('refs/', { meta: (r) => ({ title: r.title }) });
-    window.__realSet = window.refs.set.bind(window.refs);
-    window.refs.set = async (id, v) => { window.__log.push('set ' + v.title); if (window.__gate) await window.__gate; if (window.__fail) throw Object.assign(new Error('offline'), { name: 'OfflineError' }); return window.__realSet(id, v); };
+    window.recipes = store.collection('recipes/', { meta: (r) => ({ title: r.title }) });
+    window.__realSet = window.recipes.set.bind(window.recipes);
+    window.recipes.set = async (id, v) => { window.__log.push('set ' + v.title); if (window.__gate) await window.__gate; if (window.__fail) throw Object.assign(new Error('offline'), { name: 'OfflineError' }); return window.__realSet(id, v); };
     await window.__recipe(store, {
-      refs: window.refs, form: document.getElementById('f'), saveButton: document.getElementById('save'), id: 'item-1.pdf',
+      recipes: window.recipes, form: document.getElementById('f'), saveButton: document.getElementById('save'), id: 'item-1.pdf',
       readForm: () => ({ title: document.getElementById('title').value }),
       showSaved: (v) => window.__log.push('saved ' + v.title), showError: (e) => window.__log.push('error ' + e.message), closeForm: () => window.__log.push('closed'),
       clearScreen: () => window.__log.push('cleared'),
@@ -966,6 +1176,7 @@ test('every code block of integration.md and porting.md is run or at least parse
     'integration|Collections|0': RUN,
     'integration|Files|0': RUN,
     'integration|Files|1': RUN,
+    'integration|Files|2': RUN,
     'integration|Conflicts in code|0': RUN,
     'integration|8. Members and sharing|0': RUN,
     'integration|12. wds-verify|0': 'shell: text only',
@@ -977,7 +1188,7 @@ test('every code block of integration.md and porting.md is run or at least parse
     'porting|3. Own export and import|0': RUN,
     'porting|3. Own export and import|1': RUN,
     'porting|The call|0': RUN,
-    'porting|Example 1: references in both directions, files, settings in localStorage|0': RUN,
+    'porting|Example 1: string keys, a list of photos inside a recipe, references in both directions, settings in localStorage|0': RUN,
     'porting|Example 2: a localStorage JSON, notes, files and a key-value store|0': 'identical to the app, which app.spec.mjs runs against a seeded old browser',
     'porting|What your app does with the result|0': RUN,
     'porting|The migration test in wds-verify (the seed block)|0': 'json: equal to the example, run by wds-verify below',
@@ -1056,12 +1267,12 @@ test('the example app of section 14 runs against the sandbox with wds-verify --t
   expect(s.stdout).toContain('Sandbox scope ID in the app');
 });
 
-test('the Literaturliste block of porting.md uses the library for the old data: no static finding, an info that says so; the same app with hand-made code is warned about', async ({ stack, md, porting }) => {
+test('the Cookbook block of porting.md uses the library for the old data: no static finding, an info that says so; the same app with hand-made code is warned about', async ({ stack, md, porting }) => {
   const dir = join(stack.pages, 'verify-static');
   mkdirSync(dir, { recursive: true });
   const base = section14(md);
   const page = (script) => productionPage(stack, base.replace(/<script>\n"use strict";[\s\S]*<\/script>/, '<script>\n"use strict";\nconst store = WDS.connect({ scope: "myapp-k7m2a9" });\n' + script + '\n</script>'));
-  const good = 'async function takeOverOldData() {\n' + LIT(porting) + '\n  return result;\n}\nstore.onUnlock(async () => { await takeOverOldData(); });\nstore.unlock();';
+  const good = 'async function takeOverOldData() {\n' + COOK(porting) + '\n  return result;\n}\nstore.onUnlock(async () => { await takeOverOldData(); });\nstore.unlock();';
   writeFileSync(join(dir, 'good.html'), page(good));
   const r = verify(join(dir, 'good.html'), '--static-only');
   expect(r.status, r.stdout + r.stderr).toBe(0);
@@ -1070,7 +1281,7 @@ test('the Literaturliste block of porting.md uses the library for the old data: 
   expect(r.stdout).not.toContain('Deleting local data');
   expect(r.stdout).not.toContain('localStorage.clear()');
   // the hand-made way: reading and deleting the old storage in the app
-  const bad = 'async function takeOver() {\n  const req = indexedDB.open("literatur");\n  req.onsuccess = () => { localStorage.removeItem("literaturliste.einstellungen"); };\n}\nstore.unlock();';
+  const bad = 'async function takeOver() {\n  const req = indexedDB.open("cookbook");\n  req.onsuccess = () => { localStorage.removeItem("cookbook.prefs"); };\n}\nstore.unlock();';
   writeFileSync(join(dir, 'bad.html'), page(bad));
   const u = verify(join(dir, 'bad.html'), '--static-only');
   expect(u.stdout).toContain('taken over by hand');

@@ -28,9 +28,9 @@
  *
  * Stable attributes: every button, input, select, textarea and summary inside .wds-root has data-wds="<name>", every dialog (a modal <dialog class="wds-root wds-dialog">
  * in the top layer, above modal dialogs of the app) has data-wds-view="<view>", set when the view is rendered, and aria-busy="true" while it waits (loading, progress, a
- * submit in flight): view present and no aria-busy = ready. Toasts have data-wds-toast="<key>" with buttons toast-action and toast-dismiss.
+ * submit in flight): view present and no aria-busy = ready. A dialog is never without a view (it opens as "loading"), and one that cannot go on shows "error" with a retry. Toasts have data-wds-toast="<key>" with buttons toast-action and toast-dismiss.
  *   all dialogs: close, form-error, sandbox-banner (sandbox only); page: sandbox-bar (sandbox only)
- *   loading, error: retry
+ *   loading: (none);  error: retry, reload (it reloads the page and stands in for retry after a view failed to build twice)
  *   unlock: access-id-input, keyfile, keyfile-button, passphrase, show-passphrase, unlock-submit, to-create, to-redeem
  *   create: join-code, passphrase, passphrase-repeat, show-passphrase, recovery-contact-toggle, recovery-contact, create-submit, back
  *   redeem: invite-code-input, passphrase, passphrase-repeat, show-passphrase, redeem-submit, back
@@ -137,7 +137,8 @@
   var TEXT = {
     en: {
       'common.close': 'Close', 'common.cancel': 'Cancel', 'common.continue': 'Continue', 'common.copy': 'Copy',
-      'common.copied': 'Copied', 'common.dismiss': 'Dismiss', 'common.retry': 'Try again',
+      'common.copied': 'Copied', 'common.dismiss': 'Dismiss', 'common.retry': 'Try again', 'common.reload': 'Reload the page',
+      'err.build': 'This dialog could not be built. Reload the page; if it happens again, tell the developer of this app.',
       'common.loading': 'Connecting to the storage service…',
       'common.notifications': 'Notifications',
 
@@ -415,7 +416,8 @@
     },
     de: {
       'common.close': 'Schließen', 'common.cancel': 'Abbrechen', 'common.continue': 'Weiter', 'common.copy': 'Kopieren',
-      'common.copied': 'Kopiert', 'common.dismiss': 'Ausblenden', 'common.retry': 'Erneut versuchen',
+      'common.copied': 'Kopiert', 'common.dismiss': 'Ausblenden', 'common.retry': 'Erneut versuchen', 'common.reload': 'Seite neu laden',
+      'err.build': 'Dieses Fenster konnte nicht aufgebaut werden. Lade die Seite neu; passiert es wieder, sag den Entwicklern dieser App Bescheid.',
       'common.loading': 'Verbindung zum Speicherdienst wird aufgebaut …',
       'common.notifications': 'Hinweise',
 
@@ -1107,6 +1109,8 @@
     '.wds-meter-bar{height:100%;width:0;background:var(--_danger);transition:width .15s}',
     '.wds-meter-bar[data-level="2"]{background:var(--_warn)}.wds-meter-bar[data-level="3"],.wds-meter-bar[data-level="4"]{background:var(--_ok)}',
     '.wds-strength{margin:.3rem 0 0;font-size:.875rem;color:var(--_muted)}',
+    // the line keeps its height while it is empty: the label appears 120 ms after typing, and a button below must not move away from under a click
+    '.wds-strength:empty::before{content:"\\200b"}',
     '.wds-box{border:1px solid var(--_border);border-radius:calc(var(--_radius) - 2px);padding:.7rem .9rem;margin:1rem 0;background:var(--_soft)}',
     '.wds-box h3{margin:0 0 .25rem;font-size:1rem}.wds-box p{margin:.25rem 0}',
     '.wds-code{font:600 1rem/1.5 var(--_mono);letter-spacing:.04em;padding:.55rem .75rem;border:1px solid var(--_border);border-radius:calc(var(--_radius) - 4px);background:var(--_soft);white-space:nowrap;overflow-x:auto;user-select:all}',
@@ -1310,14 +1314,14 @@
     ensureStyle();
     ensureLayerListeners();
     var titleId = uid('wds-title');
-    var dialog = el('dialog', { class: 'wds-root wds-dialog' + (o.wide ? ' wds-dialog-wide' : ''), lang: o.lang, role: o.role === 'alertdialog' ? 'alertdialog' : null, 'aria-labelledby': titleId, tabindex: '-1', 'data-wds-view': o.view });
+    var dialog = el('dialog', { class: 'wds-root wds-dialog' + (o.wide ? ' wds-dialog-wide' : ''), lang: o.lang, role: o.role === 'alertdialog' ? 'alertdialog' : null, 'aria-labelledby': titleId, tabindex: '-1', 'data-wds-view': o.view || 'loading' });   // a dialog is never without a view
     var prefix = o.titlePrefix || '', rawTitle = o.title || '', bareTitle = false;
     var title = el('h2', { class: 'wds-title', id: titleId, text: prefix + rawTitle });
     var body = el('div', { class: 'wds-body' });
     var d = { dialog: dialog, body: body, title: title, closed: false, cancelable: !!o.cancelable, lastFocused: null };
     var closeBtn = o.cancelable ? el('button', { type: 'button', class: 'wds-x', 'aria-label': o.closeLabel || 'Close', 'data-wds': 'close', onclick: function () { d.close(undefined); } }, '×') : null;
     append(dialog, [o.banner || null, el('div', { class: 'wds-head' }, [title, closeBtn]), body]);
-    if (o.view === 'loading' || o.view === 'progress') dialog.setAttribute('aria-busy', 'true');
+    if (!o.view || o.view === 'loading' || o.view === 'progress') dialog.setAttribute('aria-busy', 'true');
     // The library decides about closing: the browser's own cancel (Escape without a keydown we saw, a close watcher) is refused.
     dialog.addEventListener('cancel', function (ev) { ev.preventDefault(); });
     // The browser closed it anyway (form method=dialog, an app sweep over all dialogs): a mandatory dialog never vanishes, a cancelable one is cancelled.
@@ -1338,6 +1342,7 @@
       dialog.insertBefore(sandboxBanner(S), dialog.firstChild);
     };
     d.setView = function (v) {
+      v = v || 'loading';   // never an empty view: a dialog that is being built is "loading" (and busy)
       dialog.setAttribute('data-wds-view', v);
       if (v === 'loading' || v === 'progress') dialog.setAttribute('aria-busy', 'true'); else dialog.removeAttribute('aria-busy');
       if (!dialog.contains(document.activeElement)) dialog.focus();   // a view without a control: keep the focus (and Escape) in the dialog
@@ -1476,6 +1481,23 @@
     return el('button', { type: o.type || 'button', class: 'wds-btn' + (o.primary ? ' wds-btn-primary' : '') + (o.danger ? ' wds-btn-danger' : '') + (o.small ? ' wds-btn-small' : ''), onclick: o.onClick, disabled: o.disabled, 'data-wds': o.wds }, label);
   }
   function linkBtn(label, onClick, wds) { return el('button', { type: 'button', class: 'wds-link', onclick: onClick, 'data-wds': wds }, label); }
+  // A dialog that cannot go on (a request failed, a view could not be built): the "error" view with the reason and a retry. A dialog always ends
+  // in a view that a person (or a test) can act on, never in a loading view that nothing will finish.
+  // An error that is not one of the library's own (a view that could not be built) shows a fixed sentence, not the exception text, which is
+  // for the console; "reload" (a button that reloads the page instead of "retry") is for a view that failed again after a retry.
+  function showErrorView(S, dlg, title, e, where, retry, reload) {
+    var text;
+    try { text = e instanceof Core.WDSError ? explainError(S, e, where) : S.t('err.build'); } catch (e2) { text = S.t('err.build'); }
+    clear(dlg.body); dlg.setTitle(title);
+    append(dlg.body, [
+      el('div', { 'data-wds': 'form-error', 'aria-live': 'polite' }, msg('error', text)),
+      el('div', { class: 'wds-actions' }, [reload
+        ? btn(S.t('common.reload'), { primary: true, wds: 'reload', onClick: function () { try { location.reload(); } catch (e3) { /* no reload */ } } })
+        : btn(S.t('common.retry'), { primary: true, wds: 'retry', onClick: retry })]),
+    ]);
+    dlg.setView('error');
+    dlg.focusFirst();
+  }
   function busyLine() { return el('p', { class: 'wds-hint', role: 'status', 'aria-live': 'polite' }); }
   function showBusy(line, text) { clear(line); if (text) append(line, [el('span', { class: 'wds-spin', 'aria-hidden': 'true' }), text]); }
 
@@ -1629,6 +1651,27 @@
     dlg.focusFirst();
   }
 
+  // The access sheet after a vault exists (created or joined): it must not fail into the form of the step before (that would invite a second
+  // submit although the vault is there). When the full sheet cannot be built, a plain one shows the access ID and the recovery code.
+  function safeSheetView(S, dlg, o, onContinue) {
+    try { sheetView(S, dlg, o, onContinue); return; }
+    catch (e) { if (typeof console !== 'undefined' && console.error) console.error('wds: access sheet: ' + ((e && e.message) || e)); }
+    var t = S.t, owner = !!o.recoveryCode && !isSandbox(S), ackId = uid('wds-ack');
+    clear(dlg.body); dlg.setTitle(t('sheet.title'));
+    var go = btn(t('common.continue'), { primary: true, disabled: true, wds: 'sheet-continue', onClick: function () { onContinue(); } });
+    var ack = el('input', { type: 'checkbox', id: ackId, 'data-wds': 'sheet-confirm', onchange: function () { go.disabled = !ack.checked; } });
+    append(dlg.body, [
+      el('div', { 'data-wds': 'form-error', 'aria-live': 'polite' }),
+      el('p', { text: owner ? t('sheet.intro.owner') : t('sheet.intro.member') }),
+      el('p', { 'data-wds': 'access-id', text: o.accessId }),
+      owner ? el('p', { 'data-wds': 'recovery-code', text: o.recoveryCode }) : null,
+      el('p', { text: t('sheet.passphrase.note') }),
+      el('div', { class: 'wds-check' }, [ack, el('label', { for: ackId, text: owner ? t('sheet.confirm.owner') : t('sheet.confirm.member') })]),
+      el('div', { class: 'wds-actions' }, [go]),
+    ]);
+    dlg.setView('sheet');
+  }
+
   // Returns a promise for {created: boolean}. o: {cancelable}.
   function runUnlock(S, o) {
     var t = S.t, client = S.client;
@@ -1643,13 +1686,19 @@
       function appLine() { return el('p', { class: 'wds-sub', text: t('unlock.app', { name: appLabel(S, S.info ? S.info.name : client.scope) }) }); }
 
       // ---- key files: anywhere on the dialog ----
+      // A key file is taken only while the unlock form is shown and idle: never over the access sheet (the recovery code would vanish
+      // unconfirmed), over a form that is being submitted, or over a view that still loads.
+      function takesKeyFile() { return !dlg.closed && dlg.dialog.getAttribute('data-wds-view') === 'unlock' && !dlg.dialog.hasAttribute('aria-busy'); }
       async function loadKeyFile(file, afterLoad) {
+        if (!takesKeyFile()) return;
         try {
           if (file.size > 20000) throw new Core.UsageError('not a key file', { code: 'invalid_keyfile' });
           var kf = await Core.parseKeyFile(await file.text(), { scope: client.scope, service: client.service });
+          if (!takesKeyFile()) return;   // the view changed while the file was read
           st.accessId = kf.accessId; st.vaultId = kf.vaultId; st.notice = { kind: 'ok', text: t('unlock.keyfile.loaded') };
           viewUnlock();
         } catch (e) {
+          if (!takesKeyFile()) return;
           if (afterLoad) afterLoad(explainError(S, e, 'unlock'));
           else { st.notice = { kind: 'error', text: explainError(S, e, 'unlock') }; viewUnlock(); }
         }
@@ -1659,10 +1708,13 @@
       dlg.dialog.addEventListener('drop', function (ev) {
         ev.preventDefault(); dlg.dialog.classList.remove('wds-dragover');
         var files = ev.dataTransfer && ev.dataTransfer.files;
-        if (files && files[0]) loadKeyFile(files[0]);
+        if (files && files[0] && takesKeyFile()) loadKeyFile(files[0]);
       });
 
+      var loadGen = 0;   // every view switch bumps it: the answer of an earlier scope request must not replace the view that is shown now
       function frame(view, title, children) {
+        loadGen++;
+        if (view !== 'loading' && view !== 'error') buildFailures = 0;
         clear(dlg.body); dlg.setTitle(title);
         append(dlg.body, children);
         dlg.setView(view);   // set when the controls are in place
@@ -1681,23 +1733,33 @@
       }
 
       // ---- loading and fatal errors ----
+      // A view that fails to build (an exception, not only a failed request) must not leave the dialog loading for ever: it ends in the
+      // "error" view with a retry, which starts again at the scope information.
+      var buildFailures = 0;   // consecutive views that could not be built: the second one offers a page reload instead of a retry that fails the same way
+      function fatal(e) {
+        if (typeof console !== 'undefined' && console.error) console.error('wds: unlock dialog: ' + ((e && e.message) || e));
+        if (dlg.closed) return;
+        loadGen++;
+        if (e instanceof Core.WDSError) buildFailures = 0; else buildFailures++;
+        try { showErrorView(S, dlg, t('unlock.title'), e, 'scope', function () { viewLoading(); }, buildFailures >= 2); }
+        catch (e2) { dlg.setView('error'); }   // even then the dialog is no longer loading
+      }
+      function guarded(fn) { return function () { try { return fn.apply(this, arguments); } catch (e) { fatal(e); return undefined; } }; }
       function viewLoading() {
         frame('loading', t('unlock.title'), el('p', { role: 'status' }, [el('span', { class: 'wds-spin', 'aria-hidden': 'true' }), t('common.loading')]));
+        var gen = loadGen;
         S.getInfo(true).then(function () {
-          dlg.applySandbox(S);
-          if (sandboxEmptied()) return;
-          viewUnlock();
-        }, function (e) {
-          frame('error', t('unlock.title'), [
-            el('div', { 'data-wds': 'form-error', 'aria-live': 'polite' }, msg('error', explainError(S, e, 'scope'))),
-            el('div', { class: 'wds-actions' }, [btn(t('common.retry'), { primary: true, wds: 'retry', onClick: viewLoading })]),
-          ]);
-          dlg.focusFirst();
-        });
+          if (dlg.closed || gen !== loadGen) return;
+          try {
+            dlg.applySandbox(S);
+            if (sandboxEmptied()) return;
+            viewUnlock();
+          } catch (e) { fatal(e); }
+        }, function (e) { if (!dlg.closed && gen === loadGen) fatal(e); });
       }
 
       // ---- unlock ----
-      function viewUnlock() {
+      function viewUnlockBody() {
         var idInput = inp({ mono: true, autocomplete: 'username', autocapitalize: 'characters', value: st.accessId ? Core.displayCode(st.accessId) : '', name: 'username', wds: 'access-id-input' });
         var fId = field({ label: t('unlock.accessId'), input: idInput, hint: t('unlock.accessId.hint') });
         var fileInput = el('input', { type: 'file', class: 'wds-vh', accept: '.json,application/json', 'data-wds': 'keyfile', onchange: function () { if (fileInput.files[0]) loadKeyFile(fileInput.files[0], function (m) { fId.setError(m); }); } });
@@ -1732,13 +1794,17 @@
           } catch (e) {
             fs.disabled = false; dlg.setBusy(false); showBusy(busy, '');
             if (e && e.code === 'invite_not_redeemed') { st.inviteCode = raw; viewRedeem(); return; }
-            // The dialog may have been open across a nightly wipe of a sandbox: ask again whether the remembered vault is gone.
-            if (isSandbox(S) && client.rememberedAccessId() === accessId && !(e instanceof Core.OfflineError)) {
-              try { await S.getInfo(true); if (sandboxEmptied()) return; } catch (e3) { /* the error below is shown */ }
-            }
-            var text = explainError(S, e, 'unlock');
-            append(formErr, msg('error', text));
+            // The error comes first: the form is usable again and must not wait for the check below.
+            append(formErr, msg('error', explainError(S, e, 'unlock')));
             if (e instanceof Core.AuthError && e.code !== 'revoked' && e.status !== 410) { pw.input.select(); pw.focus(); } else idInput.focus();
+            // The dialog may have been open across a nightly wipe of a sandbox: ask again (for at most 5 s) whether the remembered vault is gone.
+            // Only a form that is still there and idle is replaced.
+            if (isSandbox(S) && client.rememberedAccessId() === accessId && !(e instanceof Core.OfflineError)) {
+              try {
+                await Promise.race([S.getInfo(true), new Promise(function (_, no) { setTimeout(function () { no(new Error('slow')); }, 5000); })]);
+                if (!dlg.closed && form.isConnected && !dlg.dialog.hasAttribute('aria-busy')) sandboxEmptied();
+              } catch (e3) { /* the error above stays */ }
+            }
           }
         } }, fs);
         var links = el('div', { class: 'wds-actions' }, [linkBtn(t('unlock.toCreate'), viewCreate, 'to-create'), el('span', { class: 'wds-spacer' }), linkBtn(t('unlock.toRedeem'), function () { viewRedeem(); }, 'to-redeem')]);
@@ -1748,7 +1814,7 @@
       }
 
       // ---- create ----
-      function viewCreate() {
+      function viewCreateBody() {
         var info = S.info || {};
         if (info.status === 'suspended' || info.enrollment === 'closed') {
           frame('create', t('create.title'), [msg('warn', info.status === 'suspended' ? t('create.suspended') : t('create.closed')), el('div', { class: 'wds-actions' }, [btn(t('create.back'), { wds: 'back', onClick: viewUnlock })])]);
@@ -1791,7 +1857,7 @@
           try {
             var res = await client.createVault({ passphrase: checked.passphrase, joinCode: joinField ? joinInput.value.trim() : undefined, recoveryContact: contact || undefined });
             pw.reset();
-            sheetView(S, dlg, {
+            safeSheetView(S, dlg, {
               appName: appLabel(S, info.name || client.scope), accessId: res.accessIdDisplay, recoveryCode: res.recoveryCode.display, keyFile: res.keyFile,
               role: 'owner', hibpSkipped: checked.hibp && checked.hibp.status === 'unavailable',
             }, function () { done({ created: true }); });
@@ -1811,7 +1877,7 @@
       }
 
       // ---- redeem ----
-      function viewRedeem() {
+      function viewRedeemBody() {
         var info = S.info || {};
         var codeInput = inp({ mono: true, autocapitalize: 'characters', value: st.inviteCode ? Core.displayCode(Core.normalizeCode(st.inviteCode)) : '', wds: 'invite-code-input' });
         var fCode = field({ label: t('redeem.code'), input: codeInput, hint: t('redeem.code.hint') });
@@ -1836,9 +1902,11 @@
             pw.reset();
             var accessId = Core.displayCode(res.accessId);
             clear(dlg.body);
-            sheetView(S, dlg, { appName: appLabel(S, info.name || client.scope), accessId: accessId, recoveryCode: null, keyFile: res.keyFile, role: res.role, hibpSkipped: checked.hibp && checked.hibp.status === 'unavailable' }, function () { done({ created: false, redeemed: true }); });
-            dlg.setTitle(t('redeem.done'));
-            dlg.body.insertBefore(msg('ok', res.role === 'read' ? t('redeem.role.read') : t('redeem.role.write')), dlg.body.firstChild);
+            safeSheetView(S, dlg, { appName: appLabel(S, info.name || client.scope), accessId: accessId, recoveryCode: null, keyFile: res.keyFile, role: res.role, hibpSkipped: checked.hibp && checked.hibp.status === 'unavailable' }, function () { done({ created: false, redeemed: true }); });
+            try {
+              dlg.setTitle(t('redeem.done'));
+              dlg.body.insertBefore(msg('ok', res.role === 'read' ? t('redeem.role.read') : t('redeem.role.write')), dlg.body.firstChild);
+            } catch (e4) { /* the sheet is there; the line above it is a courtesy */ }
           } catch (e) {
             fs.disabled = false; dlg.setBusy(false); showBusy(busy, '');
             append(formErr, msg('error', explainError(S, e, 'redeem')));
@@ -1848,6 +1916,7 @@
         (st.inviteCode ? pw.input : codeInput).focus();
       }
 
+      var viewUnlock = guarded(viewUnlockBody), viewCreate = guarded(viewCreateBody), viewRedeem = guarded(viewRedeemBody);
       viewLoading();
     });
   }
@@ -1924,12 +1993,23 @@
     var t = S.t, title = (o && typeof o.title === 'string' && o.title.trim()) || S.label(name);
     return new Promise(function (resolve) {
       var result = null;
-      var dlg = dialogFor(S, { title: t('history.title', { name: title }), view: 'history', wide: true, cancelable: true, closeLabel: t('common.close'), onClose: function () { resolve(result); } });
-      var list = el('ul', { class: 'wds-people' });
-      var previewBox = el('div', { 'aria-live': 'polite' });
-      var status = el('div', { 'aria-live': 'polite', 'data-wds': 'form-error' });
-      append(dlg.body, [el('p', { text: t('history.intro') }), status, list, previewBox]);
-      api.history(name).then(function (h) {
+      // "loading" (busy) while the versions are read, "history" when the list is there, "error" with a retry when they cannot be read.
+      var dlg = dialogFor(S, { title: t('history.title', { name: title }), view: 'loading', wide: true, cancelable: true, closeLabel: t('common.close'), onClose: function () { resolve(result); } });
+      var list, previewBox, status;
+      function load() {
+        clear(dlg.body); dlg.setTitle(t('history.title', { name: title }));
+        append(dlg.body, el('p', { role: 'status' }, [el('span', { class: 'wds-spin', 'aria-hidden': 'true' }), t('common.loading')]));
+        dlg.setView('loading');
+        api.history(name).then(function (h) { if (!dlg.closed) { try { show(h); } catch (e) { fail(e); } } }, function (e) { if (!dlg.closed) fail(e); });
+      }
+      function fail(e) { showErrorView(S, dlg, t('history.title', { name: title }), e, 'history', load); }
+      function show(h) {
+        list = el('ul', { class: 'wds-people' });
+        previewBox = el('div', { 'aria-live': 'polite' });
+        status = el('div', { 'aria-live': 'polite', 'data-wds': 'form-error' });
+        clear(dlg.body);
+        append(dlg.body, [el('p', { text: t('history.intro') }), status, list, previewBox]);
+        dlg.setView('history');
         if (!h.versions.length) { list.parentNode.insertBefore(el('p', { text: t('history.empty') }), list); return; }
         h.versions.forEach(function (v) {
           var isCurrent = v.version === h.current;
@@ -1959,7 +2039,8 @@
           ]));
         });
         dlg.focusFirst();
-      }, function (e) { status.appendChild(msg('error', explainError(S, e, 'history'))); });
+      }
+      load();
     });
   }
 
@@ -2215,7 +2296,15 @@
         return el('div', { class: 'wds-section' }, parts);
       }
 
+      // A view that cannot be built (an exception) ends in the "error" view with a retry, never in a half-built dialog.
       function render(focusKey) {
+        try { renderBody(focusKey); }
+        catch (e) {
+          if (typeof console !== 'undefined' && console.error) console.error('wds: share dialog: ' + ((e && e.message) || e));
+          if (!dlg.closed) showErrorView(S, dlg, t('share.title'), e, 'share', function () { st.view = 'main'; render(); });
+        }
+      }
+      function renderBody(focusKey) {
         if (dlg.closed) return;
         if (st.view === 'revoke') { viewRevokeConfirm(); return; }
         var status = client.status();
@@ -2810,7 +2899,8 @@
       });
     }
 
-    // info (optional, filled in): {theirsDeleted}. o.silentIdentical: a replay of a saved snapshot may meet its own earlier write.
+    // info (optional, filled in): {theirsDeleted}. A conflict whose "theirs" is the very value that is being written (JSON) is no conflict: a write
+    // whose answer was lost, or a replay of a saved snapshot, meets its own earlier write.
     async function writeRecord(name, value, o, info) {
       var resolution = 'saved', lastErr = null;
       for (var round = 0; round < 4; round++) {
@@ -2831,7 +2921,7 @@
           lastErr = e;
           var th = e.theirs;
           if (info) info.theirsDeleted = !!(th && th.deleted);
-          if (o && o.silentIdentical && th && !th.deleted && e.mine && e.mine.kind === 'json' && th.kind === 'json' && sameJson(th.value, e.mine.value)) {
+          if (th && !th.deleted && e.mine && e.mine.kind === 'json' && th.kind === 'json' && sameJson(th.value, e.mine.value)) {
             remember(name, th.value);
             return { name: name, version: th.version, resolution: 'saved' };
           }
@@ -2992,7 +3082,7 @@
     // ---- lock snapshots and lock (1.5) ----
     async function writeSnapshot(entry) {
       var ctx = entry.hooks && entry.hooks.prepare ? entry.hooks.prepare(entry.state) : undefined;
-      var res = await setRecordNow(entry.name, entry.state, Object.assign({}, entry.o, { silentIdentical: true }), {});
+      var res = await setRecordNow(entry.name, entry.state, entry.o, {});
       if (entry.hooks && entry.hooks.afterSave) await entry.hooks.afterSave(res, entry.state, ctx, true);
       return res;
     }

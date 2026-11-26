@@ -13,9 +13,11 @@
 // functions that take "d" (a Playwright locator of one dialog) are the single steps the high-level ones are made of; wds-verify calls
 // them one by one because it also has to react to other dialogs in between. Failures throw DriveError with the text the library showed.
 //
-// A dialog is READY when it has a data-wds-view (not empty) and no aria-busy="true": the library sets the view after the controls are
-// rendered and enabled, and marks the dialog busy while a submit is in flight (Argon2id, network). Every fill waits for that
-// (fillWhenReady), so a dialog that is still being built or rebuilt does not make a call fail.
+// A dialog is READY when it has a data-wds-view (not empty) and no aria-busy="true". A library dialog is never without a view: it opens as
+// "loading" (busy), gets its real view when the controls are rendered and enabled, and is busy again while a submit is in flight
+// (Argon2id, network). One that cannot go on shows the view "error" with a retry button (data-wds="retry"). Every fill waits for readiness
+// (fillWhenReady), so a dialog that is still being built or rebuilt does not make a call fail. When a wait times out, the error says what
+// the dialog looked like (view, aria-busy, classes, text; see dialogSummary).
 import { randomBytes } from 'node:crypto';
 import { readFileSync, statSync, realpathSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -30,15 +32,52 @@ const ctl = (d, name) => d.locator('[data-wds="' + name + '"]');
 // The topmost dialog of the library (a locator; it may not be visible).
 export function dialog(page) { return page.locator('[data-wds-view]').last(); }
 
-// data-wds-view of the dialog that is on screen: 'loading', 'error', 'unlock', 'create', 'redeem', 'sheet', 'conflict', 'history',
-// 'share', 'revoke', 'progress', 'notice', 'migrate' or 'migrate-large'; null when no dialog is visible; '' when one is visible but has
-// no view yet (it is being built: not ready, wait).
-export async function viewOf(page) {
-  const d = dialog(page);
-  if (!(await d.isVisible().catch(() => false))) return null;
-  const v = await d.getAttribute('data-wds-view', { timeout: 2000 }).catch(() => null);
-  return v === null ? '' : v;
+// One look at the topmost library dialog, read in a single call (so that the dialog cannot be replaced between two questions):
+// { view, busy, visible, classes, text, count }; null when the page has no dialog (the page answered: there is none); { unresponsive: true }
+// when the page did not answer within "timeout" ms (it is busy computing, for example Argon2id blocks the main thread for seconds, or it is
+// being reloaded): that says nothing about the dialog, so a caller must wait, never take it for "closed". view is '' when the dialog has no
+// data-wds-view value. A closed page throws DriveError.
+export async function describeDialog(page, { timeout = 2000 } = {}) {
+  if (page.isClosed()) throw new DriveError('the page is closed');
+  const read = page.evaluate(() => {
+    const all = document.querySelectorAll('[data-wds-view]');
+    const el = all[all.length - 1];
+    if (!el) return null;
+    const cs = getComputedStyle(el);
+    return {
+      view: el.getAttribute('data-wds-view') || '', busy: el.getAttribute('aria-busy') === 'true', count: all.length,
+      visible: el.getClientRects().length > 0 && cs.visibility !== 'hidden' && cs.display !== 'none',
+      classes: String(el.className || ''), text: (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 200),
+    };
+  }).catch(() => ({ unresponsive: true }));   // a navigation destroys the context of the call: unknown, not "no dialog"
+  let timer;
+  const late = new Promise((r) => { timer = setTimeout(() => r({ unresponsive: true }), timeout); });
+  try { return await Promise.race([read, late]); } finally { clearTimeout(timer); }
 }
+
+// A line for an error message: what the topmost library dialog looks like (view, busy, classes, text), or that there is none.
+export async function dialogSummary(page) {
+  const s = await describeDialog(page, { timeout: 3000 });
+  if (!s) return 'no library dialog in the page';
+  if (s.unresponsive) return 'the page did not answer within 3 s (busy, or being reloaded)';
+  return 'the topmost library dialog has ' + (s.view ? 'view "' + s.view + '"' : 'no view') + (s.busy ? ', aria-busy' : '') + (s.visible ? '' : ', is not visible')
+    + ', class "' + s.classes + '", text "' + s.text + '"' + (s.count > 1 ? ' (' + s.count + ' dialogs)' : '');
+}
+
+// data-wds-view of the dialog that is on screen: 'loading', 'error', 'unlock', 'create', 'redeem', 'sheet', 'conflict', 'history',
+// 'share', 'revoke', 'progress', 'notice', 'migrate' or 'migrate-large'; null when no dialog is visible (the page answered); '' when one is
+// visible but has no view yet (it is being built: not ready, wait) or when the page did not answer (busy or reloading: not known, wait).
+// Only null means "closed". The library never leaves a dialog without a view: it starts as 'loading', and a dialog that cannot go on
+// shows 'error' with a retry button.
+export async function viewOf(page) {
+  const s = await describeDialog(page);
+  if (s && s.unresponsive) return '';
+  if (!s || !s.visible) return null;
+  return s.view;
+}
+
+// The seconds since t0, for a message about a wait that timed out (what really passed, not the limit that was configured).
+const since = (t0) => Math.round((Date.now() - t0) / 1000);
 
 // The state of one dialog (a locator): { view, busy, ready }; null when it is not there (or goes away while it is asked).
 export async function dialogState(d) {
@@ -61,16 +100,21 @@ export async function waitForView(page, views, { timeout = 30000 } = {}) {
   for (;;) {
     seen = await viewOf(page);
     if (want.includes(seen)) return seen;
-    if (Date.now() - t0 > timeout) throw new DriveError('waiting for the library dialog ' + (views === null ? 'to close' : 'view ' + want.join(' or ')) + ' timed out after ' + Math.round(timeout / 1000) + ' s; it shows ' + (seen ? 'view "' + seen + '"' : seen === '' ? 'a dialog that is not ready (no view yet)' : 'nothing'));
+    if (Date.now() - t0 > timeout) throw new DriveError('waiting for the library dialog ' + (views === null ? 'to close' : 'view ' + want.join(' or ')) + ' timed out after ' + since(t0) + ' s; it shows ' + (seen ? 'view "' + seen + '"' : seen === '' ? 'a dialog that is not ready (no view yet, or the page did not answer)' : 'nothing') + '; ' + await dialogSummary(page));
     await sleep(100);
   }
 }
 
-// The error the dialog shows (the text of form-error, or a note that a field was marked invalid); '' when there is none.
+// The error the dialog shows (the text of form-error, or a note that a field was marked invalid); '' when there is none. One call with a short
+// limit (1 s): a dialog that closes just before (a successful unlock) has no error to show, and the call must not wait for it (Playwright's own
+// limit for a locator that matches nothing is 30 s, or none at all in a test runner without actionTimeout).
 export async function formError(d) {
-  const text = ((await ctl(d, 'form-error').first().innerText().catch(() => '')) || '').trim();
-  if (text) return text;
-  return (await d.locator('[aria-invalid="true"]').count().catch(() => 0)) ? 'a field was marked invalid' : '';
+  const r = await d.evaluate((el) => {
+    const f = el.querySelector('[data-wds="form-error"]');
+    return { text: f ? String(f.innerText || f.textContent || '').trim() : '', invalid: el.querySelectorAll('[aria-invalid="true"]').length };
+  }, undefined, { timeout: 1000 }).catch(() => null);
+  if (!r) return '';
+  return r.text || (r.invalid ? 'a field was marked invalid' : '');
 }
 
 // ---- filling ----
@@ -174,7 +218,7 @@ export async function submitUnlock(d, { accessId, passphrase }) {
   const id = ctl(d, 'access-id-input');
   if (accessId) {
     await id.waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
-    if (!(await id.inputValue().catch(() => '')).trim()) await fillWhenReady(id, accessId, { check: 'nonempty' }).catch(() => {});
+    if (!(await id.inputValue({ timeout: 2000 }).catch(() => '')).trim()) await fillWhenReady(id, accessId, { check: 'nonempty' }).catch(() => {});
   }
   await fillWhenReady(ctl(d, 'passphrase'), passphrase);
   await ctl(d, 'unlock-submit').click({ timeout: 5000 });
@@ -192,12 +236,12 @@ export async function submitRedeem(d, { code, passphrase }) {
 // The access sheet after creating a vault: read the access ID, tick "I have saved it", continue. Resolves the access ID shown.
 export async function confirmSheet(page, { timeout = 10000 } = {}) {
   const d = dialog(page);
-  const accessId = ((await ctl(d, 'access-id').first().innerText().catch(() => '')) || '').trim();
+  const accessId = ((await ctl(d, 'access-id').first().innerText({ timeout: 3000 }).catch(() => '')) || '').trim();
   try {
     await ctl(d, 'sheet-confirm').check({ timeout: 5000 });
     await ctl(d, 'sheet-continue').click({ timeout: 5000 });
   } catch (e) {
-    const said = (await formError(d)) || ((await d.innerText().catch(() => '')) || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+    const said = (await formError(d)) || ((await d.innerText({ timeout: 2000 }).catch(() => '')) || '').replace(/\s+/g, ' ').trim().slice(0, 200);
     throw new DriveError('the access sheet could not be confirmed: ' + String(e.message).split('\n')[0] + (said ? '; the dialog says: "' + said + '"' : ''));
   }
   await d.waitFor({ state: 'hidden', timeout }).catch(() => {});
@@ -223,7 +267,7 @@ export async function answerMigration(page, { backup = true, timeout = 60000, do
       }
       if (await ctl(d, 'migrate-skip-ack').count()) {   // rows that map leaves out are deleted with the old data: the box (or the backup) confirms it
         out.skipped = true;
-        if (!(await ctl(d, 'migrate-yes').isEnabled())) await ctl(d, 'migrate-skip-ack').check({ timeout: 5000 });
+        if (!(await ctl(d, 'migrate-yes').isEnabled({ timeout: 3000 }))) await ctl(d, 'migrate-skip-ack').check({ timeout: 5000 });
       }
       await ctl(d, 'migrate-yes').click({ timeout: 5000 });
       await sleep(200);
@@ -237,7 +281,7 @@ export async function answerMigration(page, { backup = true, timeout = 60000, do
       await ctl(d, 'migrate-delete').click({ timeout: 10000 });
       await sleep(200);
     } else if (v === null && (out.backup || out.large || Date.now() - t0 > 2000)) return out;
-    if (Date.now() - t0 > timeout) throw new DriveError('answering the migration dialogs timed out after ' + Math.round(timeout / 1000) + ' s; the dialog shows ' + (v ? 'view "' + v + '"' : 'nothing'));
+    if (Date.now() - t0 > timeout) throw new DriveError('answering the migration dialogs timed out after ' + since(t0) + ' s; the dialog shows ' + (v ? 'view "' + v + '"' : 'nothing') + '; ' + await dialogSummary(page));
     await sleep(150);
   }
 }
@@ -250,12 +294,18 @@ export function newPassphrase() { return 'wdsv-' + randomBytes(5).toString('hex'
 async function waitForSheet(page, d, what, timeout) {
   const t0 = Date.now();
   for (;;) {
-    const view = await viewOf(page);
+    const view = await viewOf(page);   // '' (not ready, or the page did not answer) is never "closed"
     if (view === 'sheet') return;
-    const err = await formError(d);
-    if (err) throw new DriveError(what + ' failed: ' + err);
+    const err = view === '' ? '' : await formError(d);
+    if (err) {
+      if ((await viewOf(page)) === 'sheet') return;   // the error was read from a dialog that has moved on
+      throw new DriveError(what + ' failed: ' + err);
+    }
     if (view === null) throw new DriveError(what + ' failed: the dialog closed without an access sheet');
-    if (Date.now() - t0 > timeout) throw new DriveError(what + ' timed out after ' + Math.round(timeout / 1000) + ' s');
+    if (Date.now() - t0 > timeout) {
+      if ((await viewOf(page)) === 'sheet') return;
+      throw new DriveError(what + ' timed out after ' + since(t0) + ' s; ' + await dialogSummary(page));
+    }
     await sleep(150);
   }
 }
@@ -271,7 +321,7 @@ export async function createVault(page, { passphrase = newPassphrase(), joinCode
   const d = dialog(page);
   await submitCreate(d, { passphrase, joinCode });
   await waitForSheet(page, d, 'creating the vault', timeout);
-  const accessId = confirm ? await confirmSheet(page) : ((await ctl(dialog(page), 'access-id').first().innerText().catch(() => '')) || '').trim();
+  const accessId = confirm ? await confirmSheet(page) : ((await ctl(dialog(page), 'access-id').first().innerText({ timeout: 3000 }).catch(() => '')) || '').trim();
   return { accessId, passphrase };
 }
 
@@ -284,7 +334,7 @@ export async function redeemInvite(page, { code, passphrase = newPassphrase(), c
   const d = dialog(page);
   await submitRedeem(d, { code, passphrase });
   await waitForSheet(page, dialog(page), 'redeeming the invite', timeout);
-  const accessId = confirm ? await confirmSheet(page) : ((await ctl(dialog(page), 'access-id').first().innerText().catch(() => '')) || '').trim();
+  const accessId = confirm ? await confirmSheet(page) : ((await ctl(dialog(page), 'access-id').first().innerText({ timeout: 3000 }).catch(() => '')) || '').trim();
   return { accessId, passphrase };
 }
 
@@ -295,13 +345,20 @@ export async function unlock(page, { accessId, passphrase, timeout = 30000 }) {
   const d = dialog(page);
   await submitUnlock(d, { accessId, passphrase });
   const t0 = Date.now();
+  const done = (v) => v === null || v === 'notice' || v === 'sheet';   // gone, or the library has more to say (a notice, a new access sheet): the caller answers it
   for (;;) {
-    const view = await viewOf(page);
-    if (view === null) return;
-    if (view === 'notice' || view === 'sheet') return;   // the library has more to say (a notice, a new access sheet): the caller answers it
-    const err = await formError(d);
-    if (err) throw new DriveError('unlocking failed: ' + err);
-    if (Date.now() - t0 > timeout) throw new DriveError('unlocking timed out after ' + Math.round(timeout / 1000) + ' s; the dialog shows view "' + view + '"');
+    const view = await viewOf(page);   // null only when the page answered and has no dialog; '' while the page is busy (Argon2id) or reloading
+    if (done(view)) return;
+    const err = view === '' ? '' : await formError(d);
+    if (err) {
+      if (done(await viewOf(page))) return;   // the dialog closed while its error was read: the unlock worked
+      throw new DriveError('unlocking failed: ' + err);
+    }
+    if (Date.now() - t0 > timeout) {
+      const last = await viewOf(page);
+      if (done(last)) return;
+      throw new DriveError('unlocking timed out after ' + since(t0) + ' s; the dialog shows ' + (last ? 'view "' + last + '"' : 'no view (or the page did not answer)') + '; ' + await dialogSummary(page));
+    }
     await sleep(150);
   }
 }

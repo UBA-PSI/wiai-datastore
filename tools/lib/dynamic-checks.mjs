@@ -11,7 +11,7 @@ import { DATASTORE_HOST, scanHtml } from './static-checks.mjs';
 import { instrument } from './page-instrument.mjs';
 import { RE_SCOPE, sriOfFile, rewriteScopes } from './targets.mjs';
 import { CANARY_PLACEHOLDER, MIGRATION_TEST_GLOBAL } from './config.mjs';
-import { dialog, dialogState, briefError, chooseCreate, submitCreate, submitUnlock, confirmSheet, formError, newPassphrase } from './drive-library.mjs';
+import { dialog, dialogState, dialogSummary, briefError, chooseCreate, submitCreate, submitUnlock, confirmSheet, formError, newPassphrase, viewOf } from './drive-library.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const L = '(?<![\\p{L}\\p{N}])', R_ = '(?![\\p{L}\\p{N}])';
@@ -244,11 +244,18 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
     }
     // One look at the library's topmost dialog and, if the tool has to act, the action. true: acted (look again); false: nothing to do (no dialog, or
     // it is not ready: no view yet, aria-busy while a submit runs, loading, progress; wait).
+    // A dialog that stays "not ready" (no view, aria-busy, loading, progress) for long is reported with what it looks like, once.
+    let notReadySince = 0, notReadyNoted = false;
     async function handleDialogOnce() {
       const d = dlg();
-      if (!(await d.isVisible().catch(() => false))) return false;
+      if (!(await d.isVisible().catch(() => false))) { notReadySince = 0; return false; }
       const st = await dialogState(d);
-      if (!st || !st.ready) return false;
+      if (!st || !st.ready || st.view === 'loading' || st.view === 'progress') {
+        if (!notReadySince) notReadySince = Date.now();
+        if (!notReadyNoted && Date.now() - notReadySince > 20000) { notReadyNoted = true; note('a library dialog was not ready after 20 s: ' + await dialogSummary(page)); }
+        return false;
+      }
+      notReadySince = 0;
       const view = st.view;
       if (sb && label.banner === undefined && view !== 'loading' && view !== 'progress') label.banner = await probeLabel('sandbox-banner');
       switch (view) {
@@ -272,9 +279,9 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
           await submitCreate(d, { passphrase });
           const waitStart = Date.now();
           for (;;) {
-            const v = await d.getAttribute('data-wds-view', { timeout: 2000 }).catch(() => null);
+            const v = await viewOf(page);   // null only when the page answered and shows no dialog; '' while it is busy (Argon2id) or reloading
             if (v === 'sheet') break;
-            const err = await formError(d);
+            const err = v === '' ? '' : await formError(d);
             if (err) {
               note('creating the vault failed: ' + err);
               createFailures++;
@@ -300,8 +307,8 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
           try { m.backup = await libraryDownloadClick(ctl(d, 'migrate-backup')); }
           catch (e) { note('the migration dialog: the backup download did not start: ' + briefError(e, 3, 300)); }
           if (await present(d, 'migrate-skip-ack')) {   // rows that map leaves out (h.skip) are deleted with the old data: the box confirms it
-            m.skipped = (await ctl(d, 'migrate-skip-ack').locator('xpath=ancestor::div[1]').innerText().catch(() => '')).replace(/\s+/g, ' ').slice(0, 160) || 'yes';
-            if (!(await ctl(d, 'migrate-yes').isEnabled().catch(() => false))) await ctl(d, 'migrate-skip-ack').check({ timeout: 5000 });
+            m.skipped = (await ctl(d, 'migrate-skip-ack').locator('xpath=ancestor::div[1]').innerText({ timeout: 2000 }).catch(() => '')).replace(/\s+/g, ' ').slice(0, 160) || 'yes';
+            if (!(await ctl(d, 'migrate-yes').isEnabled({ timeout: 2000 }).catch(() => false))) await ctl(d, 'migrate-skip-ack').check({ timeout: 5000 });
           }
           await ctl(d, 'migrate-yes').click({ timeout: 5000 });
           await sleep(200);
@@ -332,6 +339,16 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
           await ctl(d, ack).click({ timeout: 3000 }).catch(() => {});
           return true;
         }
+        case 'error': {
+          // The dialog could not go on (a request failed or did not answer in time): it offers a retry, and so does the tool, three times at most.
+          info.dialogRetries = (info.dialogRetries || 0) + 1;
+          const said = await formError(d);
+          if (info.dialogRetries > 3) { if (info.dialogRetries === 4) { info.stuckError = said || '(no text)'; note('a library dialog stayed in its error view after 3 retries: "' + said + '"'); } return false; }
+          note('a library dialog showed its error view ("' + said + '"); the tool pressed retry (' + info.dialogRetries + ')');
+          await ctl(d, 'retry').click({ timeout: 3000 }).catch(() => {});
+          await sleep(300);
+          return true;
+        }
         case 'conflict':
           note('a conflict dialog of the library appeared; the tool kept its own version (conflict-mine)');
           await ctl(d, 'conflict-mine').click({ timeout: 3000 }).catch(() => {});
@@ -355,6 +372,7 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
         const handled = await handleDialog().catch((e) => { if (e instanceof RunAbort) throw e; note('dialog handling failed: ' + briefError(e)); return false; });
         if (handled) touch(); else await sleep(100);
       }
+      if (await dlg().isVisible().catch(() => false)) note('a library dialog was still open after ' + Math.round(maxMs / 1000) + ' s and the tool had nothing to answer: ' + await dialogSummary(page));
     }
     // Wait until the network has been quiet for a moment; handle library dialogs that show up meanwhile.
     async function settle(quietMs = 700, maxMs = 60000) {
@@ -369,7 +387,7 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
         if (!busy && Date.now() - lastActivity >= quietMs) {
           if (!(await dlg().isVisible().catch(() => false))) return;
           // a dialog without an action of the tool (loading, progress) is waited for; one that stays for long is a note
-          if (Date.now() - lastActivity > 15000) { const s = await dialogState(dlg()); note('a library dialog stayed open: view "' + ((s && s.view) || '?') + '"' + (s && s.busy ? ' (busy)' : '')); return; }
+          if (Date.now() - lastActivity > 15000) { const s = await dialogState(dlg()); note('a library dialog stayed open: view "' + ((s && s.view) || '?') + '"' + (s && s.busy ? ' (busy)' : '') + '; ' + await dialogSummary(page)); return; }
         }
         await sleep(100);
       }
@@ -900,6 +918,7 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
     }
     if (seed && opts.migrationDelete && !sb) add('migration-delete', 'info', '--migration-delete', 'The flag has no effect on the mock target: the mock is no sandbox, so the migration deletes the old data as in production anyway.');
     const notes = sb ? unexpected.filter((u) => !/pw\.hibp\.unavailable/.test(u)) : unexpected;
+    if (info.stuckError) add('dialog-error', 'fail', 'A library dialog stayed in its error view', 'The tool pressed "retry" three times and the dialog showed the error view again ("' + info.stuckError + '"). A person would be stuck in the same place: the storage service does not answer, or the dialog cannot be built (see the browser console).');
     if (notes.length) add('driver', 'warn', 'Test run notes', notes.slice(0, 6).join('\n'));
     if (info.locale !== 'en-US') add('locale', 'info', 'Browser language', 'The browser ran with the locale ' + info.locale + ' (the library dialogs follow it unless the app sets one).');
 

@@ -25,14 +25,15 @@ If the scope has the breach check of passphrases switched on (the default; the d
 1. Ask the developer for the scope ID (section 1). Do not invent one. Never write the sandbox scope ID ({{sandbox_scope}}) into an app (section 17).
 2. Does the app exist already, with data in IndexedDB, localStorage or a file format of its own? Read [porting.md]({{base}}/docs/porting.md) first (section 16 points there): the old data is taken over with one call, `store.migrateLocal`, not with code of your own.
 3. Put the Content-Security-Policy meta tag (section 3) into the head before every script and the script tag (section 2)
-   at the end of the body, exactly as printed here. Keep the onerror handler.
+   at the end of the body, exactly as printed here. Keep the onerror handler (only its message text may be translated, section 2).
 4. Create the store with `WDS.connect({ scope })` and keep user data only there (section 5). Register `store.onLock` and `store.onUnlock` once, outside any start function (section 4, "Lock and unlock again"). An app in one language calls `store.setLocale("de")` (or `"en"`) once right after `WDS.connect`.
 5. Model data as one record per entity. Many items or files: `store.collection` (section 6, "Collections"). Editors with `autosave`.
 6. Decide conflicts in code only where a merge helps; everything else gets the library's dialog (section 7, "Conflicts in code").
-7. Add buttons for share and export (sections 8 and 9). Hide edit controls for read-only members. An app with forms or modal dialogs of its own follows the checklist in porting.md, section 7: the library's dialogs open above yours.
-8. Test with the sandbox (section 17): `node tools/wds-verify.mjs <app.html> --target sandbox` runs the real library against the real service.
-9. Run wds-verify (section 12), write a wds-verify.json for an app with tabs, dialogs or file inputs ("Writing wds-verify.json"), fix the findings and put the report into the README.
-10. Add the text for users to the README or start page (section 13), starting with the official privacy sentence (and the breach-check sentence when the scope has that check on). Put the CLAUDE.md / AGENTS.md section from the dashboard into the app's repository.
+7. Add buttons for share and export (sections 8 and 9). The Share button is there for every role: for a member it is their own access dialog. Hide edit controls for read-only members. An app with forms or modal dialogs of its own follows the checklist in porting.md, section 7: the library's dialogs open above yours.
+8. A sticky or fixed header needs `top: var(--wds-sandbox-bar, 0px)`, not `top: 0`: while the scope is the sandbox, the library's bar sits at the top of the page (section 4, "The library's dialogs and your own modal dialogs").
+9. Test with the sandbox (section 17): `node tools/wds-verify.mjs <app.html> --target sandbox` runs the real library against the real service.
+10. Run wds-verify (section 12), write a wds-verify.json for an app with tabs, dialogs or file inputs ("Writing wds-verify.json"), fix the findings and put the report into the README (section 12 says how, under the README's own headings).
+11. Add the text for users to the README or start page (section 13), starting with the official privacy sentence (and the breach-check sentence when the scope has that check on). Put the CLAUDE.md / AGENTS.md section from the dashboard into the app's repository.
 
 ## 1. Register a scope
 
@@ -67,6 +68,9 @@ Library files never change once released: this URL stays valid and keeps working
 - `crossorigin="anonymous"` is required for the hash check on a cross-origin file.
 - The `onerror` handler runs when the file cannot be loaded or its hash does not match (offline, blocked, tampered):
   the page shows a message instead of staying blank. It needs `'unsafe-inline'` in the policy below, which is included.
+- **The message may be in the app's language, nothing else of the tag may change.** An app in German replaces only the text between the single quotes of `onerror`, for example
+  `onerror="document.body.textContent='Der Speicherdienst ist nicht erreichbar. Bitte prüfen Sie die Verbindung und laden Sie die Seite neu.'"`. The code stays `document.body.textContent='…'`, and `src`, `integrity` and `crossorigin` stay as printed
+  (the hash covers the library file, not the attributes of the tag). The message has no quote marks, backslash, `<`, `>` or `&`. wds-verify accepts any message of that form (an info finding says that it is not the English one) and warns about a tag without `onerror` or with other code in it.
 - The tag belongs after the page content, because the handler replaces the body text. Scripts of the app follow it.
 - Do not copy the library into the HTML file, do not download and self-host it, do not wrap it. Never load any other
   third-party script.
@@ -206,6 +210,10 @@ The library's dialogs are modal `<dialog class="wds-root wds-dialog">` elements 
 - **Close your own modal dialogs in `store.onLock`** (it runs for `user`, `revoked` and `expired`; the library closes its own dialogs on a lock) and **open none while a store call is pending.** If a modal dialog of yours opens after a library dialog came up, the library puts its dialog on top again, but the person has to answer it first.
 - Select your own dialogs with `dialog:not(.wds-dialog)` and never close the library's. CSS for `dialog` (padding, `max-width`, a centring transform, an opacity transition, a transparent backdrop) does not change them.
 - Escape closes a library dialog only when it has a close button; the unlock dialog, the access sheet and the progress view stay. Minimum browsers: Chrome and Edge 114, Firefox 125, Safari 17 (modal `<dialog>` and `popover`).
+- **Notices (toasts) can cover the bottom right of your dialog.** A notice of the library (the outcome of a migration, "a record changed elsewhere", offline) is a box in the top layer, positioned in the window and not in your dialog: 1rem from the right and from the bottom edge of the window,
+  26rem wide (416 px at the default font size; in a window narrower than 36rem it spans the window width minus 1rem, .5rem from the left, right and bottom edge, and is at most 40% of the window high), 5 to 8rem high for a notice of one to three lines with its row of buttons ("Dismiss", and the action if there is one; the migration notice is about 110 px at the default size), more for a long text. Several notices stack upwards with a gap of .5rem.
+  Plain information goes after about 9 seconds; warnings, errors and a few more (the migration's `failed`, `partial` and `changed`, "a record changed elsewhere") stay until the person presses "Dismiss". A margin inside your dialog does not help. Put the footer buttons of your dialogs (Save, Cancel) on the **left** or in the middle, so that a notice covers only text, and let a test press `[data-wds="toast-dismiss"]` before it clicks in a dialog.
+- **The sandbox bar and sticky headers.** In the sandbox the library shows a bar at the top of the page, moves the page down by its height and sets the CSS custom property `--wds-sandbox-bar` on `:root` to that height (it does not exist in a real scope). A `position: sticky` or `fixed` header or toolbar with `top: 0` slides under the bar while the person scrolls: write `top: var(--wds-sandbox-bar, 0px)`. Every app with such a header needs this one line; wds-verify runs in the sandbox and cannot tell you.
 - Forms and modal dialogs of your own have a checklist: porting.md, section 7.
 
 ## 5. Where data lives
@@ -322,6 +330,32 @@ async function deleteNoteWithFiles(noteId) {
 }
 ```
 
+- **Save a note that gets a new or replaced attachment** in the opposite order: the new file first, then the note that names it, then the old file. A failure in the middle then leaves a file that nothing points to, never a note that points to nothing. The note's value names its file (`fileId`), the file's meta names the note (`note`). A note write that loses with `theirs` is not stored, so the new file is not referenced and goes again. A write that fails for a reason that leaves the note unwritten (quota, no right to write) takes the new file away too. Two failures do **not**: `err.stored` (the note is written, only its list entry failed) and an `OfflineError` (the write may have reached the server, and only the answer was lost). The note may name the new file then, so the file stays:
+
+```js
+async function saveNoteWithFile(noteId, note, newFile) {   // note: the value to save, with the fileId it was read with; newFile: a File to attach in its place, or null to keep the file
+  const oldFileId = note.fileId;                            // the file that the form was filled with. No notes.get here: a get takes over the newest version, and the write below would never see the conflict
+  let newFileId = null;
+  if (newFile) {
+    newFileId = (await files.add(newFile, { meta: { note: noteId, name: newFile.name.slice(0, 100) } })).id;   // 1. the file first: no note ever points to a file that is not there
+    note = { ...note, fileId: newFileId };
+  }
+  let res;
+  try { res = await notes.set(noteId, note); }              // 2. the note that points to it
+  catch (err) {                                             // the new file goes again only when the note is certainly not stored; err.stored and OfflineError leave it
+    if (newFileId && !err.stored && !(err instanceof WDS.errors.OfflineError)) await files.remove(newFileId).catch(() => {});
+    throw err;
+  }
+  const stored = res.value || note;                         // res.value is there for "theirs" and "merged": the value that is stored now
+  for (const id of [newFileId, oldFileId]) if (id && id !== stored.fileId) await files.remove(id).catch(() => {});   // 3. what nothing points to: the old file after a save, the new one after "theirs"
+  return res;                                               // the caller shows res.value after "theirs" (section 7)
+}
+```
+
+A failure in the middle leaves at worst a file that no note names (a `remove` that fails in step 3, a crash between the steps, a save that ended offline). That costs only space, and `deleteNoteWithFiles` removes it with its note, because the file's meta names the note. **Do not write a clean-up that removes the files no note names.** Between step 1 and step 2 a file is unreferenced by design, here or on another device; a notes list that is stale or only partly loaded makes live files look unreferenced; a file that an older version of a note names is still needed for `store.showHistory`.
+
+  The recipe keeps a note from naming a removed file in the normal course. It cannot cover three cases, so **show a missing file as "attachment no longer available"** (`files.get` returns `undefined`) and never assume it exists: (1) the form was filled before another device replaced the file and the page has meanwhile taken over the newer note, so that saving the old form writes the old `fileId` again; (2) the person chose "mine" in a conflict without a new file, while the other side had replaced and removed the file; (3) `store.showHistory` brings back a note version whose file step 3 removed. Let one save per note run at a time (disable the button while it runs, porting.md, section 7).
+
 - **Show a file in a new tab inside the click.** `window.open(blobUrl)` after `await store.getBlob(…)` is no longer part of the click, and over a slow connection the popup blocker refuses it. Open the (empty) window first and fill it when the bytes arrive; offer a download link when the window is refused:
 
 ```js
@@ -381,13 +415,13 @@ store.onConflict("notes/", async (c) => {                                       
 
 Every user has their own vault. The owner shares the whole vault with `store.share()`: the dialog creates invite codes (role
 **write** or **read**, valid 1, 2, 7 or 14 days), shows who has access, revokes access and offers key file and passphrase change. Revoking
-re-encrypts everything under new keys, with a progress bar; it resumes by itself after an interruption. Members see only their own access.
+re-encrypts everything under new keys, with a progress bar; it resumes by itself after an interruption. Members see only their own access: their key file, the renewal of their keys, "Lock now" and the passphrase change (`me-keyfile`, `me-renew`, `me-lock`, `me-passphrase-toggle`), without the invites and the list of the others.
 
 New items of the others: a **collection** picks up items that other members added or removed when the window gets focus (`onChange` fires), and `notes.refresh()` does it on demand. Records that are not in a collection are not announced:
 `onStale` and the focus check only cover records the page already holds, and polling `list()` is forbidden (section 11). A shared app with records outside collections therefore shows new entries of the others after a refresh
 button that the user presses and that reads the data again.
 
-The app only needs a Share button. Adapt the interface to the role:
+The app only needs a Share button, **and it shows it for every role**: do not hide it from members. For the owner it is the members dialog; for a member, who creates no invites, it is their access dialog (key file, keys, lock, passphrase), and a member has no other way to reach those. Adapt the rest of the interface to the role:
 
 ```js
 const role = store.status().role;                 // "owner" | "write" | "read"
@@ -411,7 +445,7 @@ most of them; app code decides only what happens to the app's own screen.
 
 | Error | When | What to do |
 |---|---|---|
-| `OfflineError` | no connection, server down | Keep the screen; `err.downloadBackup()` saves the unsaved values. Autosave retries. After a failed index write of a collection `err.stored` says the item exists. |
+| `OfflineError` | no connection, server down, or no answer within 30 s (`err.code === "timeout"`; one more second per 10 KB of an upload, three times as long to create a vault or join one). A write that got no answer may be stored all the same: the library looks at the record before it reports, and counts a write whose answer was lost as saved | Keep the screen; `err.downloadBackup()` saves the unsaved values. Autosave retries. After a failed index write of a collection `err.stored` says the item exists. |
 | `ConflictError` | write lost against a newer version and four rounds of handlers did not settle it, or an index write kept conflicting | Section 7. |
 | `QuotaError` | value too large, vault or scope full, server read-only (`code: "read_only"`) | Tell the user; reads and deletes still work. |
 | `AuthError` | wrong passphrase, session expired, access revoked (`code: "revoked"`), write by a read member (`"forbidden"`) | The library locks the store on revoked or expired; use `onLock` to clear the screen. |
@@ -454,6 +488,7 @@ Run it from the clone, with the path of the app:
 ```sh
 node tools/wds-verify.mjs <app.html>                    # Markdown report on stdout, exit code 1 if a check failed
 node tools/wds-verify.mjs <app.html> --out report.md    # also write the report to a file
+node tools/wds-verify.mjs <app.html> --heading-level 3 --out report.md   # title as ###, sections as ####: for pasting under "## Verification" in a README
 node tools/wds-verify.mjs <app.html> --target sandbox   # run against the public sandbox of the real service: no Python, no build
 node tools/wds-verify.mjs <app.html> --sandbox-copy app-sandbox.html   # a copy for a person to open in a browser and try by hand
 node tools/wds-verify.mjs <app.html> --static-only      # only the static checks: needs just Node, no browser
@@ -462,13 +497,20 @@ node tools/wds-verify.mjs <app.html> --static-only      # only the static checks
 - **Targets** (`--target auto|mock|sandbox`, default `auto`; the first line of the report names the target and why). `mock`: the real server runs locally with a temporary database and everything is inspected, including the server's database; it needs Python 3.13 with the server packages
   (`python3.13 -m venv .venv && .venv/bin/pip install -r server/requirements.txt` in the clone). `sandbox`: the app opens against the public sandbox scope of the real service (section 17); no Python, no client build; the server's database is not inspected, but every request body still is.
   `auto` takes `mock` when Python is found, else `sandbox` when the sandbox is reachable, else only the static checks run (with a warning that says so).
+- **What the mock checks that the sandbox cannot** (so you know what a run without Python leaves out; the report's "Not tested" section lists what neither can do). Only the mock:
+  1. looks into the server's database (the SQLite file of the local copy): the canaries and the vault passphrase are searched there too, raw, URL-encoded, base64, hex and UTF-16. Without it, every request body is still searched, but not what the server stored;
+  2. runs the deletion of a migration as production does: "old data deleted". The sandbox keeps the old data ("kept in the sandbox") unless you add `--migration-delete`;
+  3. has the default limits of a scope (10 MB per record, 200 MB per vault, 10 versions). The sandbox's limits are small ({{sandbox_limits}}), so a file over that size is a quota error there ("sandbox limit, not tested") and takes the "too large" path of a migration (`migrate-large`), while the mock stores it. Large attachments and a deeper history can be tried only on the mock or in a test vault of the app's own scope;
+  4. builds the library from `client/src` of the clone, so it also runs an unreleased library, and has no nightly wipe, rate limit or "sandbox unavailable" (exit code 3).
+
+  Only the sandbox shows the page as the real service renders it: the sandbox bar and banners, the layout under a sticky header (`--wds-sandbox-bar`, section 4), real network latency, and the published library with the integrity hash of your tag (the mock replaces the hash in its copy of the page; a wrong hash in the file is caught by the static check in both). Neither asks for a join code (open enrollment). The sandbox dialogs have no recovery code and no recovery contact field; the mock's have both.
 - **Static checks** need only Node and the clone: the script tag names a published library version with the matching integrity hash and `crossorigin` (the hashes come from {{base}}/client/hashes.json first, then from `client/dist/hashes.json` of the clone; the report names the source and warns when they differ, then `git pull`);
   the Content-Security-Policy is present and not broader than the one above; no other script is loaded; nothing but the library talks to the datastore host; the sandbox scope ID is not in the file; no CSS hides the library; no hand-made migration (reading or deleting old browser storage without `store.migrateLocal`, a warning) and no assignment of `window.__WDS_MIGRATION_TEST__` (a failure).
 - **Scope check** (every run with network access): the public scope document of the app's own scope ID is fetched. An unknown scope fails. The breach check on while `connect-src` lacks `https://api.pwnedpasswords.com` fails; off while the host is still allowed warns. The report prints the current enrollment, breach check and limits (sizes in MB). When the breach check is on and neither the page nor the README carries the breach-check sentence of the top of this page (word for word; naming the service is not enough), an info finding prints both sentences. Offline, or with `--scope-check off`: "scope settings not checked". An unknown scope fails; for an app whose scope is not registered yet, or a run of an unreleased library, use `--scope-check off`.
 - **Dynamic checks.** It opens the app, creates a vault through the library dialog, types unique canary strings into every visible input, textarea and contenteditable, presses the app's save-like buttons (text containing save, speichern, add, hinzufügen, anlegen, create, ok and similar, never delete, export, download, import, lock; plus every element marked `data-wds-verify="save"`),
   runs the steps of `wds-verify.json`, waits, then **reloads the page, unlocks again and looks for the typed values** ("Data after reload": an app has to read its data back when it starts). Canaries and the vault passphrase are searched for in every request (URL, header, body), page URL, localStorage, sessionStorage, IndexedDB, cache storage, cookies, console output,
   downloads and, with `mock`, the server's database (raw, URL-encoded, base64, hex and UTF-16). It also flags a record written three or more times within a second without a button press in between (use autosave), a record that holds the data of several items or the whole app state, and apps that store nothing during the run (then the run proved nothing: that fails).
-- Options: `--strict` (warnings fail too), `--migration-delete` (with a `seed`), `--headed`, `--json`, `--locale <bcp47>`, `--wait-ms <n>` (time for debounced saves, default 2800), `--hashes <file>`, `--script-tag [version]`, `--scope-check off`. Exit codes: 0 passed, 1 a check failed, 2 the tool could not run (missing Python for `--target mock`, no Playwright, bad arguments), 3 the sandbox is unavailable (rate limited, full or switched off: not an app finding, try again later).
+- Options: `--strict` (warnings fail too), `--heading-level <1-5>` (the report's title gets that many `#`, its sections one more; default 1), `--migration-delete` (with a `seed`), `--headed`, `--json`, `--locale <bcp47>`, `--wait-ms <n>` (time for debounced saves, default 2800), `--hashes <file>`, `--script-tag [version]`, `--scope-check off`. Exit codes: 0 passed, 1 a check failed, 2 the tool could not run (missing Python for `--target mock`, no Playwright, bad arguments), 3 the sandbox is unavailable (rate limited, full or switched off: not an app finding, try again later).
 - **An unreleased library** (you changed `client/src`, or your clone is newer than the service). The service publishes the hash of the released build; `node client/build.mjs` writes the hash of your own build to `client/dist/hashes.json`. Print the tag with `node tools/wds-verify.mjs --script-tag --hashes client/dist/hashes.json`, and run `wds-verify <app> --hashes client/dist/hashes.json`. The mock builds its own library and replaces the tag's hash in its copy of the page, so the dynamic checks do not depend on it. The scope of the app does not exist at the service yet? Add `--scope-check off` (the mock creates the scope it needs by itself). `WDS_VERIFY_OFFLINE=1` switches off every online lookup (hashes and scope check) and makes the clone the source of the hashes. The report says "your clone has a library build that the service does not publish yet" when it is newer than the service, and "outdated; run git pull" only when it is older.
 - **Without a clone** there is no download of the static checks alone: they need the same small clone and Node. If you cannot clone, or have no Node at all, use "Without wds-verify" below and say in the README that wds-verify did not run.
 
@@ -565,24 +607,24 @@ An example for an app with four tabs (projects, time entries with a form, notes 
 ```
 
 **What the run does not test** (the report ends with a "Not tested" section that says it): a second device and conflicts, read-only members, lock and unlock again in one page (there is no step for them; porting.md, section 6, shows how to test them in your own Playwright test against a mock), buttons the tool does not press (delete, export, download, import, lock, anything the word list, `data-wds-verify` and the steps do not name), file inputs without an `upload` step,
-fields hidden in views no step opens, dialogs of the app itself without stable selectors. Test these by hand, as in "Without wds-verify". Paste the report into the README of the app under "Verification". A warning that is a false positive is explained there in one sentence; it is not removed.
+fields hidden in views no step opens, dialogs of the app itself without stable selectors. Test these by hand, as in "Without wds-verify". Paste the report into the README of the app under "Verification": the report's own headings are `#` (title) and `##` (sections), which would break the outline of the README, so write it with the level of your heading plus one (under `## Verification`: `--heading-level 3 --out report.md`, then put the content of report.md below the heading, for example `cat report.md >> README.md` after the line `## Verification`). A warning that is a false positive is explained there in one sentence; it is not removed.
 Until a library version is marked released (frozen) the tool warns that its hash may still change.
 
 ### Driving the library's dialogs in your own end-to-end tests
 
 Every dialog of the library is a modal `<dialog>` in the top layer with `data-wds-view="<view>"` (set when the view is rendered, and changed when the dialog switches to another view), every button, input, select, textarea and summary inside it has `data-wds="<name>"`, and the texts follow the language, so a test never selects by text.
-Wait for a view with `page.locator('[data-wds-view="unlock"]')`, act on `[data-wds="passphrase"]` inside it. **A dialog is ready when it has a view and no `aria-busy="true"`**: the library marks it busy while it loads, while a progress view runs and while a submit is in flight (the Argon2id key derivation of an unlock, create or redeem). The attributes are part of the library's contract. wds-verify uses the same ones.
+Wait for a view with `page.locator('[data-wds-view="unlock"]')`, act on `[data-wds="passphrase"]` inside it. **A dialog is ready when it has a view and no `aria-busy="true"`**: the library marks it busy while it loads (a dialog opens as `loading`, never without a view), while a progress view runs and while a submit is in flight (the Argon2id key derivation of an unlock, create or redeem). A request that does not answer within 30 s fails like a lost connection, and a dialog that cannot go on (a failed request, a view that cannot be built) shows the view `error` with a `retry` button, so a test that waits for a ready dialog sees either the next view or `error`; it never waits for ever on `loading`. The attributes are part of the library's contract. wds-verify uses the same ones (it presses `retry` in an `error` view, three times at most).
 
 | `data-wds-view` | Shown when | Controls (`data-wds`) |
 |---|---|---|
-| `loading` | the scope is being read | none |
-| `error` | the scope or the service cannot be reached | `retry`, `form-error` |
+| `loading` | the scope is being read, or the view of a dialog is being built (a dialog never has no view; it opens as `loading`, with `aria-busy`) | none |
+| `error` | the scope or the service cannot be reached, a request took longer than the timeout (30 s, `OfflineError` with code `timeout`) or a view could not be built | `retry` (starts again at `loading`; after a view failed to build twice, `reload` in its place: it reloads the page), `form-error` |
 | `unlock` | the first screen of `store.unlock()` | `access-id-input`, `passphrase`, `show-passphrase`, `unlock-submit`, `keyfile` (the hidden file input) and `keyfile-button`, `to-create`, `to-redeem`, `form-error` |
 | `create` | "Create a vault" (also the notice that creating is closed or paused) | `join-code` (not in the sandbox), `passphrase`, `passphrase-repeat`, `show-passphrase`, `recovery-contact-toggle` and `recovery-contact` (not in the sandbox), `create-submit`, `back`, `form-error` |
 | `redeem` | "Use an invite code" | `invite-code-input`, `passphrase`, `passphrase-repeat`, `show-passphrase`, `redeem-submit`, `back`, `form-error` |
 | `sheet` | the access sheet after creating a vault or redeeming an invite | `access-id`, `recovery-code` (owner, not in the sandbox), `sheet-keyfile`, `sheet-print`, `sheet-download`, `sheet-confirm` (a checkbox), `sheet-continue` (enabled once `sheet-confirm` is checked), `form-error` |
 | `conflict` | the conflict dialog | `conflict-theirs`, `conflict-mine`, `conflict-download` (when both sides can be downloaded), `form-error` |
-| `history` | `store.showHistory(name)` | `history-version` (one per version, with `data-wds-version="<n>"`), `history-preview`, `history-restore`, `form-error`, `close` |
+| `history` | `store.showHistory(name)`, once the versions are loaded (until then `loading`; `error` with `retry` when they cannot be read) | `history-version` (one per version, with `data-wds-version="<n>"`), `history-preview`, `history-restore`, `form-error`, `close` |
 | `share` | `store.share()`, the members dialog | `person` and `person-escrow` (one row per member), `member-role`, `cancel-invite`, `revoke`, `invite-role`, `invite-expiry`, `invite-label`, `invite-create`, `invite-code`, `invite-copy`, `invite-another`, `me-keyfile`, `me-renew`, `me-lock`, `me-passphrase-toggle`, `passphrase`, `passphrase-repeat`, `show-passphrase`, `me-passphrase-submit`, `recovery-request` (with `recovery-cancel`, `recovery-keep`), `recovered-notice` (with `recovered-ack`), `rekey-continue`, `form-error`, `close` |
 | `revoke` | the confirmation inside the members dialog | `revoke-id`, `revoke-confirm`, `revoke-cancel` |
 | `progress` | a revocation re-encrypts the vault, or `store.migrateLocal` copies and checks (no buttons, `aria-busy`) | none (a progress bar; the dialog goes back to `share` when done) |
@@ -598,6 +640,7 @@ Everywhere: `close` (only in dialogs that can be cancelled), `sandbox-banner` (a
 A vault in a test, in four steps (Playwright; the same works in any driver): open the page and call `store.unlock()`, or wait for the app to; in `unlock` click `to-create`; in `create` fill `join-code` (not in the sandbox), `passphrase` and `passphrase-repeat` and click `create-submit` (the Argon2id key derivation takes several seconds: wait up to 60 s for `sheet`);
 in `sheet` read `access-id`, check `sheet-confirm`, click `sheet-continue`. Unlocking again: `access-id-input`, `passphrase`, `unlock-submit`.
 `tools/lib/drive-library.mjs` in the clone does exactly this for wds-verify and for your own scripts: `import { createVault, unlock } from "<clone>/tools/lib/drive-library.mjs"`, then `const { accessId, passphrase } = await createVault(page)` (the app calls `store.unlock()`, the function answers the dialogs) and, after a reload, `await unlock(page, { accessId, passphrase })`; its header comment lists the single-step functions too. You may use the Playwright of the clone (`tools/node_modules/playwright` after `cd tools && npm install && npx playwright install chromium`) for your own test scripts, for example to seed old data and open the new app (porting.md, section 6); no second copy is needed. Besides `createVault` and `unlock` the file has `redeemInvite(page, { code })` for a member's test, `answerMigration(page)` for the migration dialogs, `deleteVault` and `enableMigrationDelete(context)`; the header comment lists them all.
+**Headless Chromium has no PDF viewer.** Playwright's headless Chromium cannot show a PDF: a popup that the app fills with `w.location.href = blobUrl` of an `application/pdf` blob stays at `about:blank` and the file arrives as a download. A test of "open the file in a new tab" therefore uses a `text/plain` blob (the popup shows the text and its URL starts with `blob:`), or, for a PDF, listens for the popup's `download` event (`popup.on("download", …)`, set before the click) instead of looking at the page.
 Use the sandbox (section 17) for such tests, or a test vault in your own scope. The join code of a scope is a secret of the staff: the helper reads it only from a file that the person creates in their own terminal, you never read or print that file and never ask for the code in the chat (porting.md, section 6, "The join code for tests").
 
 ## 13. What to tell users
@@ -778,7 +821,7 @@ The rules that stay valid here: user data lives only in the store (section 5), t
 ## 17. The sandbox
 
 A public scope on the real service for testing: **{{sandbox_scope}}**. Anyone can create a vault there without a join code. Limits: {{sandbox_limits}}. Everything is deleted every night between {{sandbox_wipe}} and one hour later (vaults created after that time stay until the next night).
-The library says "Sandbox" (dialog titles, the create button, a banner in every dialog and a bar at the top of the page after unlocking; the library moves the page down by its height, so a sticky header with `top: 0` slides under it only when scrolling; while the bar is shown the library sets the CSS custom property `--wds-sandbox-bar` on `:root` to its height, so a sticky header can use `top: var(--wds-sandbox-bar, 0)`), there is no recovery contact and no recovery code, at most three invites per vault (they expire before the next wipe), and the breach check of passphrases is off.
+The library says "Sandbox" (dialog titles, the create button, a banner in every dialog and a bar at the top of the page after unlocking; a sticky header needs `top: var(--wds-sandbox-bar, 0px)`, section 4), there is no recovery contact and no recovery code, at most three invites per vault (they expire before the next wipe), and the breach check of passphrases is off.
 When many people test, the oldest vaults that nobody has written to for 30 minutes are deleted to make room, creation is limited per network and for the sandbox as a whole, and an unavailable sandbox answers with an error that wds-verify reports as "sandbox unavailable, not an app finding". Records are limited to {{sandbox_limits}} here: seed data of a migration test must be small (1 MB = 1,048,576 bytes).
 
 - **Use it** through `node tools/wds-verify.mjs <app.html> --target sandbox` (real library, real service, the tool replaces the scope IDs in a copy of your page) or `--sandbox-copy app-sandbox.html` (a copy that a person opens in a browser). By hand: a copy of the file with "sandbox" in its name (section 12, "Without wds-verify").

@@ -58,6 +58,21 @@ class Routes(DocsTestCase):
         self.assertEqual(r.headers["cache-control"], "no-cache")
         self.assertNotIn(digest, r.text)
 
+    def test_llms_txt_index_placeholders_come_from_the_served_guides(self):
+        self.lib()
+        guide = ("# Guide {{version}}\n\nintro\n\n## One\n\ntext\n\n```sh\n## not a heading\n# nor this\n```\n\n## Two\n\n### Short\n\nx\n\n### Long\n"
+                 + "line\n" * 20 + "\n## Three\n")
+        write(os.path.join(self.docs_dir, "integration.md"), guide)
+        write(os.path.join(self.docs_dir, "llms.txt"), "# T\n{{index_integration}}\n--\n{{index_porting}}\n")
+        text = self.c.get("/datastore/llms.txt").text
+        served = self.c.get("/datastore/docs/integration.md").text
+        self.assertEqual(len(served.rstrip("\n").split("\n")), 42)       # the lines of the served text count, not those of the source
+        head, _, rest = text.partition("--")
+        self.assertTrue(head.startswith("# T\nintegration.md, 42 lines:\n"), head)
+        rows = [re.sub(r" +", " ", line.strip()) for line in head.splitlines()[2:]]
+        self.assertEqual(rows, ["1-4 Introduction: Guide 1.2.3", "5-13 One", "14-41 Two", "20-41 Long", "42-42 Three"])   # "Short" is under 20 lines
+        self.assertIn("porting.md: (not available on this server)", rest)
+
     def test_raw_markdown_and_html(self):
         digest = self.lib()
         write(os.path.join(self.docs_dir, "integration.md"),
@@ -243,6 +258,35 @@ class RepositoryDocuments(unittest.TestCase):
         self.assertEqual(llms.status, 200)
         self.assertNotRegex(llms.text, r"\{\{[a-z_]+\}\}")
 
+    def test_llms_txt_reading_advice_names_sections_that_exist(self):
+        import re
+        llms = self.c.get("/datastore/llms.txt").text
+        guide = self.c.get("/datastore/docs/integration.md").text
+        porting = self.c.get("/datastore/docs/porting.md").text
+
+        def titles(text):
+            return {int(m.group(1)): m.group(2) for m in re.finditer(r"^## (\d+)\. (.+)$", text, re.M)}
+
+        gi, gp = titles(guide), titles(porting)
+        advice = re.search(r"A new app needs the checklist and sections 2 to 8 and 14 of integration\.md; an existing app also porting\.md, sections 1 to 4 and 7; "
+                           r"before you hand an app over, sections 12 and 13 of integration\.md\.", llms)
+        self.assertTrue(advice, "the reading advice of llms.txt changed: update this test with it")
+        # the sections the advice names are the ones it means
+        self.assertIn("script tag", gi[2].lower())
+        self.assertIn("api", gi[4].lower())
+        self.assertIn("conflicts", gi[7].lower())
+        self.assertIn("members", gi[8].lower())
+        self.assertIn("example", gi[14].lower())
+        self.assertIn("wds-verify", gi[12])
+        self.assertIn("tell users", gi[13].lower())
+        self.assertIn("inventory", gp[1].lower())
+        self.assertIn("still in the browsers", gp[4].lower())
+        self.assertIn("modal dialogs", gp[7].lower())
+        for n in (2, 3, 4, 5, 6, 7, 8, 12, 13, 14):
+            self.assertIn(n, gi)
+        for n in (1, 2, 3, 4, 7):
+            self.assertIn(n, gp)
+
     def test_every_document_renders_without_leftovers_with_a_sandbox(self):
         from wds_server.config import SandboxConfig
         self.env.config.sandbox = SandboxConfig(scope_id="sandbox-000000")
@@ -379,6 +423,89 @@ class RepositoryDocuments(unittest.TestCase):
         # the guide has to say what no code can: units once, and that the file with the join code is the person's own
         self.assertIn("Units: 1 MB = 1,048,576 bytes", text)
         self.assertNotIn("{{", text)
+
+    def test_llms_txt_indexes_the_two_guides_with_the_line_ranges_of_the_served_text(self):
+        """The index of llms.txt is computed from the served guides; this test reads the guides independently and compares."""
+        llms = self.c.get("/datastore/llms.txt").text
+        self.assertNotRegex(llms, r"\{\{[a-z_]+\}\}")
+        for stem in ("integration", "porting"):
+            served = self.c.get(f"/datastore/docs/{stem}.md").text
+            lines = served.split("\n")
+            if lines[-1] == "":
+                lines.pop()
+            heads, fence = {}, False        # line number -> (level, title) of the headings outside fenced blocks
+            for n, line in enumerate(lines, 1):
+                if line.strip().startswith("```"):
+                    fence = not fence
+                m = re.fullmatch(r"(##|###) (.+?)", line)
+                if m and not fence:
+                    heads[n] = (len(m.group(1)), m.group(2).replace("`", "").replace("**", ""))
+            start = llms.index(f"{stem}.md, {len(lines)} lines:\n")
+            block = llms[start:].split("\n\n")[0].splitlines()[1:]
+            rows = [re.fullmatch(r" +(\d+)-(\d+) +(.+)", b) for b in block]
+            self.assertTrue(all(rows), block)
+            listed = [(int(m.group(1)), int(m.group(2)), m.group(3)) for m in rows]
+            self.assertEqual(listed[0][:2], (1, min(heads) - 1), stem)                 # the introduction
+            self.assertTrue(listed[0][2].startswith("Introduction"))
+            for first, last, name in listed[1:]:
+                self.assertIn(first, heads, f"{stem}: line {first} is no heading ({name})")
+                level, title = heads[first]
+                self.assertEqual(name, title, stem)
+                after = [n for n, (lv, _) in heads.items() if n > first and lv <= level]
+                self.assertEqual(last, (min(after) - 1) if after else len(lines), f"{stem}: end of {name}")
+                if level == 3:
+                    self.assertGreaterEqual(last - first + 1, 20, f"{stem}: short subsection {name} listed")
+            self.assertEqual([f for f, _, _ in listed[1:] if heads[f][0] == 2], [n for n, (lv, _) in sorted(heads.items()) if lv == 2], f"{stem}: every ## section is listed")
+            for n, (lv, title) in heads.items():
+                if lv == 3 and (min([m for m, (lv2, _) in heads.items() if m > n and lv2 <= 3] or [len(lines) + 1]) - n) >= 20:
+                    self.assertIn(n, [f for f, _, _ in listed], f"{stem}: subsection {title} is missing")
+
+    def test_integration_and_porting_answer_the_porting_trial(self):
+        """Decisions of the second clean-room trial that the guides must keep saying."""
+        guide = self.c.get("/datastore/docs/integration.md").text
+        porting = self.c.get("/datastore/docs/porting.md").text
+        # 1: the onerror message may be translated, nothing else of the tag
+        self.assertIn("The message may be in the app's language, nothing else of the tag may change", guide)
+        self.assertIn("document.body.textContent='Der Speicherdienst ist nicht erreichbar.", guide)
+        # 5: the Share button for every role
+        self.assertIn("**and it shows it for every role**", guide)
+        self.assertIn("for a member it is their own access dialog", guide)
+        # 7: the heading level of the report, and how to paste it
+        self.assertIn("--heading-level 3 --out report.md", guide)
+        # 8: the notice's box, with numbers that client/src/wds-ui.js makes true (examples/docs-recipes.spec.mjs measures them in a browser)
+        self.assertIn("26rem wide (416 px at the default font size", guide)
+        self.assertIn("1rem from the right and from the bottom edge of the window", guide)
+        ui = (REPO_DOCS.parents[1] / "client" / "src" / "wds-ui.js").read_text(encoding="utf-8")
+        self.assertIn(".wds-toasts{position:fixed;right:1rem;bottom:1rem;", ui)
+        self.assertIn("width:min(26rem,calc(100vw - 2rem))", ui)
+        # 9, 10: what the mock checks that the sandbox cannot; --wds-sandbox-bar in the checklist and in section 4
+        self.assertIn("**What the mock checks that the sandbox cannot**", guide)
+        self.assertIn("so a file over that size is a quota error there", guide)
+        checklist = guide[guide.index("## Checklist for Claude"):guide.index("## 1. Register a scope")]
+        self.assertIn("top: var(--wds-sandbox-bar, 0px)", checklist)
+        section4 = guide[guide.index("### The library's dialogs and your own modal dialogs"):guide.index("## 5. Where data lives")]
+        self.assertIn("top: var(--wds-sandbox-bar, 0px)", section4)
+        self.assertIn("--wds-sandbox-bar", ui)
+        # 6: headless Chromium has no PDF viewer
+        self.assertIn("Headless Chromium has no PDF viewer", guide)
+        # 4: the write order of a save that creates or replaces a file and an entry
+        self.assertIn("Save a note that gets a new or replaced attachment", guide)
+        self.assertIn("async function saveNoteWithFile(", guide)
+        self.assertIn("Save a note that gets a new or replaced attachment", porting)
+        # 3: the type of a Blob in migrateLocal items
+        self.assertIn("Without `mime`, the `type` of the Blob or File is stored", porting)
+        # the examples are not the Literaturliste any more (the first trial's app)
+        for word in ("literatur", "Literatur", "pdfId", "pdfName"):
+            self.assertNotIn(word, porting)
+            self.assertNotIn(word, (REPO_DOCS.parents[1] / "client" / "README.md").read_text(encoding="utf-8"))
+        # the recipe leaves the new file in place when the note may be stored, and no clean-up of "unreferenced" files is advised
+        self.assertIn("!err.stored && !(err instanceof WDS.errors.OfflineError)", guide)
+        self.assertIn("Do not write a clean-up that removes the files no note names", guide)
+        self.assertNotIn("can be removed at a quiet moment", guide)
+        # the toast box in a narrow window: the window width minus 1rem (the media query below 36rem), in both documents
+        self.assertIn("narrower than 36rem it spans the window width minus 1rem", guide)
+        self.assertNotIn("28rem", guide)
+        self.assertNotIn("minus 2rem", porting)
 
     def test_users_documents_explain_the_old_data_question(self):
         en = self.c.get("/datastore/docs/users.en.md").text

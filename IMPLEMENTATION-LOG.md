@@ -723,3 +723,76 @@ Design notes:
 | `scripts/check-public.sh` | clean (162 files) |
 
 Nothing committed.
+
+
+## Round G: third clean-room trial
+
+### Input
+
+A Claude in a clean-room container ported the local-only "Literaturliste" again, from the public documents and a clone of the public repository only (library 1.0.0, wds-verify from commit bf3a5cc; no Python, so every dynamic run went against the production sandbox). Its port passed wds-verify in the sandbox with **31 passed, 0 failed, 0 warnings, both with and without `--migration-delete`**. The trial was **not representative**: porting.md Example 1 had exactly the Literaturliste's shape (same database name, stores and localStorage key, a result of round F), so the trial took over its `map` almost unchanged and passed the first `--migration-delete` run. Its own 20-step Playwright test (built on drive-library) once in four runs timed out in `unlock()` after `page.reload()` after 30 s, with an empty `data-wds-view` on the topmost library dialog.
+
+What worked, by its account: `store.migrateLocal` (about 30 lines, no `indexedDB` or `localStorage` in the app; the `from` rule), the `seed` block (eight steps, "kept" and "deleted" both checked), drive-library as the base of its own tests, and the checklist of porting.md section 7 (it found a toast hidden under the app's modal and `+dataset.id` / `b.id - a.id` breaking on migrated ids).
+
+Its friction points and what was done:
+
+| # | Point | Decision |
+|---|---|---|
+| 1 | May a German app translate the `onerror` text? | Yes: the message may be in the app's language, the code stays (integration.md section 2, llms.txt rule 5). wds-verify: exact handler pass, translated message info, missing or other handler warn. |
+| 2 | Example 1 keeps an old filter that section 2 advises against | Example 1 is now a cookbook whose `map` leaves out the search field; section 2 refers to it. |
+| 3 | Does `mime` default to the Blob's type? | Yes; the `items` row of porting.md says what is stored without `mime` and that only the `mime` field is compared. |
+| 4 | Write order for a new file plus its entry | A recipe "note with a new attachment" in integration.md (file first, then the entry, then the old file; the new file is removed only when the note is certainly not stored; no clean-up of "unreferenced" files), covered by `examples/docs-recipes.spec.mjs`. |
+| 5 | Who gets the Share button? | Every role (integration.md checklist and section 8): for a member it is the access dialog. |
+| 6 | A PDF in a new tab cannot be checked in headless Chromium | integration.md section 12 says so and what to check instead (a `text/plain` blob, or the popup's `download` event); porting.md section 7 points there. |
+| 7 | The report's headings clash with the README | `wds-verify --heading-level <1-5>`; the dashboard prompt, CLAUDE.md snippet and llms.txt name `--heading-level 3`. |
+| 8 | "Leave room at the bottom right of dialogs" is vague | The toast box is given in numbers that follow the CSS (and a test measures them). |
+| 9 | What is lost without Python 3.13 (mock)? | integration.md lists what the mock checks and the sandbox cannot, and the reverse. |
+| 10 | `--wds-sandbox-bar` is easy to miss | A line in the integration checklist and a bullet in section 4. |
+| 11 | integration.md is too long for one read | llms.txt has an index of both guides with line ranges, computed by the server from the served text (`docs.py`, tested), so it cannot go stale. |
+
+### The hang: what is known
+
+The cause of the trial's hang is still not proven. The empty-view report was not reproduced. The most plausible cause is in drive-library: `formError` waited on a locator for a dialog that had just closed, and "page did not answer" was read as "no dialog". Both are fixed and have tests.
+
+In detail: `formError(d)` called `innerText()` on a locator that matches nothing once the dialog has closed (after a successful unlock), which waits for Playwright's own limit (30 s in plain Playwright, none under `@playwright/test` without `actionTimeout`); and `describeDialog`/`viewOf` read "the page did not answer within 2 s" (Argon2id blocks the main thread) as "no dialog", so `unlock()` and `waitForSheet` could report success or failure too early. Both fit the trial's symptoms (a 30 s timeout, a dialog that is not there, the next runs pass). The library itself was hardened against the related failures found on the way (no request timeout, swallowed exceptions while a view was built), below.
+
+### Decisions
+
+- **Library.** Client option `timeout` (default `Client.defaultTimeout`, 30 s, 0 = none; one more second per 10 KB of an upload, three times as long for `createVault` and `redeemInvite`; `OfflineError`, code `timeout`; the answer's body counts). A write that got no answer is looked at before it is reported (`_landed`: the server holds that version with that commitment: saved), and a conflict whose "theirs" is the value just written is no conflict (not only for lock snapshots). A dialog is never without a view (`loading`, busy, while it is built); a dialog that cannot go on shows `error` with `retry` (a fixed sentence for exceptions, the detail goes to the console; after a second build failure `reload` takes its place); the history dialog is `loading` until its list is there; the access sheet has a plain fallback so that a failure after a successful create never re-enables the create form. A scope answer that arrives late no longer replaces the view that is shown (generation counter); a key file dropped on the dialog is taken only in an idle `unlock` view (never over the access sheet, a loading view or a form in flight); the sandbox re-check after a failed unlock no longer holds the error back (5 s limit, error shown first). `status()` says "locked" while an unlock is still running.
+- **drive-library and wds-verify.** `describeDialog` tells "no dialog" (`null`) from "the page did not answer" (`{ unresponsive: true }`); `viewOf` turns the latter into `''` (not ready: wait), never `null`; `formError` is one `evaluate` with a 1 s limit; `unlock`, `waitForSheet` and `answerMigration` accept "closed" only from a look that was answered, and read the view again before they throw; timeout messages name the time that really passed. `dialogSummary` names view, `aria-busy`, classes and text. wds-verify uses the same functions, presses `retry` in an `error` view (three times at most; a dialog that stays there is a failure, `dialog-error`) and notes the dialog state when it is not ready for 20 s. `onerror` that is exactly the documented handler now has a `pass` row.
+- **Tests for it.** `client/test/dialog-stress.spec.mjs` (16 rounds with a seed; slow, failing and stalled requests; the watcher records more than one dialog, the longest time with no dialog while locked, the longest "loading" and the longest gap between ticks; a second test reloads and calls the drive `unlock()` as the trial's e2e did; a third drops a key file on a loading view, the access sheet and a form in flight; a fourth breaks the build of the form), `client/test/request-timeout.test.mjs` (timeout, body that never arrives, answer lost after the server stored a write), `tools/test/drive-library.test.mjs` (a main thread blocked for 3 s during a submit; `formError` of a closed dialog returns at once). The window hook `__WDS_TIMEOUT_TEST__` is gone: the stress page sets `WDSCore.Client.defaultTimeout`, a plain static that does not depend on `navigator.webdriver`.
+- **Docs.** porting.md Example 1 is now a cookbook (string keys, nested photos array, references both ways, the search field is not migrated) and no longer the Literaturliste's shape; Example 2 is the reverse-reference example. The onerror text may be translated (wds-verify: info, a missing or other handler: warn). `mime` of `migrateLocal` items, a recipe for a note with a new attachment, Share for every role, mock versus sandbox, `--heading-level`, the toast box and `--wds-sandbox-bar` are documented. llms.txt gets an index of both guides that the server computes from the served text, so line ranges cannot go stale.
+- **Note with a new attachment (recipe).** The review found that the catch of `saveNoteWithFile` removed the new file after an `OfflineError` or an `err.stored`, although the note may then be stored and name that file; and that "files no note names can be removed" invites a clean-up that deletes live files (a file is unreferenced between step 1 and step 2, a stale list makes live files look unreferenced, history needs old files). Now the new file is removed only when the note is certainly not stored; the clean-up advice is replaced by "do not write one"; the limits of the recipe (stale form, "mine", history restore) are stated; `examples/docs-recipes.spec.mjs` covers a quota failure, an `OfflineError`, a lost index write (`err.stored`) and a lost answer. The toast box numbers follow the CSS (below 36rem: window width minus 1rem, .5rem from the edges; measured in the test), the `mime` row says that only the `mime` field is compared, the client README example is the Cookbook shape, and llms.txt no longer carries hard-coded line counts (a test checks the section numbers of its reading advice).
+- **Layout shift in the create form.** Found by the integration suite under load (Firefox, about 4 in 100 runs): the strength label appears 120 ms after typing and pushed the "Create vault" button 31 px down between mouse down and mouse up, so the click went to the fieldset. `.wds-strength` now keeps the height of one line while empty.
+- **Stalls during the test runs.** In the first sequential run of this round (the Mac had just been restarted, Spotlight was re-indexing with load averages above 20) several unrelated tests stalled for a minute or more: a page timer gap of 83 s in the stress test, a create-vault click, a wds-verify settle of 60 s, an unlock in a docs-recipes test. None reproduced: the stress test passed five times in a row on Chromium (seeds 96878, 101, 202, 303 and a random one, longest tick gap 140 ms) and every suite passed in the two runs after the load was gone. The gap assertion (15 s) stays; it fails on a machine that stops a page for that long, which is what it is for.
+
+### Rejected or limited, with reasons
+
+- **Progress-based timeout for uploads:** fetch gives no upload progress. The budget is 1 s per 10 KB and the 80 kbit/s assumption is documented (core header, error table).
+- **Time spent in the browser's connection queue still counts against the 30 s timeout.** That is far above what six connections and a concurrency of 16 need.
+- **Clamp or build constant for the test hook:** the hook is gone. The stress page sets the plain static `WDSCore.Client.defaultTimeout` instead.
+- **Argon2id still blocks the main thread.** A worker would need `worker-src` in the CSP.
+- No `timeout` option on `connect()`.
+
+### PLAN.md
+
+Updated to the system as it now is: the clean-room trials and what is pending (status), the translatable `onerror` message (§8, §9), the client timeout and the never-viewless dialogs (§8.1), the new test files (§8.6), the round G drive-library behaviour and `--heading-level` (§9), the llms.txt index (§13), porting.md's two examples (§13), work package 8 (§15), and in §16 the unrepresentative trials and the unproven hang.
+
+### Test counts (final sequential run)
+
+| Suite | Result |
+|---|---|
+| `scripts/test-server.sh` | 501 tests OK |
+| `scripts/test-client.sh` | 136 node tests, 81 Playwright cases passed (Chromium) |
+| `scripts/test-tools.sh` | 113 passed |
+| `scripts/test-integration.sh` | 203 passed, 4 skipped (Chromium, Firefox, WebKit) |
+| `scripts/test-examples.sh` | 41 passed (Chromium) |
+| `scripts/check-public.sh` | clean (164 files) |
+| `wds-verify examples/zeit-notizen/index.html --target mock --hashes client/dist/hashes.json` | 32 passed, 0 failed, 0 warnings (without `--hashes` the published hash of the service is expected: the build is not released) |
+
+One library SRI everywhere: `sha384-fmN0nQDEY+C5dimjydhbS0WkgIoFDxgwHjlNS9Iqm8+CoVz/5o+GXDEl6HDRFsdp` (`client/dist`, `tools/test-apps/{good,bad}`, `examples/zeit-notizen/index.html`; the docs use the `{{sri}}` placeholder).
+
+### Next
+
+A fourth clean-room trial with an app unrelated to `examples/zeit-notizen` and to both porting examples, so that the documents, not a copied example, carry the port.
+
+Nothing committed. The two new test files, `client/test/dialog-stress.spec.mjs` and `client/test/request-timeout.test.mjs`, are still untracked.

@@ -49,7 +49,7 @@ def claude_md(*, sid: str, base: str, repo_url: str, sandbox_id: str | None, enr
         lines.append("- The join code of this scope is a secret of the staff. Never write it into the app, the README, tests, scripts, CLAUDE.md or AGENTS.md. "
                      f"To test against a test vault in the real scope, the person puts the code into the file {JOIN_CODE_FILE} themselves "
                      "(commands: porting.md, \"The join code for tests\"). Never read, print or copy that file and never ask for the code in the chat.")
-    lines.append(f"- After every change run wds-verify ({repo_url}) and update the report in README.md.")
+    lines.append(f"- After every change run wds-verify ({repo_url}) and update the report in README.md (wds-verify --heading-level 3 writes it for a \"## Verification\" heading).")
     return "\n".join(lines)
 
 
@@ -106,7 +106,7 @@ def prompt(lang: str, *, sid: str, date: str, base: str, tag: str, repo_url: str
             out += ["For end-to-end test runs use wds-verify --target sandbox (or --sandbox-copy). Never write the sandbox scope ID "
                     f"{sandbox_id} into the app file: data there is deleted every night."]
         out += [
-            f'When you are done, run wds-verify ({repo_url}, integration.md section "wds-verify") and put its report into the README.',
+            f'When you are done, run wds-verify ({repo_url}, integration.md section "wds-verify") and put its report into the README (--heading-level 3 fits it under a "## Verification" heading).',
             "Add the following section to CLAUDE.md and to AGENTS.md in the app's folder (create them if missing; keep existing content):",
             "",
             snippet,
@@ -162,7 +162,7 @@ def prompt(lang: str, *, sid: str, date: str, base: str, tag: str, repo_url: str
         out += ["Für Testläufe von Anfang bis Ende nimm wds-verify --target sandbox (oder --sandbox-copy). Schreibe die Scope-ID der Testumgebung "
                 f"{sandbox_id} nie in die App-Datei: Die Daten dort werden jede Nacht gelöscht."]
     out += [
-        f'Wenn du fertig bist, führe wds-verify aus ({repo_url}, integration.md, Abschnitt "wds-verify") und übernimm den Bericht in die README.',
+        f'Wenn du fertig bist, führe wds-verify aus ({repo_url}, integration.md, Abschnitt "wds-verify") und übernimm den Bericht in die README (--heading-level 3 passt ihn unter eine Überschrift "## Verification" ein).',
         "Ergänze den folgenden Abschnitt in CLAUDE.md und in AGENTS.md im Ordner der App (lege die Dateien an, falls sie fehlen; behalte den bisherigen Inhalt):",
         "",
         snippet,

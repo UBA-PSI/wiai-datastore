@@ -17,6 +17,8 @@ script tag with its Subresource Integrity hash always names the library that is 
     {{sandbox_wipe}}    nightly wipe time with time zone, e.g. "03:30 Europe/Berlin" ("-" without a sandbox)
     {{sandbox_limits}}  sandbox limits in words, e.g. "512 KB per record, 2 MB per vault, 2 versions" ("-" without a sandbox)
     {{sandbox_section}} the whole paragraph block of llms.txt about the sandbox (one sentence when there is none)
+    {{index_integration}}, {{index_porting}}   only in llms.txt: the sections of that guide with their line ranges in the text as served
+                        (section_index; computed from the served document, so it cannot go stale)
 
 A few lines of Markdown are enough for these pages, so a small renderer is built in (no third-party package): headings,
 paragraphs, fenced code, lists (nested), tables, block quotes, rules, links, bold, italic and code spans. Raw HTML in a
@@ -146,6 +148,77 @@ def placeholders(svc) -> dict:
 
 def fill(text: str, values: dict) -> str:
     return PLACEHOLDER_RE.sub(lambda m: values.get(m.group(1), m.group(0)), text)
+
+
+# -- the index of a guide, for llms.txt ---------------------------------------------------------------------------------
+
+INDEX_DOCS = {"index_integration": "integration", "index_porting": "porting"}
+INDEX_SUBSECTION_LINES = 20   # a "###" subsection is listed when it spans at least this many lines
+_INDEX_HEADING_RE = re.compile(r"(##|###)[ \t]+(.*?)[ \t]*$")
+_INDEX_TITLE_RE = re.compile(r"#[ \t]+(.*?)[ \t]*$")
+
+
+def doc_sections(text: str) -> tuple[int, str, list[tuple[int, int, int, str]]]:
+    """(number of lines, the title of the page, [(first line, last line, level 2 or 3, title)]) of a Markdown text as it is served.
+
+    Lines count from 1, the way a reader with line numbers (the Read tool) sees them. A "##" section runs up to the line before the next "##"
+    (its "###" subsections inside), a "###" up to the line before the next "##" or "###". Headings inside a fenced block are no headings."""
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    heads, title, fence = [], "", None
+    for n, line in enumerate(lines, 1):
+        s = line.strip()
+        m = FENCE_RE.match(s)
+        if fence is None and m:
+            fence = m.group(1)
+            continue
+        if fence is not None:
+            if s.startswith(fence):
+                fence = None
+            continue
+        t = _INDEX_TITLE_RE.fullmatch(line)
+        if t and not title:
+            title = t.group(1).replace("`", "")
+            continue
+        h = _INDEX_HEADING_RE.fullmatch(line)
+        if h:
+            heads.append((n, len(h.group(1)), h.group(2).replace("`", "").replace("**", "")))
+    out = []
+    for i, (n, level, name) in enumerate(heads):
+        end = len(lines)
+        for n2, level2, _ in heads[i + 1:]:
+            if level2 <= level:
+                end = n2 - 1
+                break
+        out.append((n, end, level, name))
+    return len(lines), title, out
+
+
+def section_index(text: str, filename: str) -> str:
+    """The lines for llms.txt: every "##" section of the served guide with its line range, and the "###" subsections of at least
+    INDEX_SUBSECTION_LINES lines, indented. The text before the first section is listed as the introduction."""
+    total, title, sections = doc_sections(text)
+    rows = []
+    if sections and sections[0][0] > 1:
+        rows.append((1, sections[0][0] - 1, 2, "Introduction" + (": " + title if title else "")))
+    for first, last, level, name in sections:
+        if level == 2 or last - first + 1 >= INDEX_SUBSECTION_LINES:
+            rows.append((first, last, level, name))
+    width = max((len(f"{a}-{b}") for a, b, _, _ in rows), default=0)
+    body = "\n".join("  " + ("" if level == 2 else "  ") + f"{a}-{b}".ljust(width) + "  " + name for a, b, level, name in rows)
+    return f"{filename}, {total} lines:\n{body}"
+
+
+def index_placeholders(svc, text: str, values: dict) -> dict:
+    """The index placeholders that `text` (llms.txt) uses: computed from the guide as it is served (placeholders filled)."""
+    out = {}
+    for key, stem in INDEX_DOCS.items():
+        if "{{" + key + "}}" not in text:
+            continue
+        doc = _read_text(svc.docs_dir / (stem + ".md"))
+        out[key] = section_index(fill(doc, values), stem + ".md") if doc is not None else stem + ".md: (not available on this server)"
+    return out
 
 
 # -- Markdown --------------------------------------------------------------------------------------------------------
@@ -404,6 +477,7 @@ async def llms_txt(request):
     if text is None:
         raise not_found("No such document.")
     values = await svc.run(placeholders, svc)
+    values = {**values, **await svc.run(index_placeholders, svc, text, values)}
     return Response(fill(text, values), media_type=None,
                     headers={**TEXT_HEADERS, "Content-Type": "text/plain; charset=utf-8"})
 

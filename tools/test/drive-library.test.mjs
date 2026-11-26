@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { tmpDir } from './helpers.mjs';
 import { startMock } from '../lib/wds-mock.mjs';
-import { createVault, redeemInvite, deleteVault, answerMigration, enableMigrationDelete, unlock, confirmSheet, viewOf, waitForView, dialog, dialogState, fillWhenReady, briefError, readJoinCode, joinCodeFile, DriveError } from '../lib/drive-library.mjs';
+import { createVault, redeemInvite, deleteVault, answerMigration, enableMigrationDelete, unlock, confirmSheet, viewOf, waitForView, dialog, dialogState, formError, describeDialog, fillWhenReady, briefError, readJoinCode, joinCodeFile, DriveError } from '../lib/drive-library.mjs';
 
 let mock, browser, scope, appUrl;
 before(async () => {
@@ -214,6 +214,42 @@ test('readiness: a dialog without a view, or with aria-busy, is "not ready"; vie
   await page.setContent('<div id="d" data-wds-view="" style="width:100px;height:40px">x</div>');
   await page.evaluate(() => setTimeout(() => document.getElementById('d').setAttribute('data-wds-view', 'create'), 400));
   assert.equal(await waitForView(page, 'create', { timeout: 5000 }), 'create');
+});
+
+// A stand-in for the unlock dialog: the submit button runs "onsubmit" (a script) in the page.
+const UNLOCK_HTML = (onsubmit) => '<div id="d" data-wds-view="unlock" style="width:200px;height:100px"><input data-wds="access-id-input" value="ABC"><input data-wds="passphrase" type="password"><div data-wds="form-error"></div><button data-wds="unlock-submit" onclick="' + onsubmit + '">go</button></div>';
+
+test('a page that is busy (Argon2id blocks the main thread) is "not known", never "no dialog": viewOf says "" and unlock() waits for the answer', { timeout: 60000 }, async () => {
+  const page = await (await browser.newContext()).newPage();
+  // wrong passphrase: the page is blocked for 3 s, then shows the error; the old reading of "no answer" as "no dialog" reported success
+  await page.setContent(UNLOCK_HTML("setTimeout(function () { var t = Date.now(); while (Date.now() - t < 3000); document.querySelector('[data-wds=form-error]').textContent = 'Wrong passphrase.'; }, 50)"));
+  await assert.rejects(unlock(page, { accessId: 'ABC', passphrase: 'x', timeout: 20000 }), /unlocking failed: Wrong passphrase/);
+  // the dialog goes away after the block: success, not an error
+  await page.setContent(UNLOCK_HTML("setTimeout(function () { var t = Date.now(); while (Date.now() - t < 3000); document.getElementById('d').remove(); }, 50)"));
+  await unlock(page, { accessId: 'ABC', passphrase: 'x', timeout: 20000 });
+  // during a block of the page, describeDialog says "unresponsive" and viewOf says "not ready" ('')
+  await page.setContent(UNLOCK_HTML(''));
+  await page.evaluate(() => { setTimeout(() => { const t = Date.now(); while (Date.now() - t < 3500); }, 50); });
+  await new Promise((r) => setTimeout(r, 300));
+  assert.deepEqual(await describeDialog(page, { timeout: 500 }), { unresponsive: true });
+  assert.equal(await viewOf(page), '');
+  assert.equal(await viewOf(page), 'unlock');
+});
+
+test('formError of a dialog that closed a moment ago returns "" at once (a locator that matches nothing must not wait 30 s)', { timeout: 60000 }, async () => {
+  const page = await (await browser.newContext()).newPage();
+  await page.setContent(UNLOCK_HTML(''));
+  const d = dialog(page);
+  assert.equal(await formError(d), '');
+  await page.evaluate(() => document.getElementById('d').remove());
+  const t0 = Date.now();
+  assert.equal(await formError(d), '');
+  assert.ok(Date.now() - t0 < 4000, 'took ' + (Date.now() - t0) + ' ms');
+  // a dialog that closes right after the submit: unlock() returns at once
+  await page.setContent(UNLOCK_HTML("document.getElementById('d').remove()"));
+  const t1 = Date.now();
+  await unlock(page, { accessId: 'ABC', passphrase: 'x', timeout: 20000 });
+  assert.ok(Date.now() - t1 < 5000, 'took ' + (Date.now() - t1) + ' ms');
 });
 
 test('redeemInvite: an invite code of the owner opens a vault for a member in another browser; a wrong code is a DriveError; deleteVault removes the test vault', { timeout: 180000 }, async () => {

@@ -51,14 +51,15 @@ An app with one language (only German, say) calls `store.setLocale("de")` once r
 - **`onChange`.** The payload is `{ items, added, removed, changed }`: `items` is the whole list (`{ id, name, meta, created }`), and `added`, `removed` and `changed` are **arrays of id strings** (`changed`: the ids whose meta changed). It fires for other devices, `refresh()` and repairs, never for your own calls.
 - **`load()`.** Only `items()` and `has()` need `await col.load()` first; `get`, `getAll`, `set`, `add` and `remove` load the list themselves.
 - **A settings record.** Read it once at start (`await store.get("settings")`), then save it with `store.autosave("settings", () => state)`: the library writes on top of the version it has read. Without the read, the first save of a record the page does not know is a conflict if the record exists (`store.set` does the same).
-- **`label`.** `label(name)` of `WDS.connect` gets the record name, `"refs/<id>"` for a collection item: look the title up in `col.items()` (the meta) or keep a Map from name to title.
+- **`label`.** `label(name)` of `WDS.connect` gets the record name, `"recipes/<id>"` for a collection item: look the title up in `col.items()` (the meta) or keep a Map from name to title.
+- **A save that creates or replaces a file together with an entry.** Write the new file first, then the entry that names it, then remove the old file, and take the new file away again when the entry write loses with `theirs` or fails: the recipe is in integration.md, section 6, "Files" ("Save a note that gets a new or replaced attachment").
 - **After `resolution === "theirs"`.** The vault holds the other side's value, and the library now knows that version: show `res.value`, keep the typed text in the form and say that the other version was saved first. If the person presses Save again the text is written on top of it (no dialog; the other version stays in the history):
 
   ```js
-  const res = await refs.set(id, typed);
+  const res = await recipes.set(id, typed);
   if (res.resolution === "theirs") showOther(res.value, "Someone saved this entry meanwhile. Save again to replace it with your text.");   // the form stays open, the typed text stays
   ```
-- **Small decisions that are yours, and cheap to write down.** Migrated items keep the order of their old `created` date (`h.created`): sort by what a person sees (a date field of your own), not by id. A filter or search text that the app saves in `settings` comes back after every reload: reset it at start unless that is wanted. When the scope has the breach check on (the dashboard prompt and wds-verify say so), the privacy text carries the second sentence of section 5; an app whose scope is not registered yet carries it too, and `wds-verify` says whether it was needed once the scope exists.
+- **Small decisions that are yours, and cheap to write down.** Migrated items keep the order of their old `created` date (`h.created`): sort by what a person sees (a date field of your own), not by id. A filter or search text that the app saves in `settings` comes back after every reload: reset it at start unless that is wanted, or do not take it over: a field that `map` leaves out of `settings` is not copied (Example 1 leaves out `search`; a person made nothing in it). An app that does restore its filter needs an `afterReload` reset in its test (section 6). When the scope has the breach check on (the dashboard prompt and wds-verify say so), the privacy text carries the second sentence of section 5; an app whose scope is not registered yet carries it too, and `wds-verify` says whether it was needed once the scope exists.
 
 ## 3. Own export and import
 
@@ -133,9 +134,9 @@ What the library does, in this order, and what the person sees:
 
 ```js
 const result = await store.migrateLocal({
-  id: "literatur",                                          // names this migration: 1 to 40 characters of a-z, 0-9 and "-"
-  indexedDB: { name: "literatur", stores: ["refs", "pdfs"] },   // optional: one object or an array; only these stores are read and emptied
-  localStorage: { keys: ["literaturliste.einstellungen"], prefixes: [] },   // optional; a prefix matches with startsWith
+  id: "cookbook",                                           // names this migration: 1 to 40 characters of a-z, 0-9 and "-"
+  indexedDB: { name: "cookbook", stores: ["recipes", "images"] },   // optional: one object or an array; only these stores are read and emptied
+  localStorage: { keys: ["cookbook.prefs"], prefixes: [] },   // optional; a prefix matches with startsWith
   tagged: true,                                             // optional, default true: see "Ids"
   map(old, h) { /* section "map" below */ },                // required; may be async
   texts: { de: { "migrate.title": "Alte Daten übernehmen" } },   // optional: your own words for single dialog texts
@@ -159,7 +160,7 @@ A mistake in the options (a missing `id`, an unknown option, a source that is no
 
 | `old` | |
 |---|---|
-| `old.rows("refs")` | `[{ key, value }]` of that IndexedDB store, in key order; the store name, or `"db/store"` when two databases have a store of that name; `[]` when the database or store does not exist. A key-value store (`put(value, key)`) has the same shape. |
+| `old.rows("recipes")` | `[{ key, value }]` of that IndexedDB store, in key order; the store name, or `"db/store"` when two databases have a store of that name; `[]` when the database or store does not exist. A key-value store (`put(value, key)`) has the same shape. |
 | `old.local` | `{ key: text }` of every configured key and prefix match that exists, the strings as localStorage holds them. |
 | `old.keys(prefix)` | The keys of `old.local` (starting with `prefix`). |
 | `old.json(key)` | `JSON.parse` of one key; `undefined` when the key does not exist; an error that names the key when the text is not JSON. |
@@ -179,7 +180,7 @@ A mistake in the options (a missing `id`, an unknown option, a source that is no
 
 | Field | Written as | Entry |
 |---|---|---|
-| `items` | `col.set(id, value, { meta, created, mime })` | `{ col, id, value, meta?, created?, mime?, from }`: `value` is a Blob, a File or binary data (stored as bytes, type kept) or JSON. `id` is 1 to 200 characters without `/` (use `h.id`). |
+| `items` | `col.set(id, value, { meta, created, mime })` | `{ col, id, value, meta?, created?, mime?, from }`: `value` is a Blob, a File or binary data (stored as bytes) or JSON. `id` is 1 to 200 characters without `/` (use `h.id`). **`mime`** is the type that `store.getBlob` gives back, and it counts only for bytes (a JSON value ignores it). Without `mime`, the `type` of the Blob or File is stored, so `value: h.blob(row.value)` of a File of type `image/jpeg` needs none; `h.blob` of a row `{ data, type }` gives a Blob of that `type`, and one of a `data:` URL the type of the URL. A Blob without a type, or a typed array or ArrayBuffer you pass as the value, is stored without a type and `getBlob` returns `application/octet-stream`: give `mime` then, or to override a type that is wrong. The type is no part of the check against the vault (the bytes are), but a `map` that changes only the `mime` field counts as a corrected `map` (below; the type of a Blob that has no `mime` field is not compared). |
 | `records` | `store.set(name, value, { mime })` | `{ name, value, mime?, from }` for single records such as a timer. The name must not be inside the prefix of a collection, nor start with `.wds/`. |
 | `settings` | filled into one record | `{ record, value, from }`: `value` is a JSON object of old settings. The library adds the keys that the vault's record lacks (see `WDS.fillGaps` below) and never overwrites one; it retries, and asks nothing. What the vault already has, and every field of the old JSON that `map` does not return, is **not kept**: it is deleted with the old key and exists only in the backup. |
 
@@ -188,7 +189,7 @@ A mistake in the options (a missing `id`, an unknown option, a source that is no
 - **`map` runs twice and both results must be identical** (same ids, same JSON). Ids come from `h.id`, never from `crypto.randomUUID()`, `Math.random()` or the clock (`Date.now()`, `new Date()` without an argument); otherwise the run fails (`failed`, `why` says so). An interrupted run could not continue with random ids: it would copy everything again.
 - A JSON value must not contain a Blob, a typed array, a Map or a Set: JSON would write them as `{}`. Make the file its own item (`h.blob`) and refer to it by id. BigInt and cyclic values stop the run. Dates become ISO strings. A JSON value larger than `max_value_bytes` is "too large" (below).
 - Every id and every name is checked before the first write (length, `/`, duplicates inside one run, a collection that is not of this store, a record inside a collection's prefix). Every `h.ref` result must be the id of an item of the same run, else the run stops.
-- `map` may build new objects (`{ ...v, pdfId }`) or change the copies it was given (`v.pdfId = h.ref(...)`); the old rows are not affected either way.
+- `map` may build new objects (`{ ...v, photos }`) or change the copies it was given (`v.cover = h.ref(...)`); the old rows are not affected either way.
 - **A mistake in `map`, or in one person's data, is a `failed` result, never a rejection**: a missing `from`, an id with `/`, an unknown store in `old.rows`, a `created` that is not a number, an `old.json` of a damaged key. The page must still start for that person, so the library writes the message with `console.error`, shows the notice with the backup button, deletes nothing and returns `{ status: "failed", why }`. Only wrong options reject (before anything is read).
 - **A damaged value** (a localStorage text that is no JSON): `old.json(key)` fails the run, the old data stays and the person can download the backup. To let the person go on anyway, read `old.local[key]` yourself and copy the text unchanged into a record (`records: [{ name: "damaged-settings", value: { text: old.local[key] }, from: key }]`): the data goes into the vault instead of being dropped.
 - **A corrected `map`.** The marker remembers, per entry, what `map` made of it. An entry that `map` now makes differently is new again (it goes through the check against the vault; the entries that differ are offered as "Entries that differ"); one that it makes the same way is done. When you test a corrected `map` in the sandbox (which keeps the old data), the first run's entries are already in the vault: use a new `id`, a fresh browser profile or wait for the nightly wipe. The library prints a console warning when it finds a marker.
@@ -199,8 +200,8 @@ A mistake in the options (a missing `id`, an unknown option, a source that is no
 
 An old key becomes the id of an entry: `h.id(oldKey)` is `<tag>-<token>` with `tagged: true` and `<token>` alone with `tagged: false`. The token is `s` plus the URL-encoded string for a string key (`"a/b"` gives `sa%2Fb`), `b` plus hex for a binary key and `j` plus the URL-encoded JSON text for everything else (the number 12 gives `j12`).
 Different keys never give the same id (1 and "1", "a/b" and "a_b"), an id never contains `/`, and one longer than 200 characters is cut (the first 180 characters, `~` and a hash). The ending is appended: `h.id(7, ".pdf")` is `<tag>-j7.pdf`.
-**An id that two sides compute must be computed with the same call.** A reference gets its target's id from `h.ref("pdfs", v.pdfId, ".pdf")`; the target gets it from `h.id(row.key, ".pdf")`. If the reference side does not know the file name (the usual case: the entry holds only the number of its PDF),
-use a fixed ending on both sides (`".pdf"`); `h.ref` returns `null` when the target row is gone, so a dead reference never reaches the vault.
+**An id that two sides compute must be computed with the same call.** A reference gets its target's id from `h.ref("images", p.image, ".jpg")`; the target gets it from `h.id(row.key, ".jpg")`. If the reference side does not know the file name (the usual case: the entry holds only the key of its image),
+use a fixed ending on both sides (`".jpg"`: the old app saved every photo as JPEG); `h.ref` returns `null` when the target row is gone, so a dead reference never reaches the vault.
 
 **Do you need the tag in the item ids? Decide by the old ids.**
 
@@ -219,47 +220,49 @@ and arithmetic on ids (`Number(id)` sorts, a counter `nextId = max + 1` gives `N
 
 **Two stores with the same keys** (notes 1, 2, 3 and todos 1, 2, 3) that go into **one** collection give the same id twice: the run stops (`failed`, "two entries would get the same name"). Use one collection per store, or put the store into the key on both sides: `h.id(["notes", row.key])` for the item and for every reference to it (`h.ref` builds `h.id(oldKey)` only, so write such a reference yourself with the same `h.id` call).
 
-### Example 1: references in both directions, files, settings in localStorage
+### Example 1: string keys, a list of photos inside a recipe, references in both directions, settings in localStorage
 
-The old "Literaturliste": the IndexedDB database `literatur` with the store `refs` (`{ id, title, authors, year, pdfId, pdfName, created }`, auto-increment ids) and the store `pdfs` (`{ id, name, blob }`, auto-increment ids), and one localStorage key with the settings `{ theme, sort, statsOpen, filter }`.
-In the new app a reference points to its PDF (`pdfId`) and the PDF's meta points back (`ref`). Both sides compute the PDF's id with the same call and the same ending `".pdf"` (the reference side does not know the file name); a reference to a PDF that does not exist becomes `null`. Run against the real server with a seeded old database, this block is part of the repository's tests.
+The old "Cookbook": the IndexedDB database `cookbook` with the store `recipes` (keys are the names that the person gave: `"apple-pie"`, `"Tarte Tatin"`; values `{ title, portions, steps: [text], photos: [{ image, caption }], saved }`, where `image` is the key of a row in `images` and `saved` an ISO date)
+and the store `images` (keys `"img-1"`, `"img-2"`; each value is a `File`; the old app re-encoded every upload as JPEG), and one localStorage key `cookbook.prefs` with `{ units, view, search }`.
+In the new app a recipe lists its photos (`photos: [{ image: <id of the image>, caption }]`) and the image's meta points back (`recipe`). Both sides compute the image's id with the same call and the same fixed ending `".jpg"` (the recipe side does not know the file name);
+a photo whose image row is gone keeps its caption and gets `image: null`. Example 2 shows the other shape, where only the file points to its owner. Run against the real server with a seeded old database, this block is part of the repository's tests.
 
 ```js
-const refs = store.collection("refs/", { meta: (r) => ({ title: String(r.title || "").slice(0, 80) }) });
-const pdfs = store.collection("pdfs/");
+const recipes = store.collection("recipes/", { meta: (r) => ({ title: String(r.title || "").slice(0, 80) }) });
+const images = store.collection("images/");
 
 const result = await store.migrateLocal({
-  id: "literatur",
-  indexedDB: { name: "literatur", stores: ["refs", "pdfs"] },
-  localStorage: { keys: ["literaturliste.einstellungen"] },
+  id: "cookbook",
+  indexedDB: { name: "cookbook", stores: ["recipes", "images"] },
+  localStorage: { keys: ["cookbook.prefs"] },
   map(old, h) {
-    const owner = new Map();                            // old pdf key (as JSON) -> id of the reference that points to it: the other direction, for the pdf's meta
-    for (const row of old.rows("refs")) if (row.value && row.value.pdfId != null) owner.set(JSON.stringify(row.value.pdfId), h.id(row.key));
-    const items = old.rows("refs").map((row) => {
+    const photosOf = (v) => (v && Array.isArray(v.photos) ? v.photos : []);
+    const owner = new Map();                            // old image key -> id of the recipe that shows it: the other direction, for the image's meta
+    for (const row of old.rows("recipes")) for (const p of photosOf(row.value)) if (!owner.has(p.image)) owner.set(p.image, h.id(row.key));
+    const items = old.rows("recipes").map((row) => {
       const v = row.value;
-      if (!v || typeof v.title !== "string") h.fail(row, "not an entry with a title");
-      const { id, ...rest } = v;                        // the old counter is the key now
-      const pdfId = h.ref("pdfs", v.pdfId, ".pdf");     // the id that the pdf side computes below; null when the pdf row is gone
-      return { col: refs, id: h.id(row.key), from: row, created: h.created(v.created),
-        value: { ...rest, pdfId, pdfName: pdfId ? v.pdfName || null : null } };
+      if (!v || typeof v.title !== "string") h.fail(row, "not a recipe with a title");
+      const photos = photosOf(v).map((p) => ({ image: h.ref("images", p.image, ".jpg"), caption: String(p.caption || "") }));   // the id that the image side computes below; null when the image row is gone
+      return { col: recipes, id: h.id(row.key), from: row, created: h.created(v.saved),
+        value: { title: v.title, portions: Number(v.portions) || 1, steps: Array.isArray(v.steps) ? v.steps.map(String) : [], photos } };
     });
-    for (const row of old.rows("pdfs")) {
-      const ref = owner.get(JSON.stringify(row.key));
-      items.push({ col: pdfs, id: h.id(row.key, ".pdf"), from: row, value: h.blob(row.value),
-        meta: { name: String(row.value.name || "dokument.pdf").slice(0, 200), ...(ref ? { ref } : {}) } });
+    for (const row of old.rows("images")) {
+      items.push({ col: images, id: h.id(row.key, ".jpg"), from: row, value: h.blob(row.value),   // the value is a File: h.blob gives it back as it is, with its type; no mime here, so the type is kept (image/jpeg)
+        meta: { name: String(row.value.name || "photo.jpg").slice(0, 100), ...(owner.has(row.key) ? { recipe: owner.get(row.key) } : {}) } });
     }
-    const prefs = old.json("literaturliste.einstellungen") || {};
-    return { items, settings: { record: "settings", from: "literaturliste.einstellungen",
-      value: { theme: prefs.theme, sort: prefs.sort, statsOpen: prefs.statsOpen, filter: prefs.filter } } };
+    const prefs = old.json("cookbook.prefs") || {};
+    return { items, settings: { record: "settings", from: "cookbook.prefs",
+      value: { units: prefs.units, view: prefs.view } } };   // prefs.search is left out on purpose: the new app starts with an empty search (section 2); a field that map does not return is deleted with the old key and exists only in the backup
   },
 });
 ```
+
 
 ### Example 2: a localStorage JSON, notes, files and a key-value store
 
 The example app `examples/zeit-notizen` has a local-only predecessor in `examples/zeit-notizen/old/index.html`: projects and time entries as one JSON text in the localStorage key `zeitnotizen.daten` (two counters, so `p1` and `e1` keep their ids apart), notes with auto-increment ids in the IndexedDB database `zeitnotizen`,
 attachments with a File and the id of their note, and a key-value store `meta` with the rows `timer` and `lang`. This is the code of the example app (the field names of its records; the file `index.html` holds exactly this block, between two marker comments).
-It shows `records` (the running timer), `settings` (the language, filled in only where the vault has none), a reference from the file to its note (`h.ref`), `h.skip` for rows that are no user data (an unknown key of the key-value store, an empty JSON), and an id with an ending that only the file side builds. Nothing a person made is skipped: an attachment whose note is gone is copied with `note: null`, a timer of a deleted project without a project.
+It shows `records` (the running timer), `settings` (the language, filled in only where the vault has none), a **reverse reference**, from the file to its note (`h.ref`; the note does not list its files, so nothing computes a file's id from the other side), `h.skip` for rows that are no user data (an unknown key of the key-value store, an empty JSON), and an id with an ending that only the file side builds. Nothing a person made is skipped: an attachment whose note is gone is copied with `note: null`, a timer of a deleted project without a project.
 
 ```js
 const result = await store.migrateLocal({
@@ -327,7 +330,7 @@ async function start() {                               // runs after every unloc
     const result = await takeOverOldData();            // the call above, in a function; nothing else of the app has read or written the vault yet
     if (result.status === "failed") console.warn("old data not taken over:", result.why);
   }
-  renderList(await refs.load());                       // the collections already contain what was taken over
+  renderList(await recipes.load());                    // the collections already contain what was taken over
 }
 ```
 
@@ -435,7 +438,7 @@ In a real browser the old data would be deleted while its only copy is in a sand
 ### Your own tests: vaults, members, the library's dialogs
 
 `tools/lib/drive-library.mjs` in the clone answers the library's dialogs for your own Playwright scripts (integration.md, section 12, "Driving the library's dialogs"): `createVault(page)`, `unlock(page, { accessId, passphrase })`, `answerMigration(page)` (backup, take over; for too-large entries each download and delete),
-and `redeemInvite(page, { code, passphrase? })` for a member test: the unlock dialog is open, a member has an invite code from `store.share()`; it fills the code and a passphrase of the member's own and confirms the access sheet. It resolves `{ accessId, passphrase }`.
+and `redeemInvite(page, { code, passphrase? })` for a member test: the unlock dialog is open, a member has an invite code from `store.share()`; it fills the code and a passphrase of the member's own and confirms the access sheet. It resolves `{ accessId, passphrase }`. When a wait times out, the `DriveError` names what the dialog looked like (view, `aria-busy`, classes, text); a dialog in the view `error` has a `retry` button (`[data-wds="retry"]`) that starts the step again, and a request that stalls for 30 s ends there as well.
 Use the sandbox (a copy from `--sandbox-copy`) for such tests, or a test vault in your own scope.
 
 ### The join code for tests (a real scope)
@@ -473,7 +476,7 @@ The library's dialogs (unlock after a session expired, conflict, share, the migr
 2. **Keep the typed values when a save fails** (`OfflineError`, `QuotaError`): the form stays open with what the person typed. After "theirs" (`res.resolution === "theirs"`) show `res.value` and keep the typed text available.
 3. **Disable the save button while a write is in flight** and enable it again in `finally`.
 4. **Submit handlers call `preventDefault()`** (the policy has `form-action 'none'`; a form without such a handler would navigate and be blocked).
-5. **A restored search or filter needs an `afterReload` reset in `wds-verify.json`** (section 6).
+5. **A restored search or filter needs an `afterReload` reset in `wds-verify.json`** (section 6), or is not restored at all (section 2, "Small decisions").
 6. **Ids go into selectors only through `CSS.escape(id)`** (or `data-id` and `dataset.id`): migrated ids contain `%` and `-` (section 4, "Ids").
 
 ```js
@@ -487,7 +490,7 @@ form.addEventListener("submit", async (event) => {
   const values = readForm(form);                       // (2) the typed values stay in the form until the save worked
   saveButton.disabled = true;                          // (3) no second save while one is in flight
   try {
-    const res = await refs.set(id, values);
+    const res = await recipes.set(id, values);
     if (res.resolution === "theirs") showSaved(res.value);   // the other side won: show what is stored now, the typed text is still in the form
     else { closeForm(); showSaved(values); }
   } catch (err) {
@@ -500,7 +503,7 @@ form.addEventListener("submit", async (event) => {
 const row = document.querySelector("#item-" + CSS.escape(id));   // (6) an id goes into a selector only through CSS.escape (or read it from dataset.id)
 ```
 
-7. **Open a file from the vault in a new tab inside the click.** `window.open(blobUrl)` after `await store.getBlob(…)` is no longer part of the click: over a slow connection the popup blocker refuses it. Open the (empty) window first, then fill it, and offer a download link when the window is refused:
+7. **Open a file from the vault in a new tab inside the click.** `window.open(blobUrl)` after `await store.getBlob(…)` is no longer part of the click: over a slow connection the popup blocker refuses it. Open the (empty) window first, then fill it, and offer a download link when the window is refused (a test in Playwright's headless Chromium cannot see a PDF in that window: integration.md, section 12, "Driving the library's dialogs", says what to check instead):
 
 ```js
 openButton.onclick = async () => {
@@ -521,4 +524,4 @@ openButton.onclick = async () => {
 ```
 
 8. **The app's own notices live inside its dialogs.** A fixed-position element of the page (a `#toast` with `z-index: 20`) lies **under** a modal dialog: a "please enter a title" message would be invisible while the dialog is open. Put validation and error messages inside the dialog (`#form-error`), or make the notice a `popover="manual"` element, and keep the page's own toast for messages that are shown while no dialog is open.
-9. **Library notices can cover your dialog's buttons** (section 6, "Notices above your dialogs"): they sit at the bottom right in the top layer. Leave room at the bottom right of dialogs, and let a test press `toast-dismiss` first.
+9. **Library notices can cover your dialog's buttons** (section 6, "Notices above your dialogs"): a notice is a box of 26rem width (416 px at the default font size; in a window narrower than 36rem the window width minus 1rem), 1rem from the right and the bottom edge of the **window** (.5rem from all edges in a narrow window), 5 to 8rem high (integration.md, section 4 has the exact numbers). It covers the bottom right of a dialog that reaches into that corner, and a margin inside the dialog does not help. Put the footer buttons of your dialogs (Save, Cancel) on the **left** or in the middle, and let a test press `toast-dismiss` first.

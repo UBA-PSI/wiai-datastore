@@ -75,8 +75,10 @@ the weekly overview at 1280, 1024, 800 and 380 px (totals in view, cards on a na
 
 ```sh
 cd tools && npm install && npx playwright install chromium && cd ..
-WDS_VERIFY_OFFLINE=1 node tools/wds-verify.mjs examples/zeit-notizen/index.html
+WDS_VERIFY_OFFLINE=1 node tools/wds-verify.mjs examples/zeit-notizen/index.html --heading-level 3
 ```
+
+`--heading-level 3` writes the report's title as `###` and its sections as `####`, so that it fits under this `## Verification` heading (the title line and the "Target" line are left out below).
 
 `WDS_VERIFY_OFFLINE=1` switches off the two online lookups (the published hashes and the scope check): the demo scope `zeitnotizen-demo-xn8kp9` is not registered at the production service, and the tool fails an unknown scope. For an app with a registered scope, leave the variable out.
 Python 3.13 with the server packages (`.venv`) makes the target "mock"; without it use `--target sandbox` (the tool then runs against the public sandbox with a copy of the page).
@@ -88,7 +90,7 @@ The tool plays the older version first (the `seed` block) and the library's migr
 
 This is a smoke test, not a proof. It catches the usual mistakes (plaintext in storage or requests, wrong script tag, wide CSP); it cannot see what it did not trigger.
 
-### All checks
+#### All checks
 
 | Check | Result | Details |
 |---|---|---|
@@ -134,7 +136,7 @@ This is a smoke test, not a proof. It catches the usual mistakes (plaintext in s
 
 Dynamic run: 29.7 s, 0 canary field(s), 23 record write(s).
 
-### Not tested
+#### Not tested
 
 This run cannot see the following. Test each by hand before you hand the app over:
 
