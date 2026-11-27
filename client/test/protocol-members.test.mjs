@@ -60,7 +60,9 @@ test('an unredeemed invite expires; owners can cancel it', async () => {
   await rejects(newClient(ctx.world).redeemInvite({ inviteCode: i2.code.display, passphrase: 'abc def ghi jkl' }), core.errors.RequestError);
   await rejects(ctx.founder.createInvite({ role: 'owner' }), core.errors.UsageError);
   await rejects(ctx.founder.createInvite({ role: 'write', expiresIn: 20 * 86400 }), core.errors.UsageError);
-  await rejects(newClient(ctx.world).redeemInvite({ inviteCode: i2.code.display.slice(0, -1) + (i2.code.display.endsWith('0') ? '1' : '0'), passphrase: 'abc def ghi jkl' }), core.errors.UsageError);
+  // flip the lowest bit of the last symbol: it is a check bit, so the data stays and the check always fails
+  const B32 = '0123456789ABCDEFGHJKMNPQRSTVWXYZ', last = i2.code.display.slice(-1);
+  await rejects(newClient(ctx.world).redeemInvite({ inviteCode: i2.code.display.slice(0, -1) + B32[B32.indexOf(last) ^ 1], passphrase: 'abc def ghi jkl' }), core.errors.UsageError);
 });
 
 test('invalid renewals are ignored, valid member renewals are adopted', async () => {

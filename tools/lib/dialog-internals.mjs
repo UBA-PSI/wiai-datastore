@@ -1,11 +1,16 @@
-// The steps that drive-library.mjs and the dynamic checks of wds-verify are made of (tests of an app use drive-library.mjs). A dialog is
-// READY when it has a data-wds-view and no aria-busy="true"; the library never leaves a dialog without a view ("loading" while it is built,
-// "error" with a retry when it cannot go on). Failures throw DriveError; a timeout says what the dialog looked like (dialogSummary).
+// Driving the library's dialogs from a Playwright page by their stable attributes (data-wds-view on the dialog, data-wds on every control; they do
+// not change with the language). One internal module for wds-verify and the repository tests; an app's own end-to-end test selects the dialogs by
+// their data-wds attributes (tools/README.md). A dialog is READY when it has a data-wds-view and no aria-busy="true"; the library never leaves a
+// dialog without a view ("loading" while it is built, "error" with a retry when it cannot go on). Failures throw DriveError; a timeout says what the
+// dialog looked like (dialogSummary).
+//   createVault(page, { passphrase?, joinCode?, confirm?, timeout? })  -> { accessId, passphrase, next }   the unlock dialog is open: create a vault
+//   unlock(page, { accessId?, passphrase, timeout? })                  -> { next }                           the unlock dialog is open: unlock the vault
+//   redeemInvite(page, { code, passphrase?, confirm?, timeout? })      -> { accessId, passphrase }          join with an invite code
+//   confirmSheet(page)                                                 -> the access ID                      the access sheet is open: confirm it
+//   answerMigration(page, { backup?, timeout?, downloads? })           -> { backup }                         answer the question of store.migrateLocal
+// next: the view the dialog ended on: null when it is gone, else 'notice', 'sheet', 'migrate', 'progress', ... (an app that calls migrateLocal after
+// the unlock continues with answerMigration). Do not await store.unlock() before the call: it settles only after the dialogs are answered.
 import { randomBytes } from 'node:crypto';
-import { readFileSync, statSync, realpathSync, existsSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join, dirname, resolve } from 'node:path';
-import { spawnSync } from 'node:child_process';
 
 export class DriveError extends Error {}
 
@@ -124,58 +129,14 @@ export async function fillWhenReady(locator, text, { timeout = 15000, attempts =
   throw last;
 }
 
-// ---- the join code of a scope (for tests against a scope with the enrollment "join code") ----
-// The code is a credential: never taken from the command line or the environment, never printed. The person who owns the scope writes it
-// into a file in their own terminal: opts.joinCode, else the file in WDS_JOIN_CODE_FILE, else ~/.wds/join-code. The file must be a regular
-// file, not readable by other users (not checked on Windows) and outside every git repository (an ignored, untracked file in another
-// repository than the working directory's is accepted). No error message contains the code.
-export function joinCodeFile() {
-  return process.env.WDS_JOIN_CODE_FILE || join(homedir(), '.wds', 'join-code');
-}
-function repoRootOf(path) {
-  for (let p = path; ; p = dirname(p)) {
-    if (existsSync(join(p, '.git'))) return p;
-    if (dirname(p) === p) return null;
-  }
-}
-function joinCodeHelp(path) {
-  const isDefault = !process.env.WDS_JOIN_CODE_FILE;
-  const shown = isDefault ? '~/.wds/join-code' : path;
-  const dir = isDefault ? '~/.wds' : dirname(path);
-  return 'The person who owns the scope (not the agent) creates the file in their own terminal:\n'
-    + '    mkdir -p ' + dir + ' && chmod 700 ' + dir + '\n'
-    + '    (umask 077; cat > ' + shown + ')        # paste the join code, press Enter, then Ctrl-D\n'
-    + '  (on Windows: create ' + (isDefault ? '%USERPROFILE%\\.wds\\join-code' : path) + ' with Notepad)\n'
-    + 'and deletes it afterwards (rm ' + shown + '). Never read, print or copy that file, and never ask for the code in the chat: give the person these commands and wait until they say it is there.';
-}
-export function readJoinCode({ file } = {}) {
-  const path = resolve(file || joinCodeFile());
-  if (!existsSync(path)) throw new DriveError('this scope asks for a join code and the file ' + path + ' does not exist. ' + joinCodeHelp(path));
-  let real, st;
-  try { real = realpathSync(path); st = statSync(real); } catch (e) { throw new DriveError('the join code file ' + path + ' cannot be read (' + ((e && e.code) || 'error') + ')'); }
-  if (!st.isFile()) throw new DriveError('the join code file ' + path + ' is not a regular file');
-  if (process.platform !== 'win32' && (st.mode & 0o077) !== 0) throw new DriveError('the join code file ' + path + ' can be read by other users; run: chmod 600 ' + path);
-  const repo = repoRootOf(dirname(real));
-  if (repo) {
-    const mine = repoRootOf(process.cwd());
-    const git = (...a) => spawnSync('git', ['-C', repo, ...a], { encoding: 'utf8' });
-    const safe = repo !== mine && git('check-ignore', '-q', '--', real).status === 0 && git('ls-files', '--error-unmatch', '--', real).status !== 0;
-    if (!safe) throw new DriveError('the join code file ' + path + ' lies in the git repository ' + repo + '; the file must be outside every repository (the default is ~/.wds/join-code)');
-  }
-  let text;
-  try { text = readFileSync(real, 'utf8').trim(); } catch (e) { throw new DriveError('the join code file ' + path + ' cannot be read (' + ((e && e.code) || 'error') + ')'); }
-  if (!text) throw new DriveError('the join code file ' + path + ' is empty');
-  return text;
-}
-
 // ---- single steps (d: the dialog locator) ----
 // "Create a new vault" in the unlock dialog.
 export async function chooseCreate(d) { await ctl(d, 'to-create').click({ timeout: 5000 }); }
-// Fill the create form and press the button. A join-code field gets the option joinCode or the join code file (see readJoinCode).
+// Fill the create form and press the button. A join-code field is filled from the option joinCode.
 export async function submitCreate(d, { passphrase, joinCode } = {}) {
   if (await ctl(d, 'join-code').first().isVisible().catch(() => false)) {
-    const code = joinCode !== undefined ? joinCode : readJoinCode();
-    await fillWhenReady(ctl(d, 'join-code'), code, { check: 'nonempty' });
+    if (joinCode === undefined) throw new DriveError('this scope asks for a join code: pass { joinCode }');
+    await fillWhenReady(ctl(d, 'join-code'), joinCode, { check: 'nonempty' });
   }
   await fillWhenReady(ctl(d, 'passphrase'), passphrase);
   await fillWhenReady(ctl(d, 'passphrase-repeat'), passphrase);
@@ -205,3 +166,128 @@ export async function submitRedeem(d, { code, passphrase }) {
 // ---- whole flows ----
 // A passphrase that passes the library's rules.
 export function newPassphrase() { return 'wdsv-' + randomBytes(5).toString('hex') + '-' + randomBytes(5).toString('hex') + '-' + randomBytes(5).toString('hex'); }
+
+// ---- whole flows (what a test of an app does with the dialogs) ----
+// The views a submit has not left yet: any other view (or none: the dialog is gone) is where the dialog ended up.
+const NOT_DONE = ['unlock', 'loading', '', 'error'];
+// After the submit: the view the dialog moved on to (null: it is gone). A look that finds no dialog is repeated once after a moment: a dialog
+// that opens right after this one (the question of migrateLocal) must not be missed. Throws DriveError with the dialog's error text.
+async function waitForNext(page, d, what, timeout) {
+  const t0 = Date.now();
+  for (;;) {
+    const view = await viewOf(page);   // null only when the page answered and has no dialog; '' while the page is busy (Argon2id) or reloading
+    if (!NOT_DONE.includes(view)) {
+      if (view !== null) return view;
+      await sleep(400);
+      return viewOf(page);
+    }
+    const err = view === '' ? '' : await formError(d);
+    if (err) {
+      const now = await viewOf(page);   // the error was read from a dialog that may have moved on
+      if (!NOT_DONE.includes(now)) return now;
+      throw new DriveError(what + ' failed: ' + err);
+    }
+    if (Date.now() - t0 > timeout) {
+      const last = await viewOf(page);
+      if (!NOT_DONE.includes(last)) return last;
+      throw new DriveError(what + ' timed out after ' + since(t0) + ' s; the dialog shows ' + (last ? 'view "' + last + '"' : 'no view (or the page did not answer)') + '; ' + await dialogSummary(page));
+    }
+    await sleep(150);
+  }
+}
+
+// The access sheet after creating a vault: read the access ID, tick "I have saved it", continue. Resolves the access ID shown.
+export async function confirmSheet(page, { timeout = 10000 } = {}) {
+  const d = dialog(page);
+  const accessId = ((await ctl(d, 'access-id').first().innerText({ timeout: 3000 }).catch(() => '')) || '').trim();
+  try {
+    await ctl(d, 'sheet-confirm').check({ timeout: 5000 });
+    await ctl(d, 'sheet-continue').click({ timeout: 5000 });
+  } catch (e) {
+    const said = (await formError(d)) || ((await d.innerText({ timeout: 2000 }).catch(() => '')) || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+    throw new DriveError('the access sheet could not be confirmed: ' + String(e.message).split('\n')[0] + (said ? '; the dialog says: "' + said + '"' : ''));
+  }
+  await d.waitFor({ state: 'hidden', timeout }).catch(() => {});
+  return accessId;
+}
+
+// The question of store.migrateLocal (view migrate): download the copy of the old data first (migrate-backup, when "backup" is true), then "Take over"
+// (migrate-yes). Resolves { backup: <file name> | null }; throws DriveError when the library ends in its failure dialog (view migrate-failed).
+// downloads: an optional array that receives the file names.
+export async function answerMigration(page, { backup = true, timeout = 60000, downloads } = {}) {
+  const t0 = Date.now();
+  const out = { backup: null };
+  for (;;) {
+    const v = await viewOf(page);
+    const d = dialog(page);
+    if (v === 'migrate') {
+      if (backup && !out.backup) {
+        const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 15000 }), ctl(d, 'migrate-backup').click({ timeout: 5000, noWaitAfter: true })]);
+        out.backup = dl.suggestedFilename();
+        if (downloads) downloads.push(out.backup);
+      }
+      await ctl(d, 'migrate-yes').click({ timeout: 5000 });
+      await sleep(200);
+    } else if (v === 'migrate-failed') {
+      throw new DriveError('the migration failed: ' + (((await d.innerText({ timeout: 2000 }).catch(() => '')) || '').replace(/\s+/g, ' ').trim().slice(0, 200)));
+    } else if (v === null && (out.backup || Date.now() - t0 > 2000)) return out;
+    if (Date.now() - t0 > timeout) throw new DriveError('answering the migration dialogs timed out after ' + since(t0) + ' s; the dialog shows ' + (v ? 'view "' + v + '"' : 'nothing') + '; ' + await dialogSummary(page));
+    await sleep(150);
+  }
+}
+
+// Wait for the access sheet after a submit; throws DriveError with the dialog's error (form-error) or when it closes without a sheet.
+async function waitForSheet(page, d, what, timeout) {
+  const t0 = Date.now();
+  for (;;) {
+    const view = await viewOf(page);   // '' (not ready, or the page did not answer) is never "closed"
+    if (view === 'sheet') return;
+    const err = view === '' ? '' : await formError(d);
+    if (err) {
+      if ((await viewOf(page)) === 'sheet') return;   // the error was read from a dialog that has moved on
+      throw new DriveError(what + ' failed: ' + err);
+    }
+    if (view === null) throw new DriveError(what + ' failed: the dialog closed without an access sheet');
+    if (Date.now() - t0 > timeout) {
+      if ((await viewOf(page)) === 'sheet') return;
+      throw new DriveError(what + ' timed out after ' + since(t0) + ' s; ' + await dialogSummary(page));
+    }
+    await sleep(150);
+  }
+}
+const sheetAccessId = async (page) => ((await ctl(dialog(page), 'access-id').first().innerText({ timeout: 3000 }).catch(() => '')) || '').trim();
+
+// The app has called store.unlock() and its dialog is open: create a vault (unlock dialog -> create -> access sheet -> confirmed).
+// opts: passphrase (default: a generated one), joinCode (for a scope that needs one), confirm (default true;
+// false leaves the access sheet open for confirmSheet(page) and next is 'sheet'), timeout (ms per step).
+export async function createVault(page, { passphrase = newPassphrase(), joinCode, confirm = true, timeout = 60000 } = {}) {
+  const view = await waitForView(page, ['unlock', 'create'], { timeout });
+  if (view === 'unlock') { await chooseCreate(dialog(page)); }
+  await waitForView(page, 'create', { timeout });
+  const d = dialog(page);
+  await submitCreate(d, { passphrase, joinCode });
+  await waitForSheet(page, d, 'creating the vault', timeout);
+  if (!confirm) return { accessId: await sheetAccessId(page), passphrase, next: 'sheet' };
+  const accessId = await confirmSheet(page);
+  return { accessId, passphrase, next: await waitForNext(page, d, 'creating the vault', timeout) };
+}
+
+// The app has called store.unlock() and its dialog is open: join a vault with an invite code (unlock dialog -> "I have an invite" -> redeem form
+// -> access sheet -> confirmed). opts: code (the invite code, required), passphrase (default: generated; the member's own passphrase), confirm (default true), timeout.
+export async function redeemInvite(page, { code, passphrase = newPassphrase(), confirm = true, timeout = 60000 } = {}) {
+  if (!code) throw new DriveError('redeemInvite needs the invite code');
+  await waitForView(page, ['unlock', 'redeem'], { timeout });
+  await submitRedeem(dialog(page), { code, passphrase });
+  await waitForSheet(page, dialog(page), 'redeeming the invite', timeout);
+  const accessId = confirm ? await confirmSheet(page) : await sheetAccessId(page);
+  return { accessId, passphrase };
+}
+
+// The app has called store.unlock() and the unlock dialog is open: unlock an existing vault. Resolves { next } when the dialog is gone or has
+// moved on; throws DriveError with the dialog's error (wrong passphrase, ...). opts: accessId (needed unless the library remembers it), passphrase.
+export async function unlock(page, { accessId, passphrase, timeout = 30000 }) {
+  await waitForView(page, 'unlock', { timeout });
+  const d = dialog(page);
+  await submitUnlock(d, { accessId, passphrase });
+  return { next: await waitForNext(page, d, 'unlocking', timeout) };
+}

@@ -1,475 +1,208 @@
 # WIAI Datastore: integration guide for developers and their Claude
 
-You build or port a single-file web app (one HTML file that runs from file://, from a local web server or in Electron) and want
-its data stored end to end encrypted on the faculty server. This page is everything you need. Machine-readable index:
-[llms.txt]({{base}}/llms.txt). Current library: version **{{version}}**. Source code, PROTOCOL.md and the verifier wds-verify: {{repo_url}}.
+You build or port a single-file web app (one HTML file that runs from file://, a local web server or Electron) whose data is stored end to end encrypted on the faculty server. This page is everything you need to write the app; read it in one go. The rules are in [llms.txt]({{base}}/llms.txt). Library version **{{version}}**; source, PROTOCOL.md and the verifier wds-verify: {{repo_url}}.
 
-*Reading this file from the repository (docs/site/)?* The words in double braces (script tag, CSP, base URL, version, integrity) are filled in by the server when it serves the page. In a clone, print the complete script tag and the CSP with `node tools/wds-verify.mjs --script-tag` (section 12) and use the base URL of the service that you were given.
+The finished app is one HTML file with no build step and no server of your own; its data belongs to the vault, not to the address it is opened from.
 
-The server stores only ciphertext, with one exception by design: the faculty keeps a recovery (escrow) key and can restore a vault after a documented procedure. Never write "only the user can read the data" in an app. Wherever an app describes its privacy, use the sentences of section 13 word for word (the breach-check sentence only when the scope has that check on; wds-verify reports in an info finding when a sentence is missing).
+*Reading this from the repository (docs/site/)?* Words in double braces (tag, policy, base URL, hash) are filled in by the server when it serves the page; `node tools/wds-verify.mjs --script-tag` prints tag and policy.
 
 ## Checklist for Claude
 
-1. Ask the developer for the scope ID (section 1). Do not invent one. Never write the sandbox scope ID ({{sandbox_scope}}) into an app (section 17).
-2. Does the app exist already, with data in IndexedDB, localStorage or a file format of its own? Read [porting.md]({{base}}/docs/porting.md) first (section 16 points there): the old data is taken over with one call, `store.migrateLocal`, not with code of your own.
-3. Put the Content-Security-Policy meta tag (section 3) into the head before every script and the script tag (section 2)
-   at the end of the body, exactly as printed here. Keep the onerror handler (only its message text may be translated, section 2).
-4. Create the store with `WDS.connect({ scope })` and keep user data only there (section 5). Register `store.onLock` and `store.onUnlock` once, outside any start function (section 4, "Lock and unlock again"). An app in one language calls `store.setLocale("de")` (or `"en"`) once right after `WDS.connect`.
-5. Model data as one record per entity. Many items or files: `store.collection` (section 6, "Collections"). Editors with `autosave`.
-6. Decide conflicts in code only where a merge helps; everything else gets the library's dialog (section 7, "Conflicts in code").
-7. Add buttons for share and export (sections 8 and 9). The Share button is there for every role: for a member it is their own access dialog. Hide edit controls for read-only members. An app with forms or modal dialogs of its own follows the checklist in porting.md, section 7: the library's dialogs open above yours.
-8. A sticky or fixed header needs `top: var(--wds-sandbox-bar, 0px)`, not `top: 0`: while the scope is the sandbox, the library's bar sits at the top of the page (section 4, "The library's dialogs and your own modal dialogs").
-9. Test with the sandbox (section 17): `node tools/wds-verify.mjs <app.html> --target sandbox` runs the real library against the real service.
-10. Run wds-verify (section 12), write a wds-verify.json for an app with tabs, dialogs or file inputs ("Writing wds-verify.json"), fix the findings and put the report into the README (section 12 says how, under the README's own headings).
-11. Add the text for users to the README or start page (section 13), starting with the official privacy sentence (and the breach-check sentence when the scope has that check on). Put the CLAUDE.md / AGENTS.md section from the dashboard into the app's repository.
+The rules that matter are in llms.txt; they are not repeated here. What this guide adds:
+
+1. Ask the developer for the scope ID (section 1); never invent one. Never write the sandbox scope ID ({{sandbox_scope}}) into an app.
+2. An app that exists already: read [porting.md]({{base}}/docs/porting.md) before you change anything.
+3. Copy the script tag and the policy exactly (sections 2 and 3). Start the app with `await store.unlock()`, then load (section 12 shows the shape).
+4. Add one "Vault" button that calls `store.openVault()` for every role; hide edit controls for read members (section 4, "Role and language").
+5. Never: `eval`, `new Function`, `document.write`; catching an error and carrying on as if it had worked; showing "saved" while a save failed (use `onStatus`); reading the store in a timer; hiding the library's dialogs or the sandbox badge with CSS or script; telling people the faculty cannot read their data (section 11).
+6. Run wds-verify (section 10), fix what it reports, put the report into the README, and add the text for users (section 11) and the CLAUDE.md / AGENTS.md section from the dashboard.
 
 ## 1. Register a scope
 
-Staff of the University of Bamberg open the dashboard at {{base}}/, sign in with login.psi and choose "Create a new app": the app's **name**, a **contact e-mail address** (prefilled with their own) and, optionally, a **description**. That is all a standard app needs. The standard variant has the defaults: vaults only with the join code, passphrases from known data breaches refused (the breach check, on: the app's privacy text then carries one more sentence, section 13), 10 MB per value, 200 MB per vault (with older versions), 10 older versions per entry, 50 vaults (ceilings: operator.md). "Expert settings" is folded.
-The **scope ID** (the dashboard calls it "app ID": a short name plus six random characters, like `notenrechner-k7m2a9`) is public and is written into the app. The dashboard then shows the **text for Claude** (to copy into the conversation with the developer's Claude: the scope's settings, a line "if the app already exists, read {{base}}/docs/porting.md first", the rule for the join code in tests and a section for the app's CLAUDE.md and AGENTS.md), the **join code** and a link to what the users need to know. The scope settings can be changed in the expert settings, so the prompt is a snapshot: `wds-verify` prints the current ones from the public scope document.
-The **join code** is not public: hand it out to the users, never put it in the app, and for a test against the real scope follow porting.md, "The join code for tests" (a test vault that a Claude made is deleted afterwards). Staff see number, size and dates of the vaults, never contents.
+Staff of the University of Bamberg open the dashboard at {{base}}/, sign in with login.psi and choose "Create a new app" (a name, a contact e-mail address, optionally a description). The dashboard then shows the **scope ID** (the "app ID": a short name plus six random characters, like `notenrechner-k7m2a9`), the **text for Claude** (the scope's settings and the section for the app's CLAUDE.md and AGENTS.md) and the **join code**.
+The scope ID is public and is written into the app. The join code is not: hand it to the users, never put it into the app. Staff see number, size and dates of the vaults, never contents.
 
 ## 2. The script tag
 
-Exactly this tag, at the end of the body. The integrity hash is checked by the browser, so a changed library file is refused.
-Library files never change once released: this URL stays valid and keeps working with the server.
+Exactly this tag, at the end of the body. The browser checks the integrity hash, so a changed library file is refused. Library files never change once released.
 
 ```html
 {{script_tag}}
 ```
 
-- `crossorigin="anonymous"` is required for the hash check on a cross-origin file.
-- The `onerror` handler runs when the file cannot be loaded or its hash does not match (offline, blocked, tampered):
-  the page shows a message instead of staying blank. It needs `'unsafe-inline'` in the policy below, which is included.
-- **The message may be in the app's language, nothing else of the tag may change.** An app in German replaces only the text between the single quotes of `onerror`, for example
-  `onerror="document.body.textContent='Der Speicherdienst ist nicht erreichbar. Bitte prüfen Sie die Verbindung und laden Sie die Seite neu.'"`. The code stays `document.body.textContent='…'`, and `src`, `integrity` and `crossorigin` stay as printed
-  (the hash covers the library file, not the attributes of the tag). The message has no quote marks, backslash, `<`, `>` or `&`. wds-verify accepts any message of that form (an info finding says that it is not the English one) and warns about a tag without `onerror` or with other code in it.
-- The tag belongs after the page content, because the handler replaces the body text. Scripts of the app follow it.
-- Do not copy the library into the HTML file, do not download and self-host it, do not wrap it. Never load any other
-  third-party script.
-- Hash and version are published by the build in client/dist/hashes.json in the repository and at {{base}}/client/hashes.json. Current values:
-  version `{{version}}`, integrity `{{sri}}`.
+- `crossorigin="anonymous"` is required for the hash check. The `onerror` handler shows a message when the file cannot be loaded or its hash does not match; it needs `'unsafe-inline'` in the policy below, which is included.
+- **Only the message may be in the app's language**, for example `onerror="document.body.textContent='Der Speicherdienst ist nicht erreichbar. Bitte prüfen Sie die Verbindung und laden Sie die Seite neu.'"` (no quote marks, backslash, `<`, `>` or `&` in it). `src`, `integrity` and `crossorigin` stay as printed.
+- The tag belongs after the page content (the handler replaces the body text); the app's scripts follow it. Never copy, inline, minify, self-host or wrap the library, and load no other third-party script.
+- Current values: version `{{version}}`, integrity `{{sri}}` (also in {{base}}/client/hashes.json).
 
 ## 3. Content-Security-Policy
 
-Put this into the head, right after `<meta charset>`, before any script:
+One fixed policy. Put it into the head, right after `<meta charset>`, before any script:
 
 ```html
 <meta http-equiv="Content-Security-Policy" content="{{csp}}">
 ```
 
-What it does: nothing loads except the library from {{base}}/client/, and the page may talk only to the API ({{base}}/api/) and to the Pwned Passwords range service (the breach check of the passphrase dialogs; section 13 says what it receives). If the scope has the breach check switched off, remove `https://api.pwnedpasswords.com` (the dashboard prompt and `wds-verify` say which).
-Verified: the real library including the Argon2id WebAssembly loads from a file:// page with exactly this policy in Chromium, Firefox and WebKit, and vault creation, unlock, set/get, key file and access sheet downloads and exportAll work without a policy violation (client/test/docs.spec.mjs runs this against the real server for every release). Without `'wasm-unsafe-eval'` the key derivation fails in all three browsers.
+Nothing loads except the library from {{base}}/client/; the page may talk only to the API ({{base}}/api/) and to the Pwned Passwords range service (the breach check of the passphrase dialogs, section 11). `'wasm-unsafe-eval'` is needed by the Argon2id key derivation, `'unsafe-inline'` by inline scripts and styles; `'self'` is left out because it means something else on file:// in each browser.
 
-- `'unsafe-inline'` is needed because single-file apps have inline scripts and styles. `'self'` is left out on purpose: what it
-  means on file:// differs between browsers.
-- If the app needs more, add only inert sources, for example `font-src data:`, `media-src blob: data:` or `img-src https://…` for images the app shows.
-  Never add hosts to `script-src` or `connect-src`, and never use `default-src *` or `'unsafe-eval'`. wds-verify accepts exactly those three additions (it lists image hosts as
-  information, not as a failure) and fails on anything wider: `'self'` or a host in `script-src`, `img-src https:` or `*`, a policy without `base-uri 'none'` or `form-action 'none'`.
-- **Forms.** `form-action 'none'` blocks a real form submission, nothing else. A form whose submit handler calls `event.preventDefault()` and reads the fields in script works as usual
-  and needs no rewrite. A form without such a handler would navigate and is blocked.
-- **Downloads** the person asks for (a CSV, an attachment, a PDF) work under this policy through a `blob:` link with the `download` attribute (section 11).
-- An app that talks to other services (a weather API, say) needs a different design discussion; ask the developer.
+- You may add inert sources only: `font-src data:`, `media-src blob: data:`, `img-src https://…`. Never add hosts to `script-src` or `connect-src`, never `default-src *` or `'unsafe-eval'`. An app that talks to other services needs a different design: ask the developer.
+- `form-action 'none'` blocks a real form submission only. A form whose submit handler calls `event.preventDefault()` works as usual.
 
-## 4. API reference
+## 4. API
 
 ```js
-const store = WDS.connect({ scope: "notenrechner-k7m2a9" });
+const store = WDS.connect({ scope: "notenrechner-k7m2a9" });   // baseUrl: only for tests against another service
 ```
 
-Options of `WDS.connect`: `scope` (required), `baseUrl` (default: the faculty service), `locale` (default `navigator.language`, so the dialogs follow the browser; they are German or English; change it later with `store.setLocale`), `label: name => "…"` (what the built-in dialogs show instead of a record name; the history heading, the conflict dialog and the "newer versions" notice would otherwise say `"books/179249e9"`). `label` runs at any time, also before the list is loaded and after a lock, so it must not throw: keep a plain `Map` of titles that you fill from `notes.load()` and `notes.onChange` (`label: (name) => titles.get(name) || "this entry"`), do not call `notes.items()` or `notes.has()` in it. There is deliberately no option to inject fetch, storage or a crypto function, and the library's safety notices cannot be switched off.
+Every call that touches data unlocks first (the library's dialog: create a vault, unlock with the access ID, redeem an invite). Call `await store.unlock()` once at the start, so that the dialog appears when the page opens. Names are any non-empty string up to 1024 bytes; slashes make folders in the export; `.wds/` is reserved. The server sees neither names nor values.
 
-Every method below that touches data **unlocks first** when the vault is locked: it opens one shared dialog (create a
-vault, unlock with access ID or key file, redeem an invite code). Call `await store.unlock()` once at start so the dialog appears
-when the page opens and not in the middle of an action. For an app that can be locked and unlocked again use `store.onUnlock` (below).
-
-| Call | Result |
+| Call | What it does |
 |---|---|
-| `await store.unlock({ cancelable })` | Opens the dialog. Resolves with the status object. With `cancelable: true` the user can close the dialog and the promise rejects with `code: "cancelled"`. |
-| `store.onUnlock(fn)`, `store.onLock(fn)` | `fn(status)` after every successful unlock (the first and later ones); `fn(reason)` after a lock. Both return an unsubscribe function; registering the same function twice registers it once. See "Lock and unlock again". |
-| `await store.get(name, { fresh })` | The value (JSON value, or `Uint8Array` for files) or `undefined`. A plain `get` asks the server every time (one exception: section 6, "What things cost"). `fresh: true` always asks the server: use it to reload an open item after `onStale` or a collection `onChange`. |
-| `await store.getMany(names, { fresh })` | The values in the order of `names` (`undefined` for a missing record), six requests at a time. Rejects with the first error that is not "missing", after the requests in flight finished. |
-| `await store.set(name, value, { mime })` | Saves. JSON-serialisable values, or `Blob`, `File`, `ArrayBuffer`, `Uint8Array` (stored as bytes, MIME type kept). Resolves `{ name, version, size, resolution, value?, deleted? }`; `resolution` is `saved`, `mine`, `theirs` or `merged` (section 7). `value` is present for `theirs` (the version that won, unless it was a deletion) and for `merged` (what was stored). |
-| `await store.getRecord(name)` | `{ name, version, kind, mime, time, length, value }` or `null`. `kind` is `json` or `bytes`, `time` is Unix milliseconds. |
-| `await store.getBlob(name)` | A `Blob` with the stored MIME type, for `URL.createObjectURL`; `undefined` when the record does not exist (like `get`; `getRecord` returns `null`). |
-| `await store.list(prefix)` | `[{ name, version, kind, mime, length, time }]` sorted by name; `prefix` is optional (`"notes/"`). No values. **Expensive**: see section 6. |
-| `await store.remove(name)` | `{ name, deleted, resolution, value? }`. `resolution`: `deleted` (deleted now), `absent` (did not exist or was gone already), `mine` (conflict, deleted anyway), `theirs` (conflict, the other side's newer version was kept: `deleted: false`, `value` is that version). The deletion stays in the history. |
-| `store.collection(prefix, opts)` | A list of records with an index that several devices extend without losing each other's items. Section 6, "Collections". |
-| `await store.migrateLocal(opts)` | Takes over what an earlier, local-only version of the app left in this browser (IndexedDB, localStorage): asks the person, copies into the vault, checks, deletes the old data (not in the sandbox). Resolves `{ status, deleted?, copies?, why? }`. One call instead of code of your own: porting.md, section 4. |
-| `store.autosave(name, getState, opts)` | Handle for editors (below). |
-| `await store.history(name)` | `{ name, current, versions: [{ version, size, created, deleted }] }`, newest first. |
-| `await store.restore(name, version)` | Writes an old version as a new one. |
-| `await store.showHistory(name, { title })` | The built-in version browser with a restore button (disabled for read members). `title` replaces the record name in the heading, which the library words itself: pass only the name a person knows (the note title), not a sentence. The heading then reads *History of "Shopping list"*. |
-| `store.onConflict(handler)`, `store.onConflict(pattern, handler)` | Decide conflicts in code, for every record or for one name or prefix (section 7, "Conflicts in code"). Without a decision the library's dialog asks the person. |
-| `store.onStale(rows => …)` | Replaces the notice "newer versions exist elsewhere"; `rows` is `[{ name, version, known, deleted }]`. |
-| `await store.share()` | Members dialog (section 8). |
-| `await store.exportAll({ filename })` | Downloads every record, decrypted, as a ZIP (section 9). Resolves `{ count, filename, bytes }`. |
-| `await store.lock()` | Saves pending edits (up to 8 s), then forgets all keys and removes the library's notices from the screen. `onLock` handlers get the `reason`: `user`, `revoked` or `expired`. |
-| `store.setLocale(lang)`, `store.locale` | Sets the language of dialogs and notices from now on (`"de"` or `"en"`; also `"de-AT"` and the like) and returns it. See below: every app calls it, so that the app and the library never speak two languages on one screen. |
-| `store.isUnlocked()`, `store.status()`, `await store.usage()` | State and quota use. `usage()` resolves `{ bytes, records, versions, limits: { max_value_bytes, vault_bytes, history_versions, … } }`. All sizes are bytes; in texts for people the documentation says MB, and 1 MB = 1,048,576 bytes (KB = 1024 bytes, GB = 2^30 bytes): the scope document gives exact bytes, for example `max_value_bytes` 10485760 for 10 MB. |
+| `await store.unlock()` | Opens the dialog if needed; resolves `status()`. |
+| `store.status()` | `{ unlocked, role, sandbox }`; `role` is `owner`, `write` or `read`. Never show or log the access ID. |
+| `await store.get(name)` | The JSON value, or a `Blob` (stored MIME type kept) for bytes; `undefined` when missing. Asks the server every time. The version it returns is what the next save of that record builds on: render lists from `items()`, and do not `get` a record that a form shows from `onChange`. An autosave editor with unsaved text keeps its base: its next save meets the other version in the dialog. |
+| `await store.set(name, value, { mime })` | Saves a JSON value, `Blob`, `File`, `ArrayBuffer` or `Uint8Array` (bytes). Resolves `{ name, version, size, resolution, value? }`; `resolution` is `saved`, `mine`, `theirs` or `merged` (section 7), `value` is what is stored now for `theirs`/`merged`. `set` on an existing record this page has not read is a conflict (dialog or `onConflict`): read the record, show it, then save; replacing blind is the exception. |
+| `await store.remove(name)` | `{ name, deleted, resolution, value? }`; the deletion stays in the history. |
+| `store.collection(prefix, { meta })` | A list of records with an index (section 6); `add` and `set` take `{ meta, mime }`, an explicit `meta` replaces the `meta` function. |
+| `store.autosave(name, getState, opts)` | The handle for editors (below). |
+| `store.onChange(fn)` | `fn({ names, remote })` after this page's own successful writes (`remote: false`) and when the vault holds something other than this page shows (`remote: true`): the window got focus and the library found records or list entries changed elsewhere, or an autosave lost a conflict (the other version won, or you merged). `names` are record names (`notes/<id>`). Render from it. One handler per page: a second `onChange(fn)` is a `UsageError`, `onChange(null)` removes it. A write inside the handler fires it again: do not write there. An item that is open in an editor and named with `remote: true`: reload and show it unless the person has typed since (the saver's status is not `dirty` or `saving`); section 12 shows it. |
+| `store.onConflict(fn)` | Decide conflicts in code (section 7); one handler per page. |
+| `await store.showHistory(name)` | The version browser with a restore button (disabled for read members). |
+| `await store.openVault()` | The vault dialog (section 8), for every role. |
+| `await store.lock()` | See "Lock". |
+| `await store.migrateLocal(opts)` | Takes over the old data of an earlier local version ([porting.md]({{base}}/docs/porting.md)). |
 
-**One screen, one language.** An app in one language only (German, say) calls `store.setLocale("de")` once right after `WDS.connect`, so that its texts and the library's dialogs speak the same language whatever the browser says (without it a German-only app shows English dialogs in an English browser). An app with a language choice of its own keeps the choice in localStorage (section 5) and calls `store.setLocale` at start with the browser language, again when it has read the choice and on every change.
+**Lock.** `store.lock()`, a revoked access and an expired session all end the same way: the library saves what is pending (up to 8 s) and reloads the page, so the app starts again at the top and nothing of the vault stays on screen. An expired session first shows the unlock dialog above the page; pending writes continue after it. Offline, a dialog offers a backup download of the unsaved values, then "Lock anyway". The page is emptied before it reloads, so no typed text can come back into a field. What does not run through `autosave` or a collection (a form with a Save button) is lost when the page locks: let forms save through `autosave`. There is nothing to register for lock or unlock, and no state to clear.
 
-Console lines: while a vault is created the browser prints a `404` for the vault lookup, and a lost write prints a `412` (section 7). Both are normal, not bugs of the app.
+**Role and language.** While unlocked, `<html data-wds-role="read|write|owner">` is set: hide edit controls with `[data-wds-role="read"] .edit { display: none }`; a read member that writes anyway gets an `AuthError` (`forbidden`). The dialogs follow `<html lang>` (`de…` German, else English): set it to the app's language.
 
-Names: any non-empty string up to 1024 bytes; slashes make folders in the export. Names starting with `.wds/` are reserved for the
-library and refused. Names are encrypted: the server sees neither names nor values.
-
-`store.status()` returns `{ unlocked: false }` or `{ unlocked: true, role, accessId, vaultId, newDevice, recoveredByFaculty, rekeyPending, warnings, sandbox, … }`.
-`role` is `owner`, `write` or `read`. `sandbox` is `true` when the scope is the public sandbox (section 17). Never display or log the access ID in the app beyond what the library shows (the last four characters, to name a vault in a confirmation, are fine).
+**The library's dialogs and yours.** Library dialogs are modal `<dialog class="wds-dialog">` elements that open above your own modal dialogs; select yours with `dialog:not(.wds-dialog)` and never style or close the library's.
 
 ### Autosave
 
 ```js
 const saver = store.autosave("draft", () => state, {
-  delayMs: 2000,                                   // wait this long after the last change (default 2000)
-  onStatus: (s, err) => { statusEl.textContent = s; },   // idle | dirty | saving | saved | error | stopped
-  onError: (err) => {},                            // OfflineError, QuotaError, ... the library also shows a notice
-  onResolved: (res) => {},                         // the save lost a conflict (theirs), was merged, or a store.remove(name) kept the other side's newer version: res.value is what is stored now
+  delayMs: 2000,                                            // after the last change (default 2000)
+  onStatus: (status, info) => { statusEl.textContent = status; },   // idle | dirty | saving | saved | error; info.error for error
 });
-saver.changed();         // call after every edit; cheap
-await saver.flush();     // save now; resolves with the final status string and never rejects
-saver.stop();            // no more saves from this handle
-saver.status; saver.error;
+saver.changed();         // after every edit; cheap
+await saver.flush();     // save now; never rejects, resolves with the final status
+saver.stop();            // no more saves; changed() is a no-op afterwards
 ```
 
-Autosave reads the state with `getState` when the timer fires, serialises writes to one name, retries after a connection
-failure, and warns before the page is closed with unsaved changes. Use it for everything a person edits.
-
-- **One live handle per name.** A second `autosave` for the same name flushes the first one and stops it. Creating handles again in a start function that runs twice is harmless.
-- `getState` may return `undefined`: there is nothing to save right now, nothing is written.
-- `changed()` on a stopped handle writes nothing and calls `onError` with a `UsageError` every time, so a handler that outlived its screen shows up in the console.
-- `saver.error` is the last error (also passed to `onError`) and `null` after a successful save; `flush()` never rejects, so read `saver.error` or `onError` for the reason.
-- A handle stops when you call `stop()`, when the vault is locked, when its record is deleted by `store.remove` and when a newer handle for the same name replaces it. `store.remove(name)` pauses the handles of that name during the request; when the person kept the other side's newer version they resume and `onResolved` shows it.
-  To close the editor in the same step as the delete: `saver.stop()`, then `store.remove(name)`.
-
-### Lock and unlock again
-
-`store.lock()` stops every autosave handle and forgets the keys; the person can unlock again in the same page (an "Unlock" button that calls `store.unlock()`). Register the handlers **once, outside** the function that builds the screen:
-
-```js
-store.onLock((reason) => clearScreen(reason));   // reason: "user", "revoked" or "expired"
-store.onUnlock(start);                           // after every successful unlock, the first one too
-unlockButton.onclick = () => store.unlock();
-store.unlock();                                  // opens the dialog when the page opens
-
-async function start() {                         // may run many times: create collections and autosave handles here, load, render
-  const items = await notes.load();
-  render(items);
-}
-```
-
-- Clear **everything of the vault** from the DOM in the `onLock` handler (lists, editors, previews, object URLs) and show an Unlock button or message. `onLock` fires for `user` too.
-- Before any `onLock` handler runs, the library reads `getState()` of every unsaved autosave handle once and saves it (up to 8 seconds, together with pending collection index changes), so a handler that clears the editor cannot lose text.
-  What could not be saved (offline, for example) is kept for the same vault and written after the next unlock, **before** the `onUnlock` handlers run, so `start` reads the saved values. After unlocking another vault, or after a revocation, it is dropped with a notice of the library.
-- `store.collection(prefix)` and `store.autosave(name, …)` are safe to call again in `start`: the collection object of a prefix is the same one (the latest options win), and an autosave handle supersedes the old one of the same name.
-- Nothing in `start` may depend on a value from before the lock: reload it.
-
-### The library's dialogs and your own modal dialogs
-
-The library's dialogs are modal `<dialog class="wds-root wds-dialog">` elements in the browser's top layer, and its notices (toasts) and the sandbox bar sit in the top layer too. A conflict, the unlock dialog after a session expired, the share dialog, the migration question and every notice therefore open **above** a modal dialog that the app opened with `showModal()`; the page below is inert while the library's dialog is open, and the person can answer it.
-
-- **Close your own modal dialogs in `store.onLock`** (it runs for `user`, `revoked` and `expired`; the library closes its own dialogs on a lock) and **open none while a store call is pending.** If a modal dialog of yours opens after a library dialog came up, the library puts its dialog on top again, but the person has to answer it first.
-- Select your own dialogs with `dialog:not(.wds-dialog)` and never close the library's. CSS for `dialog` (padding, `max-width`, a centring transform, an opacity transition, a transparent backdrop) does not change them.
-- Escape closes a library dialog only when it has a close button; the unlock dialog, the access sheet and the progress view stay. Minimum browsers: Chrome and Edge 114, Firefox 125, Safari 17 (modal `<dialog>` and `popover`).
-- **Notices (toasts) can cover the bottom right of your dialog.** A notice of the library (the outcome of a migration, "a record changed elsewhere", offline) is a box in the top layer at the bottom right of the window, not in your dialog (in a narrow window it spans the width). Plain information goes after about 9 seconds; warnings, errors and a few more (the migration's `failed`, `partial` and `changed`, "a record changed elsewhere") stay until the person presses "Dismiss". A margin inside your dialog does not help: put the footer buttons of your dialogs (Save, Cancel) on the **left** or in the middle, so that a notice covers only text. wds-verify dismisses a notice that covers a button and clicks again.
-- **The sandbox bar and sticky headers.** In the sandbox the library shows a bar at the top of the page, moves the page down by its height and sets the CSS custom property `--wds-sandbox-bar` on `:root` to that height (it does not exist in a real scope). A `position: sticky` or `fixed` header or toolbar with `top: 0` slides under the bar while the person scrolls: write `top: var(--wds-sandbox-bar, 0px)`. Every app with such a header needs this one line; wds-verify runs in the sandbox and cannot tell you.
-- Forms and modal dialogs of your own have a checklist: porting.md, section 7.
+Use it for everything a person edits, never `store.set` per keystroke. It reads the state with `getState` when the timer fires (`undefined` means nothing to save), writes one name at a time, retries after a lost connection, saves before lock or unload and warns before the page closes with unsaved changes. A save that lost a conflict (`theirs`) or was merged is `saved` plus `onChange` with `remote: true` for the name: that is the one place that tells the app its open entry is another text now. A second live handle for the same name is a `UsageError`; `store.remove(name)` stops that name's handles.
 
 ## 5. Where data lives
 
-- User data lives only in the store. Not in `localStorage`, `sessionStorage`, IndexedDB, cookies, the URL or `console.log`. (On file://,
-  Chrome gives every local HTML file the same storage: other files could read it.) The only exception is the one-time take-over of data an older version of the app left in the browser, and the library does that: `store.migrateLocal` (porting.md, section 4).
-- **Settings.** A preference that belongs to one person (theme, language, sort order, density, last tab, chosen from a fixed list) stays in that browser's localStorage under the app's own key: the app reads and writes it directly and never names it in `migrateLocal`. Typed view state (search text, free-text filters) lives in memory only. Anything the person typed (a name for a report header, own label lists) or would miss on another device, and a value for everyone who shares the vault (units or currency of a shared collection), is data and goes into the vault, as a record.
-- The library keeps a few non-secret items in localStorage under `wds:<scope>:…` (the access ID with the time it was remembered, and safety records). Leave them alone, and never call `localStorage.clear()`.
-- Keys and passphrases exist only in memory of the page and are never accessible to app code.
-- The app needs a connection: the library works online only. When saving fails it shows a notice with a backup download
-  of the unsaved values. Do not build an offline mode.
+- User data lives only in the store: not in localStorage, sessionStorage, IndexedDB, cookies, the URL or `console.log` (on file://, Chrome gives every local HTML file the same storage). The one exception is the take-over of old data, which the library does (`migrateLocal`).
+- **Preferences.** A choice from a fixed list (theme, language, sort order, last tab) stays in localStorage under the app's own key. Typed view state (search text) stays in memory. Anything a person typed, or would miss on another device, and any value that everyone sharing the vault sees, is data and goes into the vault.
+- The library keeps a few non-secret items under `wds:<scope>:…` in localStorage (the last access ID, safety records): leave them alone, never call `localStorage.clear()`. Keys and passphrases never reach app code.
+- The service is online only. When saving fails the library offers a backup download of the unsaved values. Do not build an offline mode.
 
-## 6. Data modelling
+## 6. Modelling
 
-- **One record per entity**: a note, a project, an exam, a student. Names like `notes/3f9a1c2e` or `exams/2026-ws`. Never one record that holds
-  the whole app state: it conflicts constantly, grows the history quickly and hits the size limit.
-- **A list of entities: use a collection** (`store.collection`, below). It keeps the index record that the app needs for lists and handles the merge when several devices add or remove items.
-- **Files as separate records**: a second collection (below), or `store.set("files/report.pdf", file)`. Keep a small JSON record (or the entity record) with the
-  file name and metadata and load the bytes only when needed. Each value is limited (10 MB by default; the scope sets it,
-  the ceiling is 25 MB). Put the file ending into the record name (`covers/<id>.jpg`, not `covers/<id>`): `exportAll` adds an ending
-  that matches the MIME type to names without one, but a name that already says what it is stays clear in the export.
-- **IDs**: generate them in the app (`crypto.randomUUID().slice(0, 8)`) or let a collection generate them; do not derive them from user text that can change.
-- **Settings**: a value for everyone who shares the vault is one small record `settings`; a personal preference stays in localStorage (section 5), so a read member needs no write for their own view.
-- **Editors**: `autosave`, never `set` on every keystroke. wds-verify flags more than one `set` per second and name.
-- **What things cost.** A `get` is one request and downloads that record (its size plus a small envelope). `getMany(names)` is one request per name, six at a time. The **first call of list() in a session downloads
-  every record of the vault once, whatever the prefix**, file records included (the prefix only filters the result): one request per 1000 records for the list and one per record for the content; later calls download only changed
-  records. A `get` right after `list` (within 30 seconds, once per record, for records up to 1 MB) is served from that download, so the app does not pay twice. One write of a collection index re-encrypts and uploads the **whole index**
-  (about 60 bytes plus the meta per item: 1000 items with 100 bytes of meta are about 170 KB), and every version counts against the vault quota like any other. Fine for tens or a few hundreds of small records through `list`; for more,
-  or whenever the vault holds files (images, PDFs), do **not** call `list` at start: use a collection, which reads one index record with `get`, and fetch the files one by one with `getBlob` when the user opens them.
-- **History**: the server keeps the last 10 versions of every record (the scope may change this), counted against the
-  vault quota. Offer `store.showHistory(name)` for documents people care about.
-- **Quotas**: values and vaults are limited; `QuotaError` tells the user. `await store.usage()` reports use and limits.
-
-### Collections
-
-`store.collection("notes/", { meta })` is a list of records `notes/<id>` plus an index record `notes.index` (outside the prefix, so `store.list("notes/")` never returns it). The index holds a little **meta** per item
-(a title, a file name, a date: at most 512 bytes of JSON) so that a list renders without loading the items. Several devices can add and remove items at the same time without losing each other's changes.
+- **One record per entity** (a note, a project, an exam): `notes/3f9a1c2e`, never one record for the whole app state (it conflicts constantly and grows the history). The server keeps the last versions of every record (`showHistory`); a value is limited in size, and a `QuotaError` names the limit.
+- **A list is a collection**: `notes/<id>` records plus an index with a little **meta** per item (a title, a date, a file name: at most 512 bytes of JSON, better under 200) so that a list renders without loading the items. Devices add and remove items at the same time without losing each other's.
 
 ```js
 const notes = store.collection("notes/", {
   meta: (note) => ({ title: String(note.title || "").slice(0, 80) }),   // what a list needs; called on every write through the collection
 });
 
-async function showList() {
-  renderList(await notes.load());                    // [{ id, name, meta, created }] sorted by creation; one request, then served from memory
-}                                                    // (notes.items() is the same list, synchronously, once loaded)
-notes.onChange(({ items, added, removed, changed }) => renderList(items));   // other devices, refresh(), repairs - not your own calls
+render(await notes.load());                          // [{ id, name, meta }] in the order they were added; one request, then from memory
+store.onChange(() => render(notes.items()));         // own writes and other devices
 
-async function addNote(note) {
-  try {
-    const { id } = await notes.add(note);            // writes notes/<id> first, then the index
-    return id;
-  } catch (err) {
-    if (err.stored) return err.id;                   // the note exists; only the index write failed and is retried later: do not add it again
-    throw err;                                       // nothing was stored
-  }
-}
-
-function editNote(id, note) {                        // note: the object the editor changes; call .changed() after every edit
-  return notes.autosave(id, () => note, { onStatus: showStatus });   // saves the note and keeps its list entry (title) current
-}
-
-async function deleteNote(id) {
-  const res = await notes.remove(id);                // the remove() result (section 4); the index entry goes too
-  renderList(notes.items());                         // your own calls do not fire onChange
-  return res.deleted;
-}
-
-async function allNotes() {
-  return await notes.getAll();                       // [{ id, name, meta, value }], 6 requests at a time; records that are gone are skipped
-}
+const { id } = await notes.add({ title: "Shopping", text: "" });   // random id; resolves when the item is stored (the list entry follows in the background)
+const note = await notes.get(id);                    // the value (a Blob for bytes), or undefined; edit this object ...
+const saver = notes.autosave(id, () => note, { onStatus });   // ... and call saver.changed(); like store.autosave, and it keeps the list entry (title) current
+await notes.set("2026-ws", { title: "Exam" });       // upsert with an id of your own (1 to 200 characters, no "/")
+const all = await notes.getAll();                    // [{ id, name, meta, value }]
+await notes.remove("2026-ws");                       // item and list entry
 ```
 
-- **Methods.** `load()` reads the index once; `refresh()` reads it again and fires `onChange` when it differs. `items()` and `has(id)` are synchronous and throw a `UsageError` ("call await notes.load() first") before `load()` and after a lock. `get(id, { fresh })` (`fresh: true` always asks the server: use it to reload an item after `onChange` or `showHistory`), `getAll({ fresh })`, `add(value, { meta, mime, created })` (a random id; resolves `{ id, name, version, resolution }`), `set(id, value, { meta, mime, created })` (an upsert, below), `remove(id)`, `autosave(id, getState, opts)`, `flush()` (resolves when every list change that is still queued is on the server, rejects while it cannot be written: the check before something irreversible), `rebuild()`, `onChange(fn)` (returns an unsubscribe function) and `prefix`, `indexName`.
-  Ids from `add` are 10 characters of `[0-9a-z]`; an id of your own goes through `set` (1 to 200 characters, no `/`; a dot is fine, so `set(random + ".pdf", file)` keeps the ending). The prefix must end with `/`. A read member can load and read; a write returns `AuthError` with `code: "forbidden"`.
-- **`set` and `created`.** `col.set(id, value, { meta, mime, created })` is an **upsert**: it writes the record `<prefix><id>` and makes sure the index names it. An id that is not in the index yet gets an entry (with its meta and its place in the list: `created`, by default now, so the end of the list); an id that is there keeps its place and gets the new meta.
-  So `set` with an id of your choice also creates an item, for example in an import that keeps the old ids and the old order (`col.set(oldId, value, { created: oldDate })`); `add` is `set` with a random id. **`created`** is a number of milliseconds in the **index entry** only, it exists nowhere else: `items()`, `load()` and the rows of `onChange` carry it, the record's value never does. `add` and `set` write it for an entry that the index does not have yet (default: now); **for an entry that exists it is ignored**: an existing entry keeps its date, whatever `created` says.
-  Put a date that people see into the value or the meta.
-- **`set` for a record this page has not read.** The library writes on top of the version it knows (read with `get`, `getMany`, `getRecord`, `list`, `col.get`, `col.getAll`, or written by this page since the unlock). For a record it knows nothing about, `set` writes only if the record does not exist: if it does (an old item, another device, an interrupted import),
-  that is a conflict like any other, so your `onConflict` handler or the library's dialog decides and the result says `mine`, `theirs` or `merged` (section 7). A `set` that must replace what is there, as in "an import overwrites items with the same id", reads the item first (`await col.get(id)`) or runs under `store.onConflict("notes/", (c) => c.keepMine())`. The old value stays in the history.
-- **When the index write fails** (offline, ten conflict rounds, a closed tab) the entity is stored and the call rejects with the real error carrying `err.stored = true`, `err.id` and `err.record`: **do not add it again**; the change stays queued and goes out with the next index write. An item that the index does not list is queued for it whenever the page calls `store.list()` or `store.exportAll()`; `rebuild()` is the explicit repair (it downloads every item: a "Repair list" button, not at start).
-- **Other devices.** When the window gets focus the library notices a changed index, reads it and fires `onChange` (no "newer versions" notice for the index). `onChange` does not fire for your own calls, so render after them yourself; its payload is `{ items, added, removed, changed }`, the list and three arrays of id strings. Changes of an item's content on another device are the business of `onStale` and the conflict handling as for any record.
-- **Keep meta small** (under 200 bytes) and a collection to a few thousand items: every index write uploads the whole index. Meta changes from `collection.autosave` reach the index at most every 10 seconds.
-- **Files** are a second collection with the ending in the id: `const files = store.collection("files/")` and `await files.set(random + "-" + safeName, file, { meta: { name: file.name, note: noteId } })`. The value is the `File` or `Blob` (stored as bytes, MIME type kept); without an explicit `meta` the collection's `meta` function receives the file. Show the list from the meta and load the bytes with `files.get(id)` or `store.getBlob("files/" + id)` when the person opens one.
-- **Several apps or collections in one vault** are fine: every collection has its own prefix and index.
-
-### Two devices
-
-The same person opens a vault on a second device with the **access ID and passphrase** (or the key file from the access sheet and the passphrase) in the library's unlock dialog: not with an invite, which is for another person. Nothing in your app changes. What the app then has to handle:
-
-- **The list.** `notes.onChange` fires when the library noticed (on focus) that another device changed the index; render again from the payload. Your own `add`, `set`, `remove` calls do not fire it.
-- **An open item.** When the other device saved a newer version of the note that is open here, `store.onStale(rows)` (or, without it, the library's notice) tells the page. Reload it with `await store.get(name, { fresh: true })` and replace the editor content only if the person has not typed since; if they have, do nothing: the next autosave conflicts and the library's dialog lets them choose (or your `onConflict` handler decides).
-- **Offline.** `unlock()` without a network does not reject: the dialog stays open, shows the error with a retry button and resolves only when the person is in (or rejects with `code: "cancelled"` when it was opened with `cancelable: true`). Writes while offline reject with `OfflineError` and the library offers a backup download; autosave retries.
-
-### Files
-
-A file is a record of bytes. `files.set(id, file, { meta })` stores the `File` or `Blob` with its MIME type.
-
-- `files.get(id)` returns a `Uint8Array` without the MIME type; for an `<img>` or a download use `await store.getBlob("files/" + id)` (a `Blob` with the stored type) and `URL.createObjectURL`; revoke the URL when the picture goes away. Keep the file name and size in the meta (512 bytes at most) so that the list needs no download.
-- **`files.getAll()` downloads every file.** Never call it for a files collection (and not `store.list()` at start: its first call downloads every record of the vault); show the list from `files.items()` and load one file when the person opens it. A list with a picture per row loads the files of the visible rows when they scroll into view; meta is too small for a preview.
-- **Delete a note with its attachments** files first, then the note, so that a failure in the middle leaves a note with fewer attachments that can be deleted again, never files that nothing points to:
+  `col.set` follows the rule of `store.set`: on an existing item this page has not read it is a conflict; read it, show it, then save. Sort by a meta field (the list comes back in the order of adding). A collection of a few thousand items is the limit, because every list change uploads the whole index. A failed list write stays queued in the library and is retried on the next write and on focus. A read member can load and read. `getAll()` downloads every item: not for files.
+- **Files.** A file is a record of bytes. Write the file first, then the item that names it (meta `{ file: name }`); delete in reverse order (the item first), so that a failure in the middle leaves at worst a file nothing names, never an item that points to nothing:
 
 ```js
-async function deleteNoteWithFiles(noteId) {
-  for (const f of files.items().filter((f) => f.meta.note === noteId)) await files.remove(f.id);   // an error stops here: the note is still there, try again
-  return (await notes.remove(noteId)).deleted;
+const photos = store.collection("photos/");
+
+async function addPhoto(file) {
+  const id = crypto.randomUUID().slice(0, 8) + "-" + file.name;           // the ending stays in the name
+  await store.set("files/" + id, file);                                      // 1. the file
+  return (await photos.add({ caption: "" }, { meta: { file: id, name: file.name } })).id;   // 2. the item
+}
+async function deletePhoto(item) {                                          // item: { id, meta }
+  await photos.remove(item.id);                                             // 1. the item
+  await store.remove("files/" + item.meta.file);                            // 2. the file
 }
 ```
 
-- **Save a note that gets a new or replaced attachment** in the opposite order: the new file first, then the note that names it, then the old file. A failure in the middle then leaves a file that nothing points to, never a note that points to nothing. The note's value names its file (`fileId`), the file's meta names the note (`note`). The new file goes again when the note write lost with `theirs` or failed for a reason that leaves the note unwritten (quota, no right to write); it stays after `err.stored` and an `OfflineError` (the write may have reached the server, and the note may name it):
+  Open or download a stored file with a link that carries `download` (the click saves it; the file is not encrypted any more, say so next to the button):
 
 ```js
-async function saveNoteWithFile(noteId, note, newFile) {   // note: the value to save, with the fileId it was read with; newFile: a File to attach in its place, or null to keep the file
-  const oldFileId = note.fileId;                            // the file that the form was filled with. No notes.get here: a get takes over the newest version, and the write below would never see the conflict
-  let newFileId = null;
-  if (newFile) {
-    newFileId = (await files.add(newFile, { meta: { note: noteId, name: newFile.name.slice(0, 100) } })).id;   // 1. the file first: no note ever points to a file that is not there
-    note = { ...note, fileId: newFileId };
-  }
-  let res;
-  try { res = await notes.set(noteId, note); }              // 2. the note that points to it
-  catch (err) {                                             // the new file goes again only when the note is certainly not stored; err.stored and OfflineError leave it
-    if (newFileId && !err.stored && !(err instanceof WDS.errors.OfflineError)) await files.remove(newFileId).catch(() => {});
-    throw err;
-  }
-  const stored = res.value || note;                         // res.value is there for "theirs" and "merged": the value that is stored now
-  for (const id of [newFileId, oldFileId]) if (id && id !== stored.fileId) await files.remove(id).catch(() => {});   // 3. what nothing points to: the old file after a save, the new one after "theirs"
-  return res;                                               // the caller shows res.value after "theirs" (section 7)
+async function downloadFile(name, shownName) {
+  const blob = await store.get("files/" + name);                // a Blob with the stored type
+  const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: shownName });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
 }
 ```
 
-A failure in the middle leaves at worst a file that no note names; that costs only space, and `deleteNoteWithFiles` removes it with its note. **Never write a clean-up of files that no note names**: a notes list that is stale or partly loaded makes live files look unreferenced, and an older version of a note still needs its file for `store.showHistory`.
-**Show a missing file as "attachment no longer available"** (`files.get` returns `undefined`). **Never reload an item that is open in a form** (porting.md, section 7): a `get` takes over the newest version, and the save would not see the conflict.
-
-- **Show a file in a new tab inside the click.** `window.open(blobUrl)` after `await store.getBlob(…)` is no longer part of the click, and over a slow connection the popup blocker refuses it. Open the (empty) window first and fill it when the bytes arrive; offer a download link when the window is refused:
-
-```js
-openButton.onclick = async () => {
-  const w = window.open("", "_blank");                 // inside the click, so that the popup blocker allows it (after an await it would not)
-  if (w) w.opener = null;
-  try {
-    const blob = await store.getBlob("pdfs/" + id);    // the network may take a while
-    if (!blob) throw new Error("This file does not exist any more.");
-    const url = URL.createObjectURL(blob);
-    if (w) w.location.href = url;                      // the window that was opened empty now shows the file
-    else offerDownloadLink(url, name);                 // w is null when the blocker refused even the empty window: show <a href download> for the person to click
-    setTimeout(() => URL.revokeObjectURL(url), 60000); // revoke it after a minute
-  } catch (err) {
-    if (w) w.close();
-    showError(err);
-  }
-};
-```
-
-- **Conflicts on files.** Two devices that replace the same file: the dialog shows type and size of both versions (no text) and offers the download of both; `c.theirs.value` is a `Uint8Array`, `c.mine.value` is what you passed. Most apps never overwrite a file: `add` a new one and `remove` the old one.
+  To show a file in a new tab instead, call `window.open("", "_blank")` inside the click, before the first `await`, and set `w.location.href` to the blob URL when the bytes arrive (after an `await` the popup blocker refuses it). Show a missing file as "attachment no longer available". Never write a clean-up of files that no item names: a partly loaded list makes live files look unused.
+- **IDs** come from the collection or from `crypto.randomUUID().slice(0, 8)`; never derive them from text that can change.
+- **Settings** for everyone who shares the vault are one small record `settings`; personal preferences stay in localStorage (section 5).
+- The library has no user identity. An app that needs "booked by" asks for a name and stores it in the item.
+- There is no unique index: check the loaded list before adding; a race between two devices remains.
 
 ## 7. Conflicts
 
-Two devices or two members can change the same record. The library remembers which version it read and writes only on top
-of it. When the server has a newer one, the default dialog says "Another device or person saved a newer version" and offers
-**keep theirs**, **keep mine** (saved on top, so theirs stays in the history) and **download both**. It never overwrites silently.
-`store.set` resolves with `resolution` so the app knows what happened (`saved`, `mine`, `theirs`, `merged`); for `theirs` and `merged` the result carries `value`, the value that is stored now. `store.remove` reports the same (`mine`, `theirs`).
+The library remembers the version it read and writes only on top of it. When someone else saved a newer one, a dialog says so and offers **keep theirs** or **keep mine** (saved on top; the other version stays in the history). It never overwrites silently. For most apps that dialog is right, and the dialog names a record by the `title` of its collection meta when it is a string, else "this entry".
 
-For most apps the default is right. The default dialog shows the record name and the two values as text; pass a `label` to `WDS.connect` (section 4) to show a readable name, or decide in code so the person never sees raw JSON. The browser console
-shows a `412` for the lost write; that is the conflict, not an error of the app. When the window gets focus the library also checks whether records it holds have newer versions elsewhere and shows a notice (`onStale` replaces it).
-
-### Conflicts in code
+Decide in code only where a merge helps. One handler for everything; route with an `if` on `c.name`; a second `onConflict(fn)` is a `UsageError`, `onConflict(null)` removes the handler:
 
 ```js
-store.onConflict("settings", (c) => c.merge((mine, theirs) => ({ ...theirs, ...mine })));   // two devices changed different settings: keep both
-store.onConflict("timer", (c) => c.keepTheirs());                                            // one exact record name
-store.onConflict("notes/", async (c) => {                                                    // a prefix ending in "/": every note
-  if (c.mine.deleted || !c.theirs || c.theirs.deleted) return;                               // no decision: the library's dialog asks the person
-  if (c.mine.value.text === c.theirs.value.text) return c.keepTheirs();                      // only other fields differ
-  const choice = await c.ask();                                                              // the library's dialog, now; resolves "mine" or "theirs"
-  console.log("the person kept", choice);
+store.onConflict((c) => {                                     // c.name, c.mine, c.theirs: { value, deleted }, or null when the record never existed
+  if (c.name !== "settings" || c.mine.deleted || !c.theirs || c.theirs.deleted) return;   // undefined: the library's dialog asks the person
+  return { merged: { ...c.theirs.value, ...c.mine.value } };  // two devices changed different settings: keep both. Or return "mine" or "theirs".
 });
 ```
 
-- **Which handler decides**, for a conflict on name N: (1) the internal handler of a collection index (not replaceable: the merge above); (2) the handler registered for exactly N, else the one whose prefix matches N; (3) the global handler `store.onConflict(fn)` (`store.onConflict(null)` removes it); (4) the library's dialog.
-  `onConflict(pattern, fn)` returns an unsubscribe function. A prefix must end with `/`; registering a prefix that overlaps one already registered is a `UsageError`, so at most one prefix matches.
-- **A handler that decides nothing** (returns without calling a method and without returning `"mine"` or `"theirs"`), **throws or rejects** hands over to the library's dialog (a throw is also logged with `console.error`). A handler for one record type therefore never takes the dialog away from the others.
-  A handler may be async. It is asked at most four times for one write; after that the write rejects with `ConflictError`.
-- **The conflict object c**: `c.name`; `c.op` (`"set"` or `"remove"`); `c.mine` `{ value, kind, mime, deleted }` (`deleted` is true when the local operation is a delete); `c.theirs` `{ version, deleted, kind, mime, time, value }` or `null` (the record never existed on the server);
-  `c.keepMine()`, `c.keepTheirs()`, `c.merge((mine, theirs) => value)` (may be async; `theirs` is `undefined` when the other side deleted the record), `await c.ask()`, or return `"mine"` or `"theirs"`. Call exactly one of them.
-- **Results.** `set()` resolves `{ name, version, size, resolution, value?, deleted? }`; `remove()` resolves `{ name, deleted, resolution, value? }`. Use `resolution` to update the screen: `theirs` means the other side's value is the truth now.
-- Do not build your own conflict dialog unless the person needs words the library cannot give; `label` and `c.ask()` cover most cases.
-- **The conflict dialog opens above a modal dialog of your own** (the library's dialogs are in the top layer), so a form that is open while a save conflicts stays usable for the person; keep what was typed until the save worked (porting.md, section 7, the checklist for apps with forms).
+A handler may be async; one that throws also hands over to the dialog. `set` and `remove` resolve with `resolution`: `theirs` means the other value is the truth now, so show `res.value`. An autosave editor learns it from `onChange` (`remote: true`).
 
-## 8. Members and sharing
+## 8. Members and the vault dialog
 
-Every user has their own vault. The owner shares the whole vault with `store.share()`: the dialog creates invite codes (role
-**write** or **read**, with a label, valid for 2 days; in the sandbox until the nightly wipe), shows who has access, revokes access and offers key file and passphrase change. Revoking
-re-encrypts everything under new keys, with a progress bar; it resumes by itself after an interruption. Members see only their own access: their key file, the renewal of their keys, "Lock now" and the passphrase change (`me-keyfile`, `me-renew`, `me-lock`, `me-passphrase-toggle`), without the invites and the list of the others.
+Every user has their own vault. `store.openVault()` opens the vault dialog, **for every role**: the owner sees the members and creates invites (role `write` or `read`, with a label) or revokes access (the vault is re-encrypted under new keys, with a progress bar that resumes after an interruption); everyone sees their own access, can change the passphrase, show the access sheet again, "Export everything (ZIP, unencrypted)" and "Lock now". Offer one "Vault" button in every app; it is also the way out if the app is retired (anybody can export with {{base}}/export/ using the access ID and passphrase; the ZIP is not an import format). A new member's access takes effect for the app after its next load.
+Members see the other members' changes through `onChange`. There is one owner per vault; if the founder loses passphrase and recovery code, the faculty can add a new owner (users.en.md, "Recovery").
 
-New items of the others: a **collection** picks up items that other members added or removed when the window gets focus (`onChange` fires), and `notes.refresh()` does it on demand. Records that are not in a collection are not announced:
-`onStale` and the focus check only cover records the page already holds, and polling `list()` is forbidden (section 11). A shared app with records outside collections therefore shows new entries of the others after a refresh
-button that the user presses and that reads the data again.
+## 9. Errors
 
-The app only needs a Share button, **and it shows it for every role**: do not hide it from members. For the owner it is the members dialog; for a member, who creates no invites, it is their access dialog (key file, keys, lock, passphrase), and a member has no other way to reach those. Adapt the rest of the interface to the role:
-
-```js
-const role = store.status().role;                 // "owner" | "write" | "read"
-if (role === "read") { textarea.readOnly = true; saveButton.hidden = true; }
-```
-
-A read member that writes anyway gets an `AuthError` with `code: "forbidden"`. There is one owner per vault. If the founder loses
-passphrase and recovery code, the faculty can add a new owner (users.en.md, "Recovery").
-
-## 9. Export and backup
-
-`await store.exportAll()` downloads a ZIP: one file per record (JSON records get `.json`, file records without an ending get one that matches their MIME type, folders from slashes in names), `wds-export.json`
-(name to file, kind, MIME, version, time, size) and `README.txt`. The files are **not encrypted**. Offer an "Export" button in
-every app; it is the user's backup and the way out if the app is retired. Independently of the app, anybody can export a
-vault with {{base}}/export/ using the access ID (or key file) and the passphrase. Collection indexes appear in the export as `notes.index.json`.
-**The ZIP is a way out, not an import format:** the app cannot read it back; keep or write an import of your own format if restore-from-file matters (porting.md, section 3).
-
-## 10. Errors
-
-Thrown errors have `name`, `message`, often `code` and `status`. Classes are in `WDS.errors` for `instanceof` (`WDSError` is the base class of all of them). The library already shows a notice for
-most of them; app code decides only what happens to the app's own screen.
+Thrown errors have `name`, `message`, often `code` and `status`; the classes are in `WDS.errors` (`WDSError` is the base). The library already shows a notice or dialog for most; app code decides only what happens on its own screen. The browser console shows a `404` while a vault is created and a `412` for a lost write: both are normal.
 
 | Error | When | What to do |
 |---|---|---|
-| `OfflineError` | no connection, server down, or no answer within 30 s (`err.code === "timeout"`; one more second per 10 KB of an upload, three times as long to create a vault or join one). A write that got no answer may be stored all the same: the library looks at the record before it reports, and counts a write whose answer was lost as saved | Keep the screen; the library's notice offers the backup download of the unsaved values. Autosave retries. After a failed index write of a collection `err.stored` says the item exists. |
-| `ConflictError` | write lost against a newer version and four rounds of handlers did not settle it, or an index write kept conflicting | Section 7. |
-| `QuotaError` | value too large, vault or scope full, server read-only (`code: "read_only"`) | Tell the user; reads and deletes still work. |
-| `AuthError` | wrong passphrase, session expired, access revoked (`code: "revoked"`), write by a read member (`"forbidden"`) | The library locks the store on revoked or expired; use `onLock` to clear the screen. |
-| `IntegrityError` | data fails a check (tampered or damaged) | Do not continue to use that record; tell the user. |
-| `VersionError` | data written by a newer library | Ask the user to update the app. |
-| `UsageError` | misuse: `undefined` value, reserved name, `cancelled` dialog, `items()` before `load()`, a stopped autosave handle | A bug in the app, or the user closed the dialog. |
+| `OfflineError` | no connection, server down, or no answer in 30 s (`code: "timeout"`). A write whose answer was lost is checked and counted as saved if it arrived. | Keep the screen; the library offers the backup download. Autosave retries. |
+| `ConflictError` | a write kept losing and the conflict could not be settled | Section 7. |
+| `QuotaError` | value too large, vault or scope full, server read-only (`code: "read_only"`); the message names the limit | Tell the person; reads and deletes still work. |
+| `AuthError` | wrong passphrase, expired or revoked access, a write by a read member (`forbidden`) | The library handles expiry and revocation. A button save that rejects: keep what the person typed and let them press again (autosave and the list entries are retried by the library). |
+| `IntegrityError` | data fails a check (tampered or damaged) | Stop using that record; tell the person. |
+| `VersionError` | data written by a newer library | Ask the person to update the app. |
+| `UsageError` | misuse: `undefined` value, reserved name, a second autosave handle for one name | A bug in the app. |
 
-## 11. Forbidden patterns
+## 10. wds-verify
 
-wds-verify catches many of these (direct datastore access, other scripts, a wider policy, plaintext in requests and storage, rapid saves, the sandbox ID in the file, CSS that hides the library); the rest is your job.
-
-- Any `fetch`, `XMLHttpRequest`, `WebSocket`, `navigator.sendBeacon` or form action towards the datastore host. Only the library talks to it.
-- Own cryptography, own key derivation, own "encrypt before upload", base64 tricks. The library does it.
-- Scripts from a CDN or any other host, `eval`, `new Function`, `document.write`.
-- User data in localStorage, sessionStorage, IndexedDB, cookies, the URL, `console.log` (a personal preference chosen from a fixed list (theme, language, sort, density, last tab) may stay in localStorage under the app's own key, section 5). Reading or deleting the old browser storage by hand instead of `store.migrateLocal`.
-- **Downloads.** Files that the person explicitly asks for are fine: one file per click, such as a CSV of the entries, an attachment, a generated PDF. Never download in the background, on load or as a storage workaround ("save a copy locally in case"). Say next to the button
-  that the file is not encrypted. `exportAll` is the right way to give a person all their data.
-- A custom passphrase, login, key or "remember me" dialog; storing or caching passphrases; reading the library dialogs' inputs.
-- Replacing, copying, minifying, patching or re-hosting the library; a changed integrity hash; a different CSP that is wider than this one. Hiding the library's dialogs or its sandbox label with CSS or script.
-- The sandbox scope ID in an app file; `window.__WDS_MIGRATION_TEST__` anywhere in the app (only an automated test sets it, porting.md, section 6); `localStorage.clear()`.
-- One giant record; `set` per keystroke; polling `list` in a timer.
-- Catching errors and ignoring them; showing "saved" while a save failed (use `onStatus`).
-- Telling users their data is unreadable for the faculty (section 13 has the correct wording).
-
-## 12. wds-verify
-
-`wds-verify` is a smoke test, not a proof. It lives in the public repository ({{repo_url}}, folder `tools/`) and is not served from this website. It runs the finished app from file:// in Chromium, drives the library's dialogs by their stable attributes (so any language works),
-and looks for the usual mistakes. It does not replace reading the rules of this page. Every check and finding id is described in `tools/README.md`.
-
-**Setup, once** (Node 22 or newer):
+A smoke test, not a proof. It runs the finished app from file:// in Chromium against the public sandbox (section 13), drives the library's dialogs, types canary strings into the fields, presses the save buttons, reloads and checks that the values come back, and searches every request and every storage for plaintext. Its static checks cover the script tag, the policy and the forbidden patterns. Every check: `tools/README.md` in the repository.
 
 ```sh
-git clone {{repo_url}} && cd wiai-datastore
+git clone {{repo_url}} && cd wiai-datastore       # once, with Node 22 or newer
 (cd tools && npm install && npx playwright install chromium)
-node tools/wds-verify.mjs --script-tag                  # prints the complete script tag (with the onerror handler) and the CSP; the integrity value must equal section 2
+node tools/wds-verify.mjs <app.html>    # the Markdown report goes to stdout: put it into the README
 ```
 
-Run it from the clone, with the path of the app:
+Exit code 0 passed, 1 a check failed (fix, run again), 2 the tool could not run, 3 the sandbox is unavailable (not an app finding: wait, at most an hour). Without Node, say in the README that wds-verify did not run.
 
-```sh
-node tools/wds-verify.mjs <app.html>                    # Markdown report on stdout, exit code 1 if a check failed
-node tools/wds-verify.mjs <app.html> --out report.md    # also write the report to a file
-node tools/wds-verify.mjs <app.html> --heading-level 3 --out report.md   # title as ###, sections as ####: for pasting under "## Verification" in a README
-node tools/wds-verify.mjs <app.html> --target sandbox   # run against the public sandbox of the real service: no Python, no build
-node tools/wds-verify.mjs <app.html> --sandbox-copy app-sandbox.html   # a copy for a person to open in a browser and try by hand
-node tools/wds-verify.mjs <app.html> --static-only      # only the static checks: needs just Node, no browser
-```
-
-- **Targets** (`--target auto|mock|sandbox`, default `auto`; the first line of the report names the target and why). `mock`: the real server runs locally with a temporary database and everything is inspected, including the server's database; it needs Python 3.13 with the server packages
-  (`python3.13 -m venv .venv && .venv/bin/pip install -r server/requirements.txt` in the clone). `sandbox`: the app opens against the public sandbox scope of the real service (section 17); no Python, no client build; the server's database is not inspected, but every request body still is.
-  `auto` takes `mock` when Python is found, else `sandbox` when the sandbox is reachable, else only the static checks run (with a warning that says so).
-- **Mock or sandbox.** Only the mock looks into the server's database, deletes the old data of a migration as production does, has the default limits of a scope (the sandbox's are small, {{sandbox_limits}}: a larger file takes the "too large" path of a migration there) and builds the library from `client/src` of the clone. Only the sandbox shows the page as the real service renders it (the sandbox bar, `--wds-sandbox-bar`, real latency, the published library with the hash of your tag). The report's "Not tested" section lists what neither can do.
-- **Static checks** need only Node and the clone: the script tag (a published library version with the matching integrity hash, `crossorigin`, `onerror`), the Content-Security-Policy, no other script, nothing but the library talks to the datastore host, no sandbox scope ID, no CSS that hides the library, no hand-made migration (a warning) and no assignment of `window.__WDS_MIGRATION_TEST__` (a failure).
-- **Scope check** (every run with network access): the public scope document of the app's own scope ID is fetched. An unknown scope fails. The breach check on while `connect-src` lacks `https://api.pwnedpasswords.com` fails; off while the host is still allowed warns. The report prints the current enrollment, breach check and limits (sizes in MB). When the breach check is on and neither the page nor the README carries the breach-check sentence of section 13 (word for word), an info finding prints both sentences. Offline, or with `--scope-check off` (also for a scope that is not registered yet): "scope settings not checked".
-- **Dynamic checks.** It opens the app, creates a vault through the library dialog, types unique canary strings into every visible input, textarea and contenteditable, presses the app's save-like buttons (text containing save, speichern, add, hinzufügen, anlegen, create, ok and similar, never delete, export, download, import, lock; plus every element marked `data-wds-verify="save"`),
-  runs the steps of `wds-verify.json`, waits, then **reloads the page, unlocks again and looks for the typed values** ("Data after reload": an app has to read its data back when it starts). Canaries and the vault passphrase are searched for in every request (URL, header, body), page URL, localStorage, sessionStorage, IndexedDB, cache storage, cookies, console output,
-  downloads and, with `mock`, the server's database (raw, URL-encoded, base64, hex and UTF-16). It also flags a record written three or more times within a second without a button press in between (use autosave), a record that holds the data of several items or the whole app state, and apps that store nothing during the run (then the run proved nothing: that fails). A notice of the library that covers a button is dismissed and the click retried.
-- Options: `--strict` (warnings fail too), `--heading-level <1-5>`, `--migration-delete` (with a `seed`), `--headed`, `--json`, `--locale <bcp47>`, `--wait-ms <n>` (time for debounced saves, default 2800), `--hashes <file>`, `--script-tag [version]`, `--scope-check off`. Exit codes: 0 passed, 1 a check failed, 2 the tool could not run (missing Python for `--target mock`, no Playwright, bad arguments), 3 the sandbox is unavailable (rate limited, full or switched off: not an app finding; wait, at most an hour, section 17). A library that is newer than the service (`--hashes`, an unreleased build): `tools/README.md`.
-- **Without a clone** the static checks need Node and the same small clone. If you can do neither, use "Without wds-verify" and say in the README that wds-verify did not run.
-
-### Without wds-verify
-
-When the tool cannot run, check by hand and write in the README what you did and what not:
-
-1. The script tag and the CSP are copied from sections 2 and 3 without change (the hash equals `{{sri}}`), the CSP comes before every script.
-2. Search the file: no `fetch`, `XMLHttpRequest`, `WebSocket`, `sendBeacon`, `EventSource`, `eval`, `new Function`, no `<script src>` except the library, the sandbox scope ID ({{sandbox_scope}}) is not in it, and no user data in `localStorage`, `sessionStorage`, `indexedDB` or cookies (a personal preference chosen from a fixed list (theme, language, sort, density, last tab) may stay in localStorage under the app's own key; old data: `store.migrateLocal`, porting.md).
-3. Open a copy of the file whose name contains "sandbox" (the app's scope ID replaced by the sandbox scope ID **in the copy only**; delete it afterwards) and walk through it: create a vault, enter data in every view, reload and unlock again, lock and unlock in the same page, change the same item in two windows (conflict), invite a read-only member (no edit controls), click every download and check what is in the file. The network tab shows only requests to `{{base}}/api/`, the Application tab only `wds:*` keys and your own preference keys.
-
-### Writing wds-verify.json
-
-The tool presses only what it recognises. An app whose input is hidden until the user acts, that has tabs, dialogs of its own or a file input needs **steps**. Put a file `wds-verify.json` next to the app. It is an object (a bare array is an error that says so); every key is optional:
+A plain form app passes without more. Write a `wds-verify.json` next to the app only when inputs are hidden until the user acts (a "New" button, tabs) or the page has a file input; pass it with `--config` if it lies elsewhere. `steps` run after the tool pressed what it recognised; `afterReload` takes the same steps after the reload (open each tab or item that shows the data: the list shows a title that the library writes a few seconds after the text). Steps: `click` (selector), `fill` ([selector, text]: unique, and it must come back as the same text), `select`, `press` ([selector, key]), `upload` (a file input), `download` (a button the person would press), `wait` (ms). Selectors are Playwright selectors.
 
 ```json
 {
@@ -477,112 +210,16 @@ The tool presses only what it recognises. An app whose input is hidden until the
     { "click": "#new" },
     { "fill": ["#text", "verify canary text for the notes example"] },
     { "wait": 3000 }
-  ]
+  ],
+  "afterReload": [{ "click": "#list li:first-child button:first-child" }]
 }
 ```
 
-- `steps` run after the tool pressed the buttons it recognised, in order, after the vault was created. `click` takes a CSS selector. `fill` takes a selector and a text of at least 6 characters, unique (it is searched for like a canary), and valid for the field: a duration field needs a text it accepts, such as `"1,5 Stunden"`. `select` takes `[selector, value]`. `press` takes `[selector, key]`, for example `Enter` to submit a form. Selectors are Playwright selectors (CSS, `:has()`, `:nth-match()`, `text=`, `role=`). **A `fill` text must come back as the same text**: a field that turns it into something else (a tag field that splits `"a, b"`, a number or date field) hides the value from the search; type one token per tag field. More in porting.md, section 6, "Writing seed steps that prove something".
-  `upload` takes the selector of a file input and, optionally, a path relative to wds-verify.json: `{ "upload": ["#cover"] }` selects a generated PNG whose name and bytes are searched for like canaries, `{ "upload": ["#cover", "sample.jpg"] }` your own file (its name is searched for, not its content). **The tool never touches a file input by itself.**
-  `download` takes the selector of a button that the person would press to get a file: the tool clicks it, expects a download and reports "user-requested download, contains canaries: yes/no" as information, never as a leak; a download at any other time stays a failure. `wait` takes milliseconds (at most 60000).
-- `afterReload` (same step kinds) runs after the reload and the unlock, before the tool looks for the typed values. A tabbed app starts on its first tab, so open the tabs that show the data, one click per tab: `"afterReload": [{ "click": "#tab-projects" }, { "click": "#tab-notes" }]`. The tool looks at the page right after the reload and after every step and takes everything it saw together, so the values may be on different tabs. Result: "Data after reload" passes when at least one typed value of every round is visible again (values that the app neither showed as text nor wrote to the store before the reload, for example input it rejected, are not expected back, and the detail names them). An `afterReload` fill whose text contains a value typed before the reload fails, because the tool reads the values of fields too and would "find" it without the app reading anything; use another text or `{canary}`. It **fails** when records were written, nothing is visible and there are no `afterReload` steps; otherwise it warns ("x of y values visible; an app with tabs needs afterReload steps").
-- `seed` tests the migration of a ported app (`store.migrateLocal`; porting.md, section 6 has the order of the run). It is an object `{ "page": "old/index.html", "steps": [ ... ], "keep": [ ... ] }`: `page` is the old, local-only version of the app (a file next to `wds-verify.json`), `steps` has the same forms as `steps` (a `{canary}` in a fill text becomes a unique generated value) and needs at least one `fill` or `upload`, `keep` (optional) names localStorage keys and `database/store` names that stay in the old storage on purpose (the app's own preference keys); everything else that the old app filled must be gone afterwards.
-  The tool opens the old page, then the new app in the **same browser** (`file://` pages share localStorage and IndexedDB in Chromium), creates the vault and **answers the library's migration dialogs itself** (backup, then "Take over"; entries that are too large: the download, then delete), so the app needs no step for them. Findings: "Seed: the old app", "Migration: old data visible" (looked for **after reloading and unlocking**, so only what came out of the vault counts), "Migration: old data only encrypted", "Migration: the library's dialog" and "Migration: old data deleted" (mock target: everything the old app stored must be gone) or "kept in the sandbox".
-  `--migration-delete` (needs a `seed`) sets `window.__WDS_MIGRATION_TEST__ = true` in the sandbox run, so that the library deletes there as well; on the mock target it changes nothing. **The app never sets the global itself**: wds-verify fails a file that assigns it, and a page that sets it at run time. A developer's own automated test may set it in its own browser (porting.md, section 6).
-- `locale` is the language of the browser (BCP 47, default `en-US`; `--locale` overrides). The library's dialogs follow the browser unless the app calls `store.setLocale`. The tool finds the library's controls by their `data-wds` attributes, so a German app works; only the app's own buttons are found by their text. Mark an app button with a name the word list does not know with `data-wds-verify="save"` (for example a button called "Weiter" that saves).
-- Dialogs of the app itself need stable selectors (an id) for steps to reach them. A validation error names the step and the allowed forms.
+The report ends with "Not tested": a second device, a conflict, a read-only member, buttons it does not press. Try those by hand in a second browser window.
 
-An example for an app with four tabs (projects, time entries with a form, notes with attachments, a weekly view with a CSV button); it is the file of the example app in `examples/zeit-notizen/`, with the `seed` block for the migration test of its older, local-only version (`old/index.html`):
+## 11. What to tell users
 
-```json
-{
-  "locale": "de-DE",
-  "steps": [
-    {"click": "#tab-projects"},
-    {"fill": ["#project-name", "Projekt Canary Kolibri"]},
-    {"click": "#project-add"},
-    {"wait": 1500},
-    {"fill": ["#project-name", "Zweites Projekt Canary Dachs"]},
-    {"press": ["#project-name", "Enter"]},
-    {"wait": 1500},
-    {"click": "#tab-time"},
-    {"fill": ["#entry-duration", "1,5 Stunden"]},
-    {"fill": ["#entry-desc", "Zeiteintrag Canary Pelikan"]},
-    {"click": "#entry-add"},
-    {"wait": 1500},
-    {"click": "#tab-notes"},
-    {"click": "#note-new"},
-    {"fill": ["#note-title", "Notiz Canary Wiesel"]},
-    {"fill": ["#note-tags", "canary-tag-otter, zweiter-tag"]},
-    {"fill": ["#note-text", "Notiztext Canary Biber mit mehreren Woertern"]},
-    {"wait": 3500},
-    {"upload": ["#note-file"]},
-    {"wait": 3000},
-    {"click": "#tab-week"},
-    {"download": "#csv-all"}
-  ],
-  "afterReload": [
-    {"click": "#tab-projects"},
-    {"click": "#tab-time"},
-    {"click": "#tab-notes"}
-  ],
-  "seed": {
-    "page": "old/index.html",
-    "steps": [
-      {"fill": ["#project-name", "Altes Projekt {canary}"]},
-      {"click": "#project-add"},
-      {"fill": ["#entry-desc", "Alter Eintrag {canary}"]},
-      {"click": "#entry-add"},
-      {"fill": ["#note-title", "Alte Notiz {canary}"]},
-      {"fill": ["#note-text", "Alter Notiztext {canary}"]},
-      {"upload": ["#note-file"]},
-      {"click": "#note-add"},
-      {"fill": ["#timer-desc", "Alter Timer {canary}"]},
-      {"click": "#timer-start"},
-      {"wait": 800}
-    ]
-  }
-}
-```
-
-**What the run does not test** (the report ends with a "Not tested" section that says it): a second device and conflicts, read-only members, lock and unlock again in one page, buttons the tool does not press (delete, export, download, import, lock, anything the word list, `data-wds-verify` and the steps do not name), file inputs without an `upload` step, fields hidden in views no step opens, dialogs of the app itself without stable selectors. Test these by hand, as in "Without wds-verify", or in your own Playwright test (porting.md, section 6).
-Paste the report into the README of the app under "Verification" with the level of your heading plus one (under `## Verification`: `--heading-level 3 --out report.md`, then `cat report.md >> README.md` after that heading). A warning that is a false positive is explained there in one sentence; it is not removed.
-
-### Driving the library's dialogs in your own end-to-end tests
-
-Every dialog of the library is a modal `<dialog>` in the top layer with `data-wds-view="<view>"` (set when the view is rendered, and changed when the dialog switches to another view), every button, input, select, textarea and summary inside it has `data-wds="<name>"`, and the texts follow the language, so a test never selects by text.
-Wait for a view with `page.locator('[data-wds-view="unlock"]')`, act on `[data-wds="passphrase"]` inside it. **A dialog is ready when it has a view and no `aria-busy="true"`**: the library marks it busy while it loads (a dialog opens as `loading`, never without a view), while a progress view runs, while a submit is in flight (the Argon2id key derivation of an unlock, create or redeem) and while the members dialog refreshes its roster. A request that does not answer within 30 s fails like a lost connection, and a dialog that cannot go on shows the view `error` with a `retry` button, so a test that waits for a ready dialog sees either the next view or `error`. The attributes are part of the library's contract; wds-verify uses the same ones.
-
-| `data-wds-view` | Shown when | Controls (`data-wds`) |
-|---|---|---|
-| `loading` | the scope is being read, or the view of a dialog is being built (a dialog never has no view; it opens as `loading`, with `aria-busy`) | none |
-| `error` | the scope or the service cannot be reached, a request took longer than the timeout (30 s, `OfflineError` with code `timeout`) or a view could not be built | `retry` (starts again at `loading`), `form-error` |
-| `unlock` | the first screen of `store.unlock()` | `access-id-input`, `passphrase`, `show-passphrase`, `unlock-submit`, `keyfile` (the hidden file input) and `keyfile-button`, `to-create`, `to-redeem`, `form-error` |
-| `create` | "Create a vault" (also the notice that creating is closed or paused) | `join-code` (not in the sandbox), `passphrase`, `passphrase-repeat`, `show-passphrase`, `recovery-contact-toggle` and `recovery-contact` (not in the sandbox), `create-submit`, `back`, `form-error` |
-| `redeem` | "Use an invite code" | `invite-code-input`, `passphrase`, `passphrase-repeat`, `show-passphrase`, `redeem-submit`, `back`, `form-error` |
-| `sheet` | the access sheet after creating a vault or redeeming an invite | `access-id`, `recovery-code` (owner, not in the sandbox), `sheet-keyfile`, `sheet-print`, `sheet-download`, `sheet-confirm` (a checkbox), `sheet-continue` (enabled once `sheet-confirm` is checked), `form-error` |
-| `conflict` | the conflict dialog | `conflict-theirs`, `conflict-mine`, `conflict-download` (when both sides can be downloaded), `form-error` |
-| `history` | `store.showHistory(name)`, once the versions are loaded (until then `loading`; `error` with `retry` when they cannot be read) | `history-version` (one per version, with `data-wds-version="<n>"`), `history-preview`, `history-restore`, `form-error`, `close` |
-| `share` | `store.share()`, the members dialog (`aria-busy` until the roster is refreshed) | `person` and `person-escrow` (one row per member), `member-role`, `cancel-invite`, `revoke`, `invite-role`, `invite-label`, `invite-create`, `invite-code`, `invite-copy`, `invite-another`, `me-keyfile`, `me-renew`, `me-lock`, `me-passphrase-toggle`, `passphrase`, `passphrase-repeat`, `show-passphrase`, `me-passphrase-submit`, `recovery-request` (with `recovery-cancel`, `recovery-keep`), `recovered-notice` (with `recovered-ack`), `rekey-continue`, `form-error`, `close` |
-| `revoke` | the confirmation inside the members dialog | `revoke-id`, `revoke-confirm`, `revoke-cancel` |
-| `progress` | a revocation re-encrypts the vault, or `store.migrateLocal` copies and checks (no buttons, `aria-busy`) | none (a progress bar; the dialog goes back to `share` when done) |
-| `notice` | after unlocking: a recovery was requested, or the faculty added an owner access | `recovery-request` with `recovery-cancel` and `recovery-keep`, `recovered-notice` with `recovered-ack`, `form-error`, `close` |
-| `migrate` | `store.migrateLocal` found old data: the question | `migrate-yes` (disabled while rows are left out with `h.skip` until `migrate-skip-ack` is ticked or the backup was downloaded), `migrate-skip-ack` (a checkbox, only then), `migrate-backup` (downloads a ZIP; click only), `migrate-no`, `close` |
-| `migrate-large` | entries that do not fit into the vault | `migrate-large-download` (one ZIP with exactly those entries), `migrate-delete` (disabled until that download started), `migrate-keep`, `close` |
-
-Everywhere: `close` (only in dialogs that can be cancelled), `sandbox-banner` (a message in every dialog while the scope is the sandbox). On the page, outside any dialog: `sandbox-bar`, and notices of the library are toasts with `data-wds-toast="<key>"`
-(keys such as `stale`, `offline`, `quota`, `forbidden`, `session`, `newdevice`, `readonly`, `unsaved`, `migration`: the outcome of `store.migrateLocal`, with a `toast-action` that downloads the backup on every notice that leaves the old data in place) and the buttons `toast-action` and `toast-dismiss`. This table is the reference for the attributes; examples/docs-recipes.spec.mjs compares it with the library.
-
-A vault in a test, in four steps (Playwright; the same works in any driver): open the page and call `store.unlock()`, or wait for the app to; in `unlock` click `to-create`; in `create` fill `join-code` (not in the sandbox), `passphrase` and `passphrase-repeat` and click `create-submit` (the Argon2id key derivation takes several seconds: wait up to 60 s for `sheet`);
-in `sheet` read `access-id`, check `sheet-confirm`, click `sheet-continue`. Unlocking again: `access-id-input`, `passphrase`, `unlock-submit`.
-`tools/lib/drive-library.mjs` in the clone does exactly this for wds-verify and for your own scripts: `import { createVault, unlock } from "<clone>/tools/lib/drive-library.mjs"`, then `const { accessId, passphrase } = await createVault(page)` (the app calls `store.unlock()`, the function answers the dialogs) and, after a reload, `await unlock(page, { accessId, passphrase })`. The file exports `createVault`, `unlock`, `redeemInvite` (a member's test), `answerMigration`, `confirmSheet`, `deleteVault`, `readJoinCode` and `DriveError`; its header comment says what each does. `createVault` and `unlock` resolve with the view they ended on (`next`: `null`, `notice`, `sheet`, `migrate`, …), so a test whose app calls `migrateLocal` goes on with `answerMigration(page)`.
-You may use the Playwright of the clone (`tools/node_modules/playwright` after `cd tools && npm install && npx playwright install chromium`) for your own test scripts, for example to seed old data and open the new app (porting.md, section 6); no second copy is needed.
-**Headless Chromium has no PDF viewer.** Playwright's headless Chromium cannot show a PDF: a popup that the app fills with `w.location.href = blobUrl` of an `application/pdf` blob stays at `about:blank` and the file arrives as a download. A test of "open the file in a new tab" therefore uses a `text/plain` blob (the popup shows the text and its URL starts with `blob:`), or, for a PDF, listens for the popup's `download` event (`popup.on("download", …)`, set before the click) instead of looking at the page.
-Use the sandbox (section 17) for such tests, or a test vault in your own scope. The join code of a scope is a secret of the staff: the helper reads it only from a file that the person creates in their own terminal, you never read or print that file and never ask for the code in the chat (porting.md, section 6, "The join code for tests").
-
-## 13. What to tell users
-
-Put this in the app's README or on its start page, adapted to the app. English first, German below; the German text uses "Sie". **The first sentence of each language is the official wording of the faculty** (the dashboard prompt gives it too): keep it word for word at the start, in the language of the text (a text in any other language uses the English one; an app with a language switch shows the sentences of the language that is set), and never claim more ("only you can read your data") or less.
-The second sentence is the breach-check sentence: keep it when the scope has the breach check on (the default; the dashboard prompt and `wds-verify` say which; an app whose scope is not registered yet carries it too), delete it when the check is off. The rest may be shortened or reworded. `wds-verify` reports in an info finding when the breach check is on and neither the page nor the README carries the breach-check sentence word for word (naming the service is not enough).
+Put this into the app's README or start page, adapted. English first, German below (German uses "Sie"). **The first sentence of each language is the official wording of the faculty**: keep it word for word, in the language of the text (any other language uses the English one), and never claim more ("only you can read your data") or less. The second sentence is the breach-check sentence: keep it when the scope has the breach check on (the default; the dashboard prompt and wds-verify say which), delete it when off. The rest may be shortened.
 
 ```text
 Data is end-to-end encrypted; the faculty holds a recovery key for emergencies.
@@ -602,13 +239,11 @@ Ihre Daten liegen auf einem Server der Fakultät. Sie brauchen:
 Mit Ihrem Wiederherstellungscode kann die Fakultät nach einem dokumentierten Verfahren den Zugang wiederherstellen. Details: {{base}}/docs/users.de
 ```
 
-If the app offers downloads (a CSV, an attachment, a PDF), say next to the button that the file is **not encrypted**. If the app says "saved locally" or "stays on this device" anywhere, that sentence is wrong now: replace it with the text above.
+Next to a download button (a CSV, an attachment) say that the file is **not encrypted**. A text such as "saved locally" or "stays on this device" is wrong now: replace it.
 
-## 14. Complete minimal example
+## 12. Complete minimal example
 
-A notes app: list, create, edit with autosave, delete, share, export, lock and unlock again. Replace the scope ID. It was run in Chromium, Firefox
-and WebKit from file:// against the real server with exactly this policy and script tag (client/test/docs.spec.mjs extracts
-this block from the rendered page and tests it). With the first `wds-verify.json` of section 12 next to it, it passes wds-verify.
+A notes app: list, create, edit with autosave, delete, vault, in the linear shape every app has: unlock, load, render, `onChange`. Replace the scope ID. It runs from file:// with exactly this policy and tag, and passes wds-verify with the `wds-verify.json` of section 10 (examples/docs-recipes.spec.mjs tests it against the real server).
 
 ```html
 <!doctype html>
@@ -621,16 +256,14 @@ this block from the rendered page and tests it). With the first `wds-verify.json
 <style>
   body { font: 16px/1.5 system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; }
   textarea { width: 100%; box-sizing: border-box; }
-  li.current .open { font-weight: bold; }
+  [data-wds-role="read"] .edit { display: none; }
 </style>
 </head>
 <body>
 <h1>Notes</h1>
 <p>
-  <button id="new" disabled>New note</button>
-  <button id="share">Share</button>
-  <button id="export">Export</button>
-  <button id="unlock" hidden>Unlock</button>
+  <button id="new" class="edit">New note</button>
+  <button id="vault">Vault</button>
   <span id="status" role="status"></span>
 </p>
 <ul id="list"></ul>
@@ -640,21 +273,18 @@ this block from the rendered page and tests it). With the first `wds-verify.json
 <script>
 "use strict";
 const store = WDS.connect({ scope: "myapp-k7m2a9" });   // the scope ID from the dashboard
-store.setLocale("en");                                  // this app speaks English only: so do the library's dialogs, whatever the browser says
-const notes = store.collection("notes/");               // the list of notes; a notes app of this size loads all of them (with a lot of notes, keep a title in the meta instead)
+const notes = store.collection("notes/", { meta: (note) => ({ title: note.text.split("\n")[0].slice(0, 80) }) });
 const $ = (id) => document.getElementById(id);
-const texts = new Map();   // id -> { text }
-let current = null;        // the open note: { id, saver }
+let current = null, saveState = "idle";   // the open note: { id, note, saver }, and the status of its saver
 
-function render() {
-  $("list").replaceChildren(...[...texts].map(([id, note]) => {
+function render(items) {
+  $("list").replaceChildren(...items.map(({ id, meta }) => {
     const li = document.createElement("li");
-    if (current && current.id === id) li.className = "current";
     const open = document.createElement("button");
-    open.className = "open";
-    open.textContent = note.text.split("\n")[0] || "(empty)";
+    open.textContent = meta.title || "(empty)";
     open.onclick = () => openNote(id);
     const del = document.createElement("button");
+    del.className = "edit";
     del.textContent = "Delete";
     del.onclick = () => deleteNote(id);
     li.append(open, " ", del);
@@ -663,7 +293,9 @@ function render() {
 }
 
 async function closeNote() {
-  if (current && current.saver) { await current.saver.flush(); current.saver.stop(); }
+  if (!current) return;
+  await current.saver.flush();
+  current.saver.stop();
   current = null;
   $("text").value = "";
   $("text").disabled = true;
@@ -671,90 +303,44 @@ async function closeNote() {
 
 async function openNote(id) {
   await closeNote();
-  const note = texts.get(id);
-  const readOnly = store.status().role === "read";
-  const saver = readOnly ? null : notes.autosave(id, () => note, {
-    onStatus: (s) => { $("status").textContent = s; },
-    onResolved: (res) => {                              // another device saved first and its version won
-      if (res.resolution !== "theirs") return;
-      note.text = res.value.text;
-      if (current && current.id === id) $("text").value = note.text;
-      render();
-    },
+  const note = await notes.get(id);
+  if (!note) return;
+  const saver = notes.autosave(id, () => note, {
+    onStatus: (status) => { saveState = status; $("status").textContent = status; },
   });
-  current = { id, saver };
+  current = { id, note, saver };
   $("text").value = note.text;
-  $("text").readOnly = readOnly;
+  $("text").readOnly = store.status().role === "read";
   $("text").disabled = false;
   $("text").focus();
-  render();
 }
 
 async function deleteNote(id) {
-  if (current && current.id === id) { if (current.saver) current.saver.stop(); await closeNote(); }
+  if (current && current.id === id) await closeNote();
   await notes.remove(id);
-  texts.delete(id);
-  render();
 }
 
-$("text").oninput = () => {
-  texts.get(current.id).text = $("text").value;
-  render();
-  if (current.saver) current.saver.changed();
-};
-$("new").onclick = async () => {
-  const id = crypto.randomUUID().slice(0, 8), note = { text: "" };
-  texts.set(id, note);
-  await openNote(id);                                   // open first, so that the person can type at once
-  notes.set(id, note).catch((err) => { if (!err.stored) console.error(err); });   // creates the record and its list entry now; autosave keeps them current
-};
-$("share").onclick = () => store.share();
-$("export").onclick = () => store.exportAll();
-$("unlock").onclick = () => store.unlock();
+$("text").oninput = () => { current.note.text = $("text").value; current.saver.changed(); };
+$("new").onclick = async () => openNote((await notes.add({ text: "" })).id);
+$("vault").onclick = () => store.openVault();
 
-notes.onChange(async ({ added, removed }) => {          // notes that another device added or removed
-  removed.forEach((id) => texts.delete(id));
-  if (store.isUnlocked()) for (const id of added) { const note = await notes.get(id); if (note) texts.set(id, note); }
-  render();
-});
-store.onLock(() => {                                    // nothing of the vault may stay on screen
-  texts.clear();
-  current = null;
-  $("text").value = "";
-  $("text").disabled = true;
-  $("new").disabled = true;
-  $("list").replaceChildren();
-  $("unlock").hidden = false;
-});
-store.onUnlock(async () => {                            // after every unlock, the first one too
-  texts.clear();
-  for (const { id, value } of await notes.getAll()) texts.set(id, value);
-  $("unlock").hidden = true;
-  $("new").disabled = store.status().role === "read";
-  render();
-});
-store.unlock();                                         // the dialog: create a vault or unlock
+async function start() {
+  await store.unlock();                            // the library's dialog: create a vault or unlock
+  render(await notes.load());
+  store.onChange(async ({ names, remote }) => {      // our own writes (also the title while typing) and other devices
+    render(notes.items());
+    const open = remote && current && names.includes("notes/" + current.id) && saveState !== "dirty" && saveState !== "saving";
+    const fresh = open ? await notes.get(current.id) : null;   // the open note changed elsewhere (or the other version won a conflict) and nothing was typed since
+    if (fresh && current) { current.note.text = fresh.text; $("text").value = fresh.text; }
+  });
+}
+start();
 </script>
 </body>
 </html>
 ```
 
-## 15. Deployment of the app
+## 13. Sandbox and porting
 
-The finished app is one HTML file. Users open it from their disk, from any web server or in Electron. Nothing else is needed:
-no build step, no server of your own. If you move the app to a new address, the data stays: it belongs to the vault, not to the
-address. To retire an app, ask the scope administrator to keep the scope for a while so users can export (users.en.md).
-
-## 16. Porting an existing app
-
-Read **[porting.md]({{base}}/docs/porting.md)** (HTML: {{base}}/docs/porting) before you change an app that exists already: inventory, import of an old export file, `store.migrateLocal` for the data in the browsers of existing users, tests and a checklist for apps with forms and modal dialogs.
-
-## 17. The sandbox
-
-A public scope on the real service for testing: **{{sandbox_scope}}**. Anyone can create a vault there without a join code. Limits: {{sandbox_limits}}. Everything is deleted every night between {{sandbox_wipe}} and one hour later (vaults created after that time stay until the next night).
-The library says "Sandbox" (dialog titles, the create button, a banner in every dialog and a bar at the top of the page after unlocking; a sticky header needs `top: var(--wds-sandbox-bar, 0px)`, section 4), there is no recovery contact and no recovery code, at most three invites per vault (they expire before the next wipe), and the breach check of passphrases is off.
-When many people test, the oldest vaults that nobody has written to for 30 minutes are deleted to make room, and vault creation is limited: {{sandbox_creation}}. A run that hits the limit ends with the error that wds-verify reports as "sandbox unavailable, not an app finding" (exit code 3): wait, at most an hour. Records are limited to {{sandbox_limits}} here: seed data of a migration test must be small.
-
-- **Use it** through `node tools/wds-verify.mjs <app.html> --target sandbox` (real library, real service, the tool replaces the scope IDs in a copy of your page) or `--sandbox-copy app-sandbox.html` (a copy that a person opens in a browser). By hand: a copy of the file with "sandbox" in its name (section 12, "Without wds-verify").
-- **Never write the sandbox scope ID into the app file.** The app would store its users' data where it is deleted every night; wds-verify fails a file that contains it. Never enter real data. A migration (`store.migrateLocal`, porting.md) copies and keeps the old data in the sandbox.
-- When `{{sandbox_scope}}` reads "(no sandbox on this server)" this server has none: test against a scope of your own and a mock (`--target mock`).
+The sandbox is a public scope for tests: **{{sandbox_scope}}**, open to everyone without a join code, limits {{sandbox_limits}}, everything deleted every night between {{sandbox_wipe}} and one hour later; creating vaults is limited ({{sandbox_creation}}). The library marks its dialogs and the page with "Sandbox", and a migration never deletes there. `wds-verify` uses it for you (it replaces the scope ID in a copy of your page). **Never write the sandbox scope ID into an app, and never enter real data.**
+An app that exists already: read [porting.md]({{base}}/docs/porting.md) first.

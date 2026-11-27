@@ -29,7 +29,7 @@ Open the app, enter your access ID (or choose the key file) and your passphrase.
 
 ## Sharing
 
-Owners share their whole vault: in the app choose **Share**, pick a role and create an invite code.
+Owners share their whole vault: in the app choose **Vault**, pick a role and create an invite code.
 
 - **Can edit**: can read and change. **Read only**: can only read.
 - Send the code over another channel than the app itself (in person, a chat). It expires after 2 days.
@@ -67,30 +67,24 @@ In short: **Data is end-to-end encrypted; the faculty holds a recovery key for e
    and tell the operator.
 3. After the waiting period the operator adds a new owner access to your vault and gives you an invite code. You redeem it and
    choose a new passphrase. The app says "The faculty added an owner access" and asks you to confirm.
-4. The old access is not removed automatically. Open **Share** and revoke it.
+4. The old access is not removed automatically. Open **Vault** and revoke it.
 
 Without a recovery code, recovery works only if you stored an e-mail address as recovery contact when you created the vault;
 the waiting period is then 7 days. With neither, your data cannot be recovered.
 
 ## Data from an earlier version of the app
 
-If the app existed before as a version that kept its data only in your browser, the new version asks **once**, when you open it: "This browser holds … entries from an earlier version of this app … Copy them into your vault and then delete them from this browser?"
+If the app existed before as a version that kept its data only in your browser, the new version asks when you open it: "This browser holds … entries from an earlier version of this app … Copy them into your vault?"
 
-- The app copies the entries into your vault, reads them back from the server and compares them, and only then deletes the old copy in the browser. Nothing is overwritten in your vault, and a copy that did not work leaves the old data where it is.
-- **Download a backup first** if you want one: it is a ZIP file with all old entries and their files. It is **not encrypted**, so keep it safe or delete it after you have looked at it.
+- The app copies the entries into your vault and deletes nothing yet. Look at the entries in the app. At the **next start** it asks whether everything is there and, if you confirm, deletes the old copy in the browser ("Not now" keeps it and asks again). If your vault already holds a different version of an entry, you decide which one to keep; the old copy of an entry is deleted with the rest if you confirm, so download a copy first if you want to keep the old version.
+- **Download a copy first** if you want one (a link in the question): it is a ZIP file with all old entries and their files. It is **not encrypted**, so keep it safe or delete it after you have looked at it.
 - "Not now" changes nothing; the old data stays unencrypted in this browser and the app asks again next time.
-- If something is too large for your vault, the app lists it and lets you download those files before it deletes anything.
-- Only the owner of a vault can do this. If you were invited into someone else's vault, the app shows a notice and leaves the old data alone; take it over in a vault of your own.
+- Only the owner of a vault can do this. If you were invited into someone else's vault, the app leaves the old data alone and says nothing on screen; take it over in a vault of your own.
 - Open the new version the way you opened the old one (the same file in the same place, or the same web address): a browser keeps the data of every address separately.
-
-## If a dialog says "Sandbox"
-
-If a dialog starts with **Sandbox** (or a bar at the top of the page says so), you are in a **test copy** of an app. Do not enter real data. Everything in the sandbox is **deleted every night**,
-there is no recovery code and nobody can restore a sandbox vault. Developers use it to try their apps; it is not a place to keep anything.
 
 ## Your data, your export
 
-Use the app's **Export** button, or open [{{base}}/export/]({{base}}/export/) in any browser, enter the app ID and access ID (or
+Choose **Vault** in the app and then **Export everything**, or open [{{base}}/export/]({{base}}/export/) in any browser, enter the app ID and access ID (or
 key file) and your passphrase, and download everything decrypted as a ZIP file. The files are not encrypted: store them carefully.
 
 **Files you download from an app are not encrypted**, whatever they are: a CSV table, an attachment, a PDF, the export ZIP. Once a file is on your computer, it is protected only by what protects your computer.

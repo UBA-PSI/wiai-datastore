@@ -1,4 +1,4 @@
-// wds-verify with a browser: wds-verify.json steps, the "nothing was saved" guard, the exportAll exemption, other field types.
+// wds-verify with a browser: wds-verify.json steps, the "nothing was saved" guard, a download that a step asks for, other field types, a plain form.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
@@ -35,19 +35,44 @@ test('a broken wds-verify.json is a usage error', async () => {
   assert.match(r.stderr, /wds-verify\.json step 1/);
 });
 
-test('exportAll downloads plaintext by design and is not a leak; other fields (email, number, textarea, contenteditable, date) are filled', { timeout: 120000 }, async () => {
+test('a download that a step asks for is not a leak; other fields (email, textarea, contenteditable) get canaries, number and date get valid values', { timeout: 120000 }, async () => {
   const body = '<input id="m" type="email" aria-label="mail"><input id="n" type="number" aria-label="amount"><textarea id="t" aria-label="text"></textarea>'
     + '<div id="e" contenteditable="true" aria-label="rich" style="min-height:2em;border:1px solid #888"></div><input id="d" type="date" aria-label="day">'
-    + '<button id="save" type="button">Save</button><button id="copy" type="button">Save a copy</button>';
+    + '<button id="save" type="button">Save</button><button id="copy" type="button">Download a copy</button>';
   const script = "  $('save').addEventListener('click', function () { store.set('form', { m: $('m').value, n: $('n').value, t: $('t').value, e: $('e').textContent, d: $('d').value }); });\n"
-    + "  $('copy').addEventListener('click', function () { store.exportAll(); });\n"
+    + "  $('copy').addEventListener('click', function () { var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([$('t').value], { type: 'text/plain' })); a.download = 'copy.txt'; document.body.appendChild(a); a.click(); a.remove(); });\n"
     + "  store.unlock().then(function () { return store.get('form'); }).then(function (f) { if (f) { $('m').value = f.m; $('n').value = f.n; $('t').value = f.t; $('e').textContent = f.e; $('d').value = f.d; } });";
-  const r = await verify(writeApp(miniApp({ body, script })));
+  const r = await verify(writeApp(miniApp({ body, script }), { steps: [{ download: '#copy' }] }));
   assert.equal(r.code, 0, JSON.stringify(r.failures));
   assert.equal(r.find('leak-download').level, 'pass');
-  assert.match(r.find('downloads').detail, /export\.zip \(exportAll, not checked\)/);
-  assert.match(r.find('fields').detail, /4 field\(s\)/);
+  assert.match(r.find('downloads').detail, /copy\.txt \(user-requested download/);
+  assert.match(r.find('fields').detail, /3 field\(s\)/);
   assert.equal(r.find('leak-request body').level, 'pass');
+});
+
+// A plain form app passes without a wds-verify.json: date, time, number, select and file inputs get valid generated values (canaries only in text fields),
+// and a submit button or Enter saves when no save word matches.
+const PLAIN_BODY = '<form id="f"><label>Name <input id="name" type="text"></label><label>Day <input id="day" type="date" required></label><label>Time <input id="time" type="time" required></label>'
+  + '<label>Seats <input id="seats" type="number" min="2" max="9" required></label><label>Room <select id="room" required><option value="">choose</option><option value="a">A</option></select></label>'
+  + '<label>Photo <input id="photo" type="file"></label><button type="submit">Reservieren</button></form><p id="out"></p>';
+const PLAIN_SCRIPT = [
+  "$('f').addEventListener('submit', function (ev) { ev.preventDefault(); var file = $('photo').files[0];",
+  "  store.set('booking', { name: $('name').value, day: $('day').value, time: $('time').value, seats: $('seats').value, room: $('room').value, photo: file ? file.name : '' }); });",
+  "store.unlock().then(function () { return store.get('booking'); }).then(function (b) { if (b) { $('name').value = b.name; $('out').textContent = b.name + ' ' + b.day + ' ' + b.time + ' ' + b.seats + ' ' + b.room; } });",
+].join('\n');
+test('a plain form app passes without a wds-verify.json: valid values for date, time, number, select and file inputs, saved by its submit button', { timeout: 240000 }, async () => {
+  const r = await verify(writeApp(miniApp({ body: PLAIN_BODY, script: PLAIN_SCRIPT })));
+  assert.equal(r.code, 0, JSON.stringify(r.failures) + r.stderr);
+  assert.equal(r.find('saved').level, 'pass', r.find('saved').detail);
+  assert.equal(r.find('reload').level, 'pass', r.find('reload').detail);
+  assert.match(r.find('fields').detail, /"Reservieren"/);
+  // Enter saves when there is no button at all (a form with one text field submits on Enter)
+  const oneField = '<form id="f"><label>Name <input id="name" type="text"></label></form><p id="out"></p>';
+  const oneScript = "$('f').addEventListener('submit', function (ev) { ev.preventDefault(); store.set('booking', { name: $('name').value }); });\n"
+    + "store.unlock().then(function () { return store.get('booking'); }).then(function (b) { if (b) { $('name').value = b.name; $('out').textContent = b.name; } });";
+  const e = await verify(writeApp(miniApp({ body: oneField, script: oneScript })));
+  assert.equal(e.find('saved').level, 'pass', e.find('saved').detail);
+  assert.match(e.find('fields').detail, /\(Enter\)/);
 });
 
 test('a form that submits its fields in the URL leaks through the page URL', { timeout: 120000 }, async () => {
@@ -121,9 +146,9 @@ test('one record per item that later steps edit is not "one record for everythin
   const app = miniApp({ body: ITEM_BODY, script: [
     "  var id = null;",
     "  function item() { return { title: $('t').value, author: $('au').value, notes: $('no').value }; }",
-    "  $('add').addEventListener('click', function () { if (!id) id = 'books/' + Math.random().toString(16).slice(2, 10); store.set(id, item()); });",
+    "  $('add').addEventListener('click', function () { if (!id) id = 'books/one'; store.set(id, item()); });",
     "  $('save').addEventListener('click', function () { if (id) store.set(id, item()); });",
-    "  store.unlock().then(function () { return store.list('books/'); }).then(function (rows) { return rows.length ? store.get(rows[0].name) : null; })",
+    "  store.unlock().then(function () { return store.get('books/one'); })",
     "    .then(function (it) { if (it) { $('t').value = it.title; $('au').value = it.author; $('no').value = it.notes; } });"].join('\n') });
   const steps = [{ fill: ['#t', 'edited title canary 0001'] }, { fill: ['#au', 'edited author canary 0002'] }, { fill: ['#no', 'edited notes canary 0003'] }, { click: '#save' }, { wait: 100 }];
   const r = await verify(writeApp(app, steps));

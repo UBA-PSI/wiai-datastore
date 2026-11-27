@@ -170,16 +170,16 @@
     .big { font-size: 1.7rem; }
     .actions button { padding: .3rem .6rem; }
   }
-  body[data-role="read"] .write-only { display: none !important; }
+  [data-wds-role="read"] .write-only { display: none !important; }
 </style>
 </head>
-<body data-role="owner">
+<body>
 <a class="skip" href="#main" data-i18n="skip">Zum Inhalt springen</a>
 
 <section id="screen" role="status" aria-live="polite">
   <h1 data-i18n="app_title">Zeit &amp; Notizen</h1>
   <p id="screen-msg" data-i18n="loading">Verbindung zum Speicherdienst wird aufgebaut ...</p>
-  <p><button type="button" id="screen-btn" class="primary" hidden data-i18n="unlock">Entsperren</button></p>
+  <p><button type="button" id="screen-btn" class="primary" hidden data-i18n="retry">Erneut versuchen</button></p>
 </section>
 
 <div id="app" hidden>
@@ -190,11 +190,8 @@
       <span id="role-badge" class="badge"></span>
     </div>
     <div class="actions" role="group" aria-label="Aktionen" data-i18n-aria="actions">
-      <button type="button" class="ghost" id="btn-reload" data-i18n="reload" data-i18n-title="reload_title" title="Neue Einträge anderer Personen laden">Neu laden</button>
-      <button type="button" class="ghost" id="btn-share" data-i18n="share">Teilen</button>
-      <button type="button" class="ghost" id="btn-export" data-i18n="export" data-i18n-title="export_title" title="Alle Daten als ZIP herunterladen (nicht verschlüsselt)">Export</button>
+      <button type="button" class="ghost" id="btn-vault" data-i18n="vault">Tresor</button>
       <button type="button" class="ghost" id="btn-lang" lang="en" aria-label="Switch to English">EN</button>
-      <button type="button" class="ghost" id="btn-lock" data-i18n="lock">Sperren</button>
     </div>
   </div>
 </header>
@@ -337,14 +334,13 @@
 <footer class="wrap privacy">
   <p id="privacy-text"></p>
   <p class="hint" id="shared-hint"></p>
-  <p class="hint write-only"><button type="button" class="link" id="btn-repair" data-i18n="repair">Listen reparieren</button> <span data-i18n="repair_hint">Liest alle Datensätze und baut die Verzeichnisse neu auf.</span></p>
 </footer>
 </div>
 
 <div id="toast" role="status" aria-live="polite"></div>
 
 
-<script src="https://wiai.uni-bamberg.de/datastore/client/wds-1.0.0.js" integrity="sha384-zNTgKx5jm6ESzFb+xzoqPjMSbtWdS/DSbc5D/BBUIc4+J8zQViLK5TNk26/L3grZ" crossorigin="anonymous"
+<script src="https://wiai.uni-bamberg.de/datastore/client/wds-1.0.0.js" integrity="sha384-OakUYcy0quSrlUcqoLskgTW+rd4dIweGZC30nP9kPCJJlCA9ftNI2l7m40fQf2qD" crossorigin="anonymous"
         onerror="document.body.textContent='Storage service unreachable. Check your connection and reload this page.'"></script>
 <script>
 "use strict";
@@ -358,10 +354,8 @@
   var I18N = {
     de: {
       skip: "Zum Inhalt springen", app_title: "Zeit & Notizen", loading: "Verbindung zum Speicherdienst wird aufgebaut ...",
-      loading_data: "Daten werden geladen ({n} von {total}) ...", unlock: "Entsperren", actions: "Aktionen", sections: "Bereiche",
-      reload: "Neu laden", reload_title: "Neue Einträge anderer Personen laden", share: "Teilen", export: "Export",
-      export_title: "Alle Daten als ZIP herunterladen (nicht verschlüsselt)", lock: "Sperren",
-      tab_time: "Zeit", tab_week: "Woche", tab_notes: "Notizen", tab_projects: "Projekte",
+      loading_data: "Daten werden geladen ({n} von {total}) ...", actions: "Aktionen", sections: "Bereiche",
+      vault: "Tresor",             tab_time: "Zeit", tab_week: "Woche", tab_notes: "Notizen", tab_projects: "Projekte",
       h_time: "Zeit erfassen", need_project: "Legen Sie zuerst ein Projekt an.", to_projects: "Zu den Projekten",
       timer: "Timer", project: "Projekt", description: "Beschreibung", optional: "(optional)", timer_start: "Timer starten",
       timer_stop: "Stoppen und speichern", timer_discard: "Verwerfen", manual: "Zeit nachtragen", date: "Datum", duration: "Dauer",
@@ -382,12 +376,8 @@
       shared_hint: "Wenn andere Personen mit Ihnen arbeiten, erscheinen deren neue Einträge, sobald Sie zu diesem Fenster zurückkehren, oder nach „Neu laden“.",
       privacy: "Die Daten sind Ende-zu-Ende-verschlüsselt; die Fakultät verwahrt für Notfälle einen Wiederherstellungsschlüssel. Wenn Sie eine Passphrase wählen, prüft Ihr Browser sie beim Dienst Pwned Passwords (USA) auf bekannte Datenlecks; der Dienst erhält Ihre IP-Adresse und die ersten fünf Zeichen einer Prüfsumme der Passphrase, nie die Passphrase selbst. Die Daten liegen auf einem Server der Fakultät WIAI (Universität Bamberg). Ihre Passphrase kennt der Server nicht; sie lässt sich nicht zurücksetzen. Mit Ihrem Wiederherstellungscode kann die Fakultät nach einem dokumentierten Verfahren den Zugang wiederherstellen.",
       privacy_link: "Mehr dazu",
-      locked_user: "Der Tresor ist gesperrt. Alle Daten wurden aus dem Speicher dieser Seite entfernt.",
-      locked_revoked: "Ihr Zugang wurde entzogen. Die Daten wurden aus dem Speicher dieser Seite entfernt.",
-      locked_expired: "Die Sitzung ist abgelaufen. Entsperren Sie den Tresor erneut.",
-      load_failed: "Die Daten konnten nicht geladen werden: {msg}", retry: "Erneut versuchen",
-      repair: "Listen reparieren", repair_hint: "Liest alle Datensätze und baut die Verzeichnisse neu auf (nur nötig, wenn etwas in den Listen fehlt).",
-      repairing: "Listen werden repariert ...", repaired: "Listen repariert.", kept_newer: "Die neuere Fassung wurde behalten, es wurde nichts gelöscht.",
+                        load_failed: "Die Daten konnten nicht geladen werden: {msg}", retry: "Erneut versuchen",
+            kept_newer: "Die neuere Fassung wurde behalten, es wurde nichts gelöscht.",
       timer_info: "Läuft für {project} seit {since}", timer_running_for: "Timer läuft: {project}",
       timer_saved: "Zeiteintrag gespeichert: {dur}", timer_discarded: "Timer verworfen.", timer_discard_q: "Den laufenden Timer verwerfen? Die gemessene Zeit wird nicht gespeichert.",
       entry_saved: "Eintrag gespeichert.", entry_edit: "Eintrag bearbeiten", entry_delete_q: "Diesen Zeiteintrag löschen?",
@@ -401,8 +391,8 @@
       notes_count: "{n} von {total} Notizen", notes_count_one: "1 von {total} Notizen", notes_none: "Keine Notizen gefunden.", tag_all: "Alle Tags",
       note_deleted: "Notiz gelöscht.", note_delete_q: "Notiz „{title}“ mit allen Anhängen löschen?", note_replaced: "Eine neuere Fassung dieser Notiz wurde übernommen.",
       note_save_first: "Die Notiz konnte nicht gespeichert werden. Prüfen Sie die Verbindung und versuchen Sie es erneut.",
-      file_hint: "Bilder, PDF und beliebige Dateien bis {max} pro Datei.", file_hint_unknown: "Bilder, PDF und beliebige Dateien.",
-      file_too_big: "„{name}“ ist größer als {max} und wurde nicht hochgeladen.", uploading: "Lade „{name}“ hoch ...", uploaded: "„{name}“ angehängt.",
+      file_hint_unknown: "Bilder, PDF und beliebige Dateien.",
+      uploading: "Lade „{name}“ hoch ...", uploaded: "„{name}“ angehängt.",
       upload_failed: "„{name}“ konnte nicht hochgeladen werden: {msg}", no_files: "Keine Anhänge.", download: "Herunterladen", remove: "Entfernen", enlarge: "Vergrößern",
       remove_file_q: "Anhang „{name}“ entfernen?", file_missing: "Die Datei wurde nicht gefunden.", download_failed: "Der Download ist fehlgeschlagen: {msg}",
       preview_alt: "Vorschau: {name}", file_removed: "Anhang entfernt.",
@@ -413,20 +403,18 @@
       new_name: "Neuer Name", confirm: "Bestätigen",
       csv_done: "CSV gespeichert ({n} Einträge).", csv_empty: "Es gibt keine Einträge für die CSV-Datei.",
       csv_head: "Datum;Projekt;Beschreibung;Dauer (h:mm);Stunden (dezimal)", lang_switched: "Sprache: Deutsch",
-      reloaded: "Daten neu geladen.", error_generic: "Das hat nicht geklappt: {msg}",
+      error_generic: "Das hat nicht geklappt: {msg}",
       cf_title: "Es gibt eine neuere Fassung", cf_text: "Eine andere Person oder ein anderes Gerät hat {what} geändert, während Sie daran gearbeitet haben. Welche Fassung soll gelten?",
       cf_mine: "Meine Fassung", cf_theirs: "Neuere Fassung", cf_keep_mine: "Meine Fassung behalten", cf_keep_theirs: "Neuere Fassung behalten",
       cf_deleted: "(wurde gelöscht)", cf_keep_deleted: "Gelöscht lassen", cf_restore_mine: "Meine Fassung wiederherstellen", cf_note: "Die nicht gewählte Fassung bleibt im Verlauf erhalten.",
       cf_unsaved: "Noch nicht gespeichert", cf_will_delete: "Noch nicht gelöscht", cf_delete_anyway: "Trotzdem löschen", cf_saved_at: "Gespeichert: {time}", cf_diff: "Farbig hinterlegte Zeilen gibt es nur in einer der beiden Fassungen.",
-      lb_note: "Notiz „{t}“", lb_time: "Zeiteintrag „{t}“", lb_project: "Projekt „{t}“", lb_file: "Anhang „{t}“", lb_index: "Verzeichnis", lb_timer: "Timer",
+      lb_note: "Notiz „{t}“", lb_time: "Zeiteintrag „{t}“", lb_project: "Projekt „{t}“", lb_timer: "Timer",
       weekdays_short: "Mo,Di,Mi,Do,Fr,Sa,So"
     },
     en: {
       skip: "Skip to content", app_title: "Time & notes", loading: "Connecting to the storage service ...",
-      loading_data: "Loading data ({n} of {total}) ...", unlock: "Unlock", actions: "Actions", sections: "Sections",
-      reload: "Reload", reload_title: "Load new entries from other people", share: "Share", export: "Export",
-      export_title: "Download all data as a ZIP (not encrypted)", lock: "Lock",
-      tab_time: "Time", tab_week: "Week", tab_notes: "Notes", tab_projects: "Projects",
+      loading_data: "Loading data ({n} of {total}) ...", actions: "Actions", sections: "Sections",
+      vault: "Vault",             tab_time: "Time", tab_week: "Week", tab_notes: "Notes", tab_projects: "Projects",
       h_time: "Track time", need_project: "Create a project first.", to_projects: "Go to projects",
       timer: "Timer", project: "Project", description: "Description", optional: "(optional)", timer_start: "Start timer",
       timer_stop: "Stop and save", timer_discard: "Discard", manual: "Add time manually", date: "Date", duration: "Duration",
@@ -447,12 +435,8 @@
       shared_hint: "If other people work with you, their new entries appear when you return to this window, or after \"Reload\".",
       privacy: "Data is end-to-end encrypted; the faculty holds a recovery key for emergencies. When you choose a passphrase, your browser checks it against known data breaches with the Pwned Passwords service (USA); the service receives your IP address and the first five characters of a checksum of the passphrase, never the passphrase itself. The data is stored on a server of the WIAI faculty (University of Bamberg). The server does not know your passphrase; it cannot be reset. With your recovery code the faculty can restore access after a documented procedure.",
       privacy_link: "Details",
-      locked_user: "The vault is locked. All data was removed from the memory of this page.",
-      locked_revoked: "Your access was revoked. The data was removed from the memory of this page.",
-      locked_expired: "The session has expired. Unlock the vault again.",
-      load_failed: "The data could not be loaded: {msg}", retry: "Try again",
-      repair: "Repair lists", repair_hint: "Reads every record and rebuilds the lists (only needed when something is missing from them).",
-      repairing: "Repairing the lists ...", repaired: "Lists repaired.", kept_newer: "The newer version was kept, nothing was deleted.",
+                        load_failed: "The data could not be loaded: {msg}", retry: "Try again",
+            kept_newer: "The newer version was kept, nothing was deleted.",
       timer_info: "Running for {project} since {since}", timer_running_for: "Timer running: {project}",
       timer_saved: "Time entry saved: {dur}", timer_discarded: "Timer discarded.", timer_discard_q: "Discard the running timer? The measured time will not be saved.",
       entry_saved: "Entry saved.", entry_edit: "Edit entry", entry_delete_q: "Delete this time entry?",
@@ -466,8 +450,8 @@
       notes_count: "{n} of {total} notes", notes_count_one: "1 of {total} notes", notes_none: "No notes found.", tag_all: "All tags",
       note_deleted: "Note deleted.", note_delete_q: "Delete note \"{title}\" with all attachments?", note_replaced: "A newer version of this note was adopted.",
       note_save_first: "The note could not be saved. Check the connection and try again.",
-      file_hint: "Images, PDF and any other files up to {max} each.", file_hint_unknown: "Images, PDF and any other files.",
-      file_too_big: "\"{name}\" is larger than {max} and was not uploaded.", uploading: "Uploading \"{name}\" ...", uploaded: "\"{name}\" attached.",
+      file_hint_unknown: "Images, PDF and any other files.",
+      uploading: "Uploading \"{name}\" ...", uploaded: "\"{name}\" attached.",
       upload_failed: "\"{name}\" could not be uploaded: {msg}", no_files: "No attachments.", download: "Download", remove: "Remove", enlarge: "Enlarge",
       remove_file_q: "Remove attachment \"{name}\"?", file_missing: "The file was not found.", download_failed: "The download failed: {msg}",
       preview_alt: "Preview: {name}", file_removed: "Attachment removed.",
@@ -478,12 +462,12 @@
       new_name: "New name", confirm: "Confirm",
       csv_done: "CSV saved ({n} entries).", csv_empty: "There are no entries for the CSV file.",
       csv_head: "Date,Project,Description,Duration (h:mm),Hours (decimal)", lang_switched: "Language: English",
-      reloaded: "Data reloaded.", error_generic: "That did not work: {msg}",
+      error_generic: "That did not work: {msg}",
       cf_title: "A newer version exists", cf_text: "Another person or device changed {what} while you were working on it. Which version should win?",
       cf_mine: "My version", cf_theirs: "Newer version", cf_keep_mine: "Keep my version", cf_keep_theirs: "Keep the newer version",
       cf_deleted: "(was deleted)", cf_keep_deleted: "Keep it deleted", cf_restore_mine: "Restore my version", cf_note: "The version you do not choose stays in the history.",
       cf_unsaved: "Not saved yet", cf_will_delete: "Not deleted yet", cf_delete_anyway: "Delete anyway", cf_saved_at: "Saved: {time}", cf_diff: "Highlighted lines exist in only one of the two versions.",
-      lb_note: "note \"{t}\"", lb_time: "time entry \"{t}\"", lb_project: "project \"{t}\"", lb_file: "attachment \"{t}\"", lb_index: "index", lb_timer: "timer",
+      lb_note: "note \"{t}\"", lb_time: "time entry \"{t}\"", lb_project: "project \"{t}\"", lb_timer: "timer",
       weekdays_short: "Mon,Tue,Wed,Thu,Fri,Sat,Sun"
     }
   };
@@ -500,7 +484,7 @@
     timer: null,
     view: "time", week: null, timeDays: 14,
     noteId: null, saver: null, upload: null, previews: new Map(), query: "", tag: "", filterProject: "",
-    ticker: null, maxBytes: null, syncing: false, migrationChecked: false
+    ticker: null, syncing: false
   };
 
   var $ = function (id) { return document.getElementById(id); };
@@ -668,12 +652,10 @@
     lb.setAttribute("aria-label", S.lang === "de" ? "Switch to English" : "Auf Deutsch umstellen");
     $("privacy-text").replaceChildren(t("privacy") + " ", h("a", { href: "https://wiai.uni-bamberg.de/datastore/docs/users." + S.lang, target: "_blank", rel: "noopener", text: t("privacy_link") }));
     $("shared-hint").textContent = S.role === "read" ? t("read_only_hint") : t("shared_hint");
-    store.setLocale(S.lang);      // dialogs and notices of the library speak the language of the app
     applyRole();
     if (S.loaded) renderAll();
   }
   function applyRole() {
-    document.body.dataset.role = S.role;
     var badge = $("role-badge");
     badge.textContent = t(S.role === "read" ? "role_read" : S.role === "write" ? "role_write" : "role_owner");
     $("h-time").textContent = t(S.role === "read" ? "h_time_read" : "h_time");   // a read member cannot record time
@@ -682,45 +664,29 @@
 
   // ---------------------------------------------------------------- the store
   // Four collections (store.collection): projects/<id>, time/<id>, notes/<id> and files/<id> (the bytes of an attachment). Each one keeps
-  // an index record (projects.index, ...) with a little meta per item, merges the changes of several devices without losing items and can be
-  // repaired with rebuild(). The timer is a single record. The app never calls list(): that would download every attachment.
-  var store = WDS.connect({ scope: "zeitnotizen-demo-xn8kp9", label: labelOf });   // public scope ID of the demo scope (the join code is never part of the app)
-  var projectsCol = store.collection("projects/", { meta: function (p) { return { name: String(p.name || "").slice(0, 80) }; } });
-  var timeCol = store.collection("time/", { meta: function (e) { return { date: e.date, minutes: e.minutes, project: e.project }; } });
+  // an index record (projects.index, ...) with a little meta per item and merges the changes of several devices without losing items.
+  // The timer is a single record. The library's dialogs name a record by the "title" of its meta.
+  var store = WDS.connect({ scope: "zeitnotizen-demo-xn8kp9" });   // public scope ID of the demo scope (the join code is never part of the app)
+  var projectsCol = store.collection("projects/", { meta: function (p) { return { title: String(p.name || "").slice(0, 80) }; } });
+  var timeCol = store.collection("time/", { meta: function (e) { return { title: (e.date + " " + (e.desc || "")).trim().slice(0, 80), date: e.date, minutes: e.minutes, project: e.project }; } });
   var notesCol = store.collection("notes/", { meta: function (n) { return { title: String(n.title || "").slice(0, 80) }; } });
   var filesCol = store.collection("files/");     // attachments: the value is the File, the meta (given with set) says which note it belongs to
 
+  // What a person reads in the app's own conflict dialog for a record.
   function labelOf(name) {
-    var m = String(name).match(/^(notes|time|projects|files)\/(.+)$/);
-    if (m) {
-      var id = m[2];     // the whole id: ids of data ported from an older app look like "ab12cd34-j12" or "ab12cd34-soldapp%3Aavatar", so an id is never cut at "-" or "%"
-      if (m[1] === "notes") { var n = S.notes.get(id); return t("lb_note", { t: n && n.title ? n.title : t("untitled") }); }
-      if (m[1] === "time") { var e = S.time.get(id); return t("lb_time", { t: e ? e.date + " " + (e.desc || projectName(e.project)) : id }); }
-      if (m[1] === "projects") { var p = S.projects.get(id); return t("lb_project", { t: p ? p.name : id }); }
-      return t("lb_file", { t: fileNameOf(id) });
-    }
-    return /\.index$/.test(name) ? t("lb_index") : name === "timer" ? t("lb_timer") : name;
-  }
-
-  // The name of an attachment for the dialogs: from its list entry when the list is loaded, else the id without the random start of an id made here.
-  function fileNameOf(id) {
-    try { var f = filesCol.items().filter(function (it) { return it.id === id; })[0]; if (f && f.meta && f.meta.name) return f.meta.name; } catch (e) { /* the list is not loaded (yet) or the vault is locked */ }
-    return id.replace(/^[0-9a-f]{8}-/, "");
+    var m = String(name).match(/^(notes|time|projects)\/(.+)$/);
+    if (!m) return name === "timer" ? t("lb_timer") : name;
+    var id = m[2];     // the whole id: ids of data ported from an older app look like "ab12cd34-j12", so an id is never cut at "-" or "%"
+    if (m[1] === "notes") { var n = S.notes.get(id); return t("lb_note", { t: n && n.title ? n.title : t("untitled") }); }
+    if (m[1] === "time") { var e = S.time.get(id); return t("lb_time", { t: e ? e.date + " " + (e.desc || projectName(e.project)) : id }); }
+    var p = S.projects.get(id); return t("lb_project", { t: p ? p.name : id });
   }
 
   function mapOf(col) { return col === projectsCol ? S.projects : col === timeCol ? S.time : S.notes; }
 
-  // A collection call that stored the item but could not write the list entry yet (err.stored) is a success for the screen: the library
-  // keeps the list change queued and retries it (next write, back online, window focus, lock).
-  function stored(promise) {
-    return promise.catch(function (e) {
-      if (e && e.stored) { console.warn("list entry of " + e.record + " is written later", e); return { id: e.id, resolution: "saved" }; }
-      throw e;
-    });
-  }
   // Writes one item of a collection. When another device or person saved first and its version won, the app adopts that value.
   async function save(col, id, value) {
-    var res = await stored(col.set(id, value));
+    var res = await col.set(id, value);
     if (res.resolution === "theirs") adopt(col, id, res.deleted ? undefined : res.value);
     else mapOf(col).set(id, value);
     return res;
@@ -757,43 +723,58 @@
     }));
   }
 
-  // refresh: read the lists again (the reload button); otherwise they are read once per unlock.
-  async function loadAll(refresh) {
+  // Reads the lists and the records once per start.
+  async function loadAll() {
     S.syncing = true;
     try {
       var timer = await store.get("timer");
       S.timer = timer && timer.start ? timer : null;
       var cols = [projectsCol, timeCol, notesCol, filesCol];
-      await Promise.all(cols.map(function (c) { return refresh ? c.refresh() : c.load(); }));
+      await Promise.all(cols.map(function (c) { return c.load(); }));
       var total = projectsCol.items().length + timeCol.items().length + notesCol.items().length, done = 0;
       for (var k = 0; k < 3; k++) {
         var col = cols[k], map = mapOf(col);
-        var rows = await col.getAll();       // records that are gone are skipped (and leave the list with the next write)
+        var rows = await col.getAll();       // records that are gone are skipped
         map.clear();
         rows.forEach(function (r) { if (r.value && typeof r.value === "object") map.set(r.id, r.value); });
         done += col.items().length;
         $("screen-msg").textContent = t("loading_data", { n: done, total: total });
       }
-      try { var u = await store.usage(); S.maxBytes = u && u.limits && u.limits.max_value_bytes ? u.limits.max_value_bytes : null; } catch (e) { S.maxBytes = null; }
     } finally { S.syncing = false; }
   }
-  // Items that other devices added, removed or changed arrive when the window gets focus: the collections tell us (not for our own calls).
-  [projectsCol, timeCol, notesCol].forEach(function (col) {
-    col.onChange(async function (ch) {
-      if (!S.loaded || S.syncing) return;
-      var map = mapOf(col);
-      ch.removed.forEach(function (id) { map.delete(id); });
+  // Records that other devices or people added, removed or changed arrive when the window gets focus (remote: true). Our own calls fire it too
+  // (remote: false); the app has already updated its screen for those. A merge of two lists can bring in an item of another device without an event of its
+  // own, so every event also reads the items that a list shows and the app does not hold yet.
+  async function readMissing() {
+    var adopted = 0;
+    await Promise.all([[projectsCol, S.projects], [timeCol, S.time], [notesCol, S.notes]].map(function (pair) {
+      var col = pair[0], map = pair[1];
+      return Promise.all(col.items().filter(function (it) { return !map.has(it.id); }).map(async function (it) {
+        try { var v = await col.get(it.id); if (v && typeof v === "object" && !map.has(it.id)) { map.set(it.id, v); adopted++; } } catch (e) { /* the next event tries again */ }
+      }));
+    }));
+    return adopted;
+  }
+  store.onChange(async function (ch) {
+    if (!S.loaded || S.syncing) return;
+    var timerChanged = false;
+    if (ch.remote) await Promise.all(ch.names.map(async function (name) {
+      var m = /^(notes|time|projects)\/(.+)$/.exec(name);
+      if (name === "timer") { timerChanged = true; return; }
+      if (!m) return;
+      var map = mapOf(m[1] === "notes" ? notesCol : m[1] === "time" ? timeCol : projectsCol), id = m[2];
+      var open = m[1] === "notes" && id === S.noteId;
+      if (open && (S.noteStatus === "dirty" || S.noteStatus === "saving")) return;   // typed since: the next save meets the other version in the dialog
       try {
-        await Promise.all(ch.added.concat(ch.changed).map(async function (id) {
-          if (col === notesCol && id === S.noteId) return;       // the open note belongs to its editor
-          var v = await col.get(id);
-          if (v && typeof v === "object") map.set(id, v); else map.delete(id);
-        }));
-      } catch (e) { return; }
-      if (S.loaded) renderAll();
-    });
+        var v = await store.get(name);
+        if (v && typeof v === "object") map.set(id, v); else map.delete(id);
+        if (open && v) { fillEditor(); toast(t("note_replaced")); }   // the person chose the other version, or nothing was typed: the editor shows what the vault holds
+      } catch (e) { /* the next focus tries again */ }
+    }));
+    if (timerChanged) { try { var tm = await store.get("timer"); S.timer = tm && tm.start ? tm : null; } catch (e) { /* the next focus tries again */ } }
+    var adopted = await readMissing();
+    if (ch.remote || adopted) { renderAll(); if (S.noteId) renderFiles(); }
   });
-  filesCol.onChange(function () { if (S.loaded) { renderNoteList(); if (S.noteId) renderFiles(); } });
 
   // ---------------------------------------------------------------- projects
   function projectName(id) { var p = S.projects.get(id); return p ? p.name : t("deleted_project"); }
@@ -820,7 +801,7 @@
 
   async function addProject(name) {
     var p = { id: uid(), name: name, color: S.projects.size % PALETTE, archived: false, created: Date.now() };
-    await stored(projectsCol.set(p.id, p));
+    await projectsCol.set(p.id, p);
     S.projects.set(p.id, p);
   }
   async function saveProject(p) { await save(projectsCol, p.id, p); }
@@ -874,7 +855,7 @@
   // ---------------------------------------------------------------- time entries and the timer
   function entryText(e) { return e.desc || projectName(e.project); }
   async function addEntry(e) {
-    await stored(timeCol.set(e.id, e));
+    await timeCol.set(e.id, e);
     S.time.set(e.id, e);
   }
   function renderEntries() {
@@ -1080,6 +1061,7 @@
 
   var STATUS = { idle: "note_status_idle", dirty: "note_status_dirty", saving: "note_status_saving", saved: "note_status_saved", error: "note_status_error" };
   function setNoteStatus(s) {
+    S.noteStatus = s;
     var el = $("note-status");
     el.textContent = t(STATUS[s] || "note_status_idle");
     el.className = s === "error" ? "err" : "";
@@ -1119,13 +1101,7 @@
     setNoteStatus("idle");
     if (canWrite()) {
       S.saver = notesCol.autosave(id, function () { return S.notes.get(id); }, {     // also keeps the title of the list entry current
-        onStatus: function (s) { if (S.noteId === id) setNoteStatus(s); },
-        onResolved: function (res) {
-          if (res.resolution !== "theirs") return;
-          S.notes.set(id, res.value);
-          if (S.noteId === id) { fillEditor(); toast(t("note_replaced")); }
-          renderNoteList();
-        }
+        onStatus: function (s) { if (S.noteId === id) setNoteStatus(s); }     // another version of the open note arrives through onChange (remote: true)
       });
     }
     renderNoteList();
@@ -1138,7 +1114,7 @@
     await openNote(id, true);
     $("note-title").focus();
     // The record and its list entry are created now (autosave only keeps them current); typing does not wait for the requests.
-    stored(notesCol.set(id, n)).catch(fail);
+    notesCol.set(id, n).catch(fail);
   }
   function noteEdited() {
     var n = S.notes.get(S.noteId); if (!n || !S.saver) return;
@@ -1182,14 +1158,14 @@
       return li;
     }) : h("li", { class: "hint", text: t("no_files") }));
     $("file-hint").hidden = !canWrite();                       // nothing to say about uploads to someone who cannot upload
-    $("file-hint").textContent = S.maxBytes ? t("file_hint", { max: fmtBytes(S.maxBytes) }) : t("file_hint_unknown");
+    $("file-hint").textContent = t("file_hint_unknown");
   }
   async function loadPreview(noteId, f, thumb) {
     await Promise.resolve();      // the list item is attached to the page by the time this continues
     try {
       var url = S.previews.get(f.rec);
       if (!url) {
-        var blob = await store.getBlob(f.rec);
+        var blob = await store.get(f.rec);
         if (!blob || S.noteId !== noteId) return;
         url = URL.createObjectURL(blob); S.previews.set(f.rec, url);
       }
@@ -1209,7 +1185,7 @@
   }
   async function downloadFile(f) {
     try {
-      var blob = await store.getBlob(f.rec);
+      var blob = await store.get(f.rec);
       if (!blob) { toast(t("file_missing")); return; }
       saveBlob(blob, f.name);
     } catch (e) { if (!sessionEnded(e)) toast(t("download_failed", { msg: errText(e) })); }
@@ -1231,19 +1207,18 @@
     S.upload = (async function () {
       for (var i = 0; i < list.length; i++) {
         var f = list[i];
-        if (S.maxBytes && f.size > S.maxBytes) { toast(t("file_too_big", { name: f.name, max: fmtBytes(S.maxBytes) })); continue; }
         var fid = uid(), mime = f.type || "application/octet-stream";
         $("file-hint").textContent = t("uploading", { name: f.name });
         try {
           // the ending stays in the id (files/<id>.pdf in the export); the meta says which note owns the file
-          await stored(filesCol.set(fid + "-" + safeName(f.name), f, { mime: mime, meta: { note: n.id, name: f.name.slice(0, 100), mime: mime.slice(0, 80), size: f.size } }));
+          await filesCol.set(fid + "-" + safeName(f.name), f, { mime: mime, meta: { note: n.id, name: f.name.slice(0, 100), mime: mime.slice(0, 80), size: f.size } });
           n.updated = Date.now();
           saver.changed(); await saver.flush();
           if (S.noteId === n.id) { renderFiles(); renderNoteList(); }
           toast(t("uploaded", { name: f.name }));
         } catch (e) { if (sessionEnded(e)) break; toast(t("upload_failed", { name: f.name, msg: errText(e) })); }
       }
-      $("file-hint").textContent = S.maxBytes ? t("file_hint", { max: fmtBytes(S.maxBytes) }) : t("file_hint_unknown");
+      $("file-hint").textContent = t("file_hint_unknown");
     })().finally(function () { S.upload = null; });
   }
 
@@ -1286,53 +1261,45 @@
           h("button", { type: "button", class: "primary", autofocus: true, text: deleting ? t("cf_delete_anyway") : gone ? t("cf_restore_mine") : t("cf_keep_mine"), onclick: function () { done("mine"); } })));
     }, { sticky: true });
   }
-  ["notes/", "time/", "projects/"].forEach(function (prefix) { store.onConflict(prefix, askPerson); });
-  store.onConflict("timer", function (c) { c.keepMine(); });
+  store.onConflict(function (c) {
+    if (/^(notes|time|projects)\//.test(c.name)) return askPerson(c);   // our dialog: resolves "mine" or "theirs"
+    if (c.name === "timer") return "mine";
+  });                                                                  // undefined (attachments, the rest): the library's dialog asks
 
   // ---------------------------------------------------------------- data of the older, local-only version
   // The predecessor of this app (old/index.html) kept projects and time entries as one JSON text in localStorage and notes, attachments and the running timer in IndexedDB.
-  // store.migrateLocal takes that over once, in the owner's vault: it asks the person, copies, reads everything back, and deletes the old data afterwards (not in the sandbox).
-  // The app never reads or deletes the old storage itself. The ids of migrated items are made by h.id (<tag>-j12, <tag>-sp1): the app takes an id whole and never splits it.
+  // store.migrateLocal takes that over once, in the owner's vault: it asks the person and copies; at the next start it asks whether the old data may be deleted (never in the sandbox).
+  // The app never reads or deletes the old storage itself. The ids of migrated items are old.id (a tag of this browser plus the key): the app takes an id whole and never splits it.
   async function takeOverOldData() {
     // migrateLocal: begin
     const result = await store.migrateLocal({
       id: "zeitnotizen",
-      indexedDB: { name: "zeitnotizen", stores: ["notes", "files", "meta"] },
-      localStorage: { keys: ["zeitnotizen.daten"] },
-      map(old, h) {
-        const DATA = "zeitnotizen.daten";                   // projects and time entries: one JSON text in localStorage
-        const data = old.json(DATA) || {};
-        const projects = Array.isArray(data.projects) ? data.projects : [], entries = Array.isArray(data.entries) ? data.entries : [];
-        const pid = (n) => h.id("p" + n), eid = (n) => h.id("e" + n);    // two counters in one JSON text: "p" and "e" keep their ids apart
-        const known = new Set(projects.map((p) => p.id));
-        const meta = {};                                    // the key-value store: the timer is data, every other row is skipped
-        for (const row of old.rows("meta")) {
-          if (row.key === "timer") meta.timer = row;
-          else h.skip(row, row.key === "lang" ? "language: reset, the new app keeps it in localStorage" : "not a setting of the new app");
+      indexedDB: { zeitnotizen: ["notes", "files", "meta"] },
+      localStorage: ["zeitnotizen.daten"],
+      map(old, ref) {
+        if (old.source === "localStorage") {                 // projects and time entries: one JSON text with two counters
+          const data = JSON.parse(old.value), known = new Set((data.projects || []).map((p) => p.id));
+          const pid = (n) => old.id + "-p" + n;
+          return [
+            ...(data.projects || []).map((p, i) => ({ collection: "projects/", id: pid(p.id), value: { id: pid(p.id), name: String(p.name || ""), color: i, archived: false, created: 0 }, meta: { title: String(p.name || "").slice(0, 80) } })),
+            ...(data.entries || []).map((e) => ({ collection: "time/", id: old.id + "-e" + e.id, meta: { title: (String(e.date) + " " + String(e.desc || "")).trim().slice(0, 80), date: String(e.date), minutes: Number(e.minutes) || 0, project: known.has(e.project) ? pid(e.project) : null },
+              value: { id: old.id + "-e" + e.id, project: known.has(e.project) ? pid(e.project) : null, date: String(e.date), minutes: Number(e.minutes) || 0, desc: String(e.desc || ""), start: null, created: 0 } })),
+          ];
         }
-        const ending = (name) => (/\.[A-Za-z0-9]{1,8}$/.exec(String(name)) || [""])[0];   // nothing refers to the id of a file, so its id may use the name
-    
-        const items = [];
-        if (!projects.length && !entries.length && old.local[DATA] !== undefined) h.skip(DATA, "no projects and no entries");
-        projects.forEach((p, i) => items.push({ col: projectsCol, id: pid(p.id), from: DATA,
-          value: { id: pid(p.id), name: String(p.name || ""), color: i, archived: false, created: 0 } }));
-        entries.forEach((e) => items.push({ col: timeCol, id: eid(e.id), from: DATA,
-          value: { id: eid(e.id), project: known.has(e.project) ? pid(e.project) : null, date: String(e.date), minutes: Number(e.minutes) || 0, desc: String(e.desc || ""), start: null, created: h.created(e.date) || 0 } }));
-        for (const row of old.rows("notes")) {
-          const n = row.value, made = h.created(n.created) || 0;
-          items.push({ col: notesCol, id: h.id(row.key), from: row, created: h.created(n.created),
-            value: { id: h.id(row.key), title: String(n.title || ""), text: String(n.text || ""), tags: Array.isArray(n.tags) ? n.tags.map(String) : [], project: null, created: made, updated: made } });
+        if (old.source === "zeitnotizen/notes") {
+          const n = old.value, made = Number(n.created) || 0;
+          return { collection: "notes/", id: old.id, meta: { title: String(n.title || "").slice(0, 80) },
+            value: { id: old.id, title: String(n.title || ""), text: String(n.text || ""), tags: Array.isArray(n.tags) ? n.tags.map(String) : [], project: null, created: made, updated: made } };
         }
-        for (const row of old.rows("files")) {
-          const f = row.value, note = h.ref("notes", f.noteId);              // the id that the note side computes; null when the note is gone: the file is kept, it just belongs to no note
-          const blob = h.blob(f);
-          items.push({ col: filesCol, id: h.id(row.key, ending(f.name)), from: row, value: blob, mime: blob.type || "application/octet-stream",
-            meta: { note, name: String(f.name).slice(0, 100), mime: (blob.type || "application/octet-stream").slice(0, 80), size: blob.size } });
+        if (old.source === "zeitnotizen/files") {            // the file points to its note: ref(key, source) is the id that the note's row gets
+          const f = old.value, ending = (/\.[A-Za-z0-9]{1,8}$/.exec(String(f.name)) || [""])[0];
+          return { collection: "files/", id: old.id + ending, value: f.blob, mime: f.blob.type || "application/octet-stream",
+            meta: { note: ref(f.noteId, "zeitnotizen/notes"), name: String(f.name).slice(0, 100), mime: (f.blob.type || "application/octet-stream").slice(0, 80), size: f.blob.size } };
         }
-    
-        const records = [], t = meta.timer && meta.timer.value;
-        if (t) records.push({ name: "timer", from: meta.timer, value: { project: known.has(t.project) ? pid(t.project) : null, desc: String(t.desc || ""), start: Number(t.start) } });   // a timer of a deleted project keeps running, without a project
-        return { items, records };
+        if (old.source === "zeitnotizen/meta" && old.key === "timer") {   // the language row returns nothing: it stays where it is (the new app keeps it in localStorage)
+          const t = old.value, base = ref("zeitnotizen.daten", "localStorage");   // the project ids are made from the id of the JSON row; a project that is gone shows as "deleted project"
+          return { name: "timer", value: { project: base ? base + "-p" + t.project : null, desc: String(t.desc || ""), start: Number(t.start) } };
+        }
       },
     });
     // migrateLocal: end
@@ -1362,19 +1329,17 @@
     if (button) { $("screen-btn").textContent = button; $("screen-btn").focus(); }
   }
 
-  // Runs after every successful unlock (the library calls it, the first time and after "Unlock" on the lock screen): reads the lists and the
-  // records, shows the app. Collections and autosave handles are created per use, so it can run many times.
+  // Runs once per page: unlock (the library's dialog: create a vault or unlock; a lock, a revocation or an expired session reloads the page and
+  // this runs again), take over old data once, read the lists and the records, show the app.
   async function start() {
     S.loaded = false;
     showScreen(t("loading"));
     try {
+      await store.unlock();
       S.role = store.status().role || "owner";
-      if (!S.migrationChecked) {                  // once per page, before anything of the vault is read or written
-        S.migrationChecked = true;
-        var taken = await takeOverOldData();
-        if (taken.status === "failed") console.warn("old data not taken over:", taken.why);   // the library has told the person; the old data is still where it was
-      }
-      await loadAll(false);
+      var taken = await takeOverOldData();       // before anything of the vault is read or written
+      if (taken.status === "failed") console.warn("old data not taken over:", taken.why);   // the library has told the person; the old data is still where it was
+      await loadAll();
     } catch (e) {
       showScreen(t("load_failed", { msg: errText(e) }), t("retry"));
       $("screen-btn").onclick = start;
@@ -1388,22 +1353,6 @@
     showView(S.view);
     renderAll();
   }
-  function unlockAgain() { store.unlock().catch(fail); }
-
-  // Registered once (not inside start): the library stops the autosave handles on a lock, the app clears everything that belongs to the vault.
-  store.onUnlock(start);
-  store.onLock(function (reason) {
-    S.saver = null;
-    S.loaded = false; S.noteId = null;
-    clearInterval(S.ticker);
-    S.previews.forEach(function (url) { URL.revokeObjectURL(url); }); S.previews.clear();
-    S.projects.clear(); S.time.clear(); S.notes.clear(); S.timer = null;
-    clearTimeout(toastTimer); $("toast").replaceChildren();
-    ["note-title", "note-text", "note-tags"].forEach(function (id) { $(id).value = ""; });
-    $("note-editor").hidden = true; $("note-empty").hidden = false; $("entries").replaceChildren(); $("note-list").replaceChildren(); $("project-list").replaceChildren();
-    showScreen(t(reason === "revoked" ? "locked_revoked" : reason === "expired" ? "locked_expired" : "locked_user"), t("unlock"));
-    $("screen-btn").onclick = unlockAgain;
-  });
 
   document.querySelectorAll("nav.tabs button").forEach(function (b) { b.addEventListener("click", function () { showView(b.getAttribute("data-view")); }); });
   $("goto-projects").addEventListener("click", function () { showView("projects"); $("project-name").focus(); });
@@ -1454,7 +1403,7 @@
   $("note-delete").addEventListener("click", deleteNote);
   $("note-history").addEventListener("click", async function () {
     var n = S.notes.get(S.noteId); if (!n) return;
-    try { if (S.saver) await S.saver.flush(); await store.showHistory("notes/" + n.id, { title: n.title || t("untitled") }); } catch (e) { fail(e); }   // the library builds the heading: History of "<title>"
+    try { if (S.saver) await S.saver.flush(); await store.showHistory("notes/" + n.id); } catch (e) { fail(e); }   // the heading names the note by its meta title
   });
   document.addEventListener("keydown", function (e) {
     if (e.key === "/" && S.loaded && S.view === "notes" && !/^(input|textarea|select)$/i.test(document.activeElement.tagName) && !document.querySelector("dialog[open]")) {
@@ -1462,26 +1411,7 @@
     }
   });
 
-  $("btn-share").addEventListener("click", function () { store.share().catch(function (e) { if (e && e.code !== "cancelled") fail(e); }); });
-  $("btn-export").addEventListener("click", async function () {
-    try { await store.exportAll({ filename: "zeit-notizen-export.zip" }); } catch (e) { fail(e); }   // the library confirms with its own notice
-  });
-  $("btn-reload").addEventListener("click", async function () {
-    try {
-      if (!(await closeNote())) return;
-      await loadAll(true); renderAll(); applyLang(); toast(t("reloaded"));
-    } catch (e) { fail(e); }
-  });
-  // The lists repair themselves from the records: reads every record once and writes the lists new (cost: one request per record).
-  $("btn-repair").addEventListener("click", async function () {
-    try {
-      if (!(await closeNote())) return;
-      toast(t("repairing"));
-      await Promise.all([projectsCol, timeCol, notesCol, filesCol].map(function (c) { return c.rebuild(); }));
-      await loadAll(false); renderAll(); toast(t("repaired"));
-    } catch (e) { fail(e); }
-  });
-  $("btn-lock").addEventListener("click", async function () { try { if (await closeNote()) await store.lock(); } catch (e) { fail(e); } });
+  $("btn-vault").addEventListener("click", function () { store.openVault().catch(fail); });
   $("btn-lang").addEventListener("click", async function () {
     S.lang = S.lang === "de" ? "en" : "de";
     applyLang(); toast(t("lang_switched"));
@@ -1489,8 +1419,7 @@
   });
 
   applyLang();
-  showScreen(t("loading"));
-  unlockAgain();                      // the library's dialog: create a vault or unlock; start() runs when it is done
+  start();
 })();
 </script>
 </body>

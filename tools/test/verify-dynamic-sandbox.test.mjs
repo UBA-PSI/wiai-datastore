@@ -68,8 +68,8 @@ test('--target auto without Python uses the sandbox when the service is reachabl
   const r = await sbVerify(mock, readApp('good'), [], { env: { WDS_VERIFY_OFFLINE: '', WDS_VERIFY_HASHES_URL: 'off', WDS_PYTHON: '/nonexistent/python' } });
   assert.equal(r.parsed.target.name, 'sandbox');
   assert.equal(r.code, 0, JSON.stringify(r.parsed.findings.filter((f) => f.level === 'fail')));
-  // the real scope was checked on the service: hibp is off there while the CSP allows the host
-  assert.equal(r.find('scope-hibp').level, 'warn');
+  // the real scope was checked on the service: the one recommended policy allows the breach-check host whatever the scope's setting
+  assert.equal(r.find('scope-hibp').level, 'pass');
   const md = await run('wds-verify.mjs', [writeApp(readApp('good')), '--target', 'auto'], { env: envFor(mock, { WDS_VERIFY_OFFLINE: '', WDS_VERIFY_HASHES_URL: 'off', WDS_PYTHON: '/nonexistent/python' }) });
   assert.match(md.stdout, /^# wds-verify report: index\.html\n\nTarget: \*\*sandbox\*\* \(auto: no mock \(/);
 });

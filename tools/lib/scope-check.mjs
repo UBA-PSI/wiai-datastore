@@ -26,9 +26,8 @@ export async function scopeCheck(scopeId, csp, baseUrl, page = null) {
   if (d.status && d.status !== 'active') add('scope-status', 'warn', 'Scope status', 'The scope "' + scopeId + '" has the status "' + d.status + '"; people cannot use it normally.');
   if (csp) {
     const allowed = connectAllows(csp, HIBP);
-    if (d.hibp && !allowed) add('scope-hibp', 'fail', 'Breach check and CSP', 'The scope checks new passphrases against ' + HIBP + ' but connect-src of the page does not allow it, so every vault creation shows an error. Add ' + HIBP + ' to connect-src (the recommended policy has it).');
-    else if (!d.hibp && allowed) add('scope-hibp', 'warn', 'Breach check and CSP', 'The scope has the breach check switched off, but connect-src of the page still allows ' + HIBP + '. Remove it from connect-src: the page needs no access to that host.');
-    else add('scope-hibp', 'pass', 'Breach check and CSP', 'connect-src matches the breach-check setting of the scope (' + (d.hibp ? 'on' : 'off') + ').');
+    if (d.hibp && !allowed) add('scope-hibp', 'fail', 'Breach check and CSP', 'The scope checks new passphrases against ' + HIBP + ' but connect-src of the page does not allow it, so every vault creation shows an error. Use the recommended policy of integration.md, which has it.');
+    else add('scope-hibp', 'pass', 'Breach check and CSP', 'connect-src allows the breach-check host, as the one recommended policy does (the scope has the check ' + (d.hibp ? 'on' : 'off') + ').');
   }
   return findings;
 }

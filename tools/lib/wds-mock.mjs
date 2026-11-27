@@ -73,7 +73,7 @@ export async function startMock(opts = {}) {
     let built = null;
     if (opts.bundle) {
       const { build } = await import('../../client/build.mjs');
-      built = build({ escrowPins: pins, retiredEscrow: [], dist: bundleDir });
+      built = build({ escrowPins: pins, retiredEscrow: [], dist: bundleDir, testHooks: true });
     }
     const sandbox = opts.sandbox ? { scope_id: 'sandbox-000000', create_per_ip: 1000, create_global: 100000, ...(opts.sandbox === true ? {} : opts.sandbox) } : null;
     const operatorToken = 'wdsop.' + b64u(randomBytes(32));

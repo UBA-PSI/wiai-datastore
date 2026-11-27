@@ -1,6 +1,6 @@
 // Stable attributes on the library's controls (data-wds, data-wds-view) and the sandbox presentation of the dialogs.
 import { test, expect } from '@playwright/test';
-import { startTestWorld, openApp, mockHibp, shot, dialog, nodeClient, writePage } from './ui-helpers.mjs';
+import { startTestWorld, openApp, mockHibp, shot, dialog, nodeClient, writePage, lockPage } from './ui-helpers.mjs';
 
 let w;
 test.beforeEach(async () => { w = await startTestWorld(); });
@@ -76,7 +76,7 @@ for (const [lang, locale] of [['en', 'en-US'], ['de', 'de-DE']]) {
   });
 }
 
-test('dialog controls carry data-wds: conflict, history, sharing, revoking, notices and toasts', async ({ browser }) => {
+test('dialog controls carry data-wds: conflict, history, the vault dialog, revoking, the recovery notice, offline, revoked', async ({ browser }) => {
   const page = await openApp(await browser.newContext(), w);
   const accessId = await createByAttrs(page);
   await finishSheet(page);
@@ -109,9 +109,9 @@ test('dialog controls carry data-wds: conflict, history, sharing, revoking, noti
   await page.evaluate(() => window.p);
 
   // sharing: owner with an unused invite, a redeemed member, an invite code on screen
-  await page.evaluate(() => { window.shareP = store.share(); });
+  await page.evaluate(() => { window.shareP = store.openVault(); });
   await expect(byWds(page, 'invite-create')).toBeVisible();
-  await check(page, 'share', ['close', 'form-error', 'invite-role', 'invite-label', 'invite-create', 'me-keyfile', 'me-renew', 'me-lock', 'me-passphrase-toggle', 'passphrase', 'passphrase-repeat', 'show-passphrase', 'me-passphrase-submit']);
+  await check(page, 'share', ['close', 'form-error', 'invite-role', 'invite-label', 'invite-create', 'me-sheet', 'me-keyfile', 'me-renew', 'me-export', 'me-lock', 'me-passphrase-toggle', 'passphrase', 'passphrase-repeat', 'show-passphrase', 'me-passphrase-submit']);
   await byWds(page, 'invite-label').fill('Anna');
   await byWds(page, 'invite-create').click();
   await expect(byWds(page, 'invite-code')).toBeVisible();
@@ -125,7 +125,7 @@ test('dialog controls carry data-wds: conflict, history, sharing, revoking, noti
   await byWds(page, 'close').click();
   const member = nodeClient(w);
   await member.redeemInvite({ inviteCode: code, passphrase: 'member passphrase with words' });
-  await page.evaluate(() => { window.shareP = store.share(); });
+  await page.evaluate(() => { window.shareP = store.openVault(); });
   await expect(byWds(page, 'revoke').first()).toBeVisible({ timeout: 20000 });
   await check(page, 'share', ['person', 'member-role', 'cancel-invite', 'revoke']);
   await byWds(page, 'revoke').first().click();
@@ -135,8 +135,17 @@ test('dialog controls carry data-wds: conflict, history, sharing, revoking, noti
   await check(page, 'share', ['person']);
   await byWds(page, 'close').click();
 
+  // the access sheet again, from the vault dialog
+  await page.evaluate(() => { window.shareP = store.openVault(); });
+  await byWds(page, 'me-sheet').click();
+  await check(page, 'sheet', ['access-id', 'sheet-keyfile', 'sheet-print', 'sheet-download', 'sheet-continue']);
+  expect(await dialog(page).locator('[data-wds=recovery-code], [data-wds=sheet-confirm]').count()).toBe(0);
+  await byWds(page, 'sheet-continue').click();
+  await check(page, 'share', ['me-sheet']);
+  await byWds(page, 'close').click();
+
   // a recovery request notice
-  await page.evaluate(() => store.lock());
+  await lockPage(page);
   const v = [...w.world.server.vaults.values()][0];
   v.recovery = { method: 'code', requested: Math.floor(Date.now() / 1000), ready_at: Math.floor(Date.now() / 1000) + 259200 };
   await page.evaluate(() => { window.unlockP = store.unlock(); });
@@ -148,12 +157,43 @@ test('dialog controls carry data-wds: conflict, history, sharing, revoking, noti
   await byWds(page, 'recovery-keep').click();
   await page.evaluate(() => window.unlockP);
 
-  // toasts: the offline notice with its backup action
+  // offline with an unsaved value: a dialog with the backup and a retry
   await page.route('**/datastore/api/**', (route) => route.abort('internetdisconnected'));
   await page.evaluate(() => store.set('draft', { x: 1 }).catch(() => {}));
-  await expect(page.locator('[data-wds-toast=offline]')).toBeVisible();
-  expect(await page.locator('[data-wds-toast=offline] [data-wds]').evaluateAll((els) => els.map((e) => e.getAttribute('data-wds')))).toEqual(['toast-action', 'toast-dismiss']);
+  await expect(byWds(page, 'offline-retry')).toBeVisible();
+  await check(page, 'offline', ['offline-retry', 'backup', 'close']);
+  await byWds(page, 'close').click();
   await page.unroute('**/datastore/api/**');
+});
+
+test('a revoked access ends with a dialog (backup, OK) and a reload; notices carry no controls', async ({ browser }) => {
+  const page = await openApp(await browser.newContext(), w);
+  const accessId = await createByAttrs(page);
+  await finishSheet(page);
+  const owner = nodeClient(w);
+  await owner.unlock({ accessId: idOf(accessId), passphrase: PASS });
+  const inv = await owner.createInvite({ role: 'write' });
+  const m = await openApp(await browser.newContext(), w);
+  await m.evaluate(() => { window.unlockP = store.unlock(); });
+  await byWds(m, 'to-redeem').click();
+  await byWds(m, 'invite-code-input').fill(inv.code.display);
+  await byWds(m, 'passphrase').fill('member passphrase with words'); await byWds(m, 'passphrase-repeat').fill('member passphrase with words');
+  await byWds(m, 'redeem-submit').click();
+  await finishSheet(m);
+  expect(await m.evaluate(() => document.documentElement.getAttribute('data-wds-role'))).toBe('write');
+  await m.evaluate(() => { window.h = store.autosave('draft', () => ({ x: 1 }), { delayMs: 60000 }); h.changed(); });
+  await owner.revoke(owner.members().find((x) => !x.self && !x.escrow).slotId);
+  await m.evaluate(() => store.get('anything').catch(() => {}));
+  await expect(byWds(m, 'end-ok')).toBeVisible();
+  await check(m, 'revoked', ['backup', 'end-ok']);
+  expect(await m.evaluate(() => document.documentElement.hasAttribute('data-wds-role'))).toBe(false);
+  const loaded = m.waitForEvent('load');
+  await byWds(m, 'end-ok').click();
+  await loaded;
+  expect(await m.evaluate(() => store.status().unlocked)).toBe(false);
+  // a notice has no control and takes no click
+  await m.evaluate(() => { window.unlockP = store.unlock().catch(() => {}); });
+  await expect(byWds(m, 'unlock-submit')).toBeVisible();
 });
 
 test('a read-only member: the sharing dialog has only the own-access controls', async ({ browser }) => {
@@ -173,9 +213,9 @@ test('a read-only member: the sharing dialog has only the own-access controls', 
   await check(m, 'sheet', ['access-id', 'sheet-keyfile', 'sheet-confirm', 'sheet-continue']);
   expect(await dialog(m).locator('[data-wds=recovery-code]').count()).toBe(0);
   await finishSheet(m);
-  await m.evaluate(() => { window.shareP = store.share(); });
+  await m.evaluate(() => { window.shareP = store.openVault(); });
   await expect(byWds(m, 'me-keyfile')).toBeVisible();
-  const r = await check(m, 'share', ['me-keyfile', 'me-renew', 'me-lock', 'me-passphrase-toggle']);
+  const r = await check(m, 'share', ['me-sheet', 'me-keyfile', 'me-renew', 'me-export', 'me-lock', 'me-passphrase-toggle']);
   expect(r.names).not.toContain('invite-create');
 });
 
@@ -187,15 +227,15 @@ async function sandboxWorld(extra) {
   w = await startTestWorld({ scope: Object.assign({ hibp: false, sandbox: { next_wipe: Math.floor(Date.now() / 1000) + 6 * 3600, last_wipe: null } }, extra || {}) });
   return w;
 }
-const HIDE_CSS = '[data-wds=sandbox-banner],[data-wds=sandbox-bar],.wds-msg{display:none!important;visibility:hidden!important;opacity:0!important}';
+const HIDE_CSS = '[data-wds=sandbox-banner],[data-wds=sandbox-badge],.wds-msg{display:none!important;visibility:hidden!important;opacity:0!important}';
 
 for (const [lang, locale, t] of [
-  ['en', 'en-US', { unlock: 'Sandbox: Unlock your data', create: 'Sandbox: Create your vault', btn: 'Create sandbox vault', sheet: 'Sandbox access (deleted tonight)', note: 'No recovery in the sandbox; this vault is deleted tonight.', banner: 'Sandbox for testing.', bar: 'Sandbox – data is deleted tonight', escrow: 'the sandbox offers no recovery' }],
-  ['de', 'de-DE', { unlock: 'Testumgebung: Daten entsperren', create: 'Testumgebung: Tresor anlegen', btn: 'Testtresor anlegen', sheet: 'Zugang zur Testumgebung (wird heute Nacht gelöscht)', note: 'Keine Wiederherstellung in der Testumgebung; dieser Tresor wird heute Nacht gelöscht.', banner: 'Testumgebung. Hier kann jede Person', bar: 'Testumgebung – Daten werden heute Nacht gelöscht', escrow: 'die Testumgebung bietet keine Wiederherstellung' }],
+  ['en', 'en-US', { unlock: 'Sandbox: Unlock your data', create: 'Sandbox: Create your vault', btn: 'Create sandbox vault', sheet: 'Sandbox access (deleted tonight)', note: 'No recovery in the sandbox; this vault is deleted tonight.', banner: 'Sandbox for testing.', badge: 'Sandbox', escrow: 'the sandbox offers no recovery' }],
+  ['de', 'de-DE', { unlock: 'Testumgebung: Daten entsperren', create: 'Testumgebung: Tresor anlegen', btn: 'Testtresor anlegen', sheet: 'Zugang zur Testumgebung (wird heute Nacht gelöscht)', note: 'Keine Wiederherstellung in der Testumgebung; dieser Tresor wird heute Nacht gelöscht.', banner: 'Testumgebung. Hier kann jede Person', badge: 'Testumgebung', escrow: 'die Testumgebung bietet keine Wiederherstellung' }],
 ]) {
-  test('sandbox scope: titles, banner, create button, no recovery, persistent bar (' + lang + ')', async ({ browser }) => {
+  test('sandbox scope: titles, banner, create button, no recovery, corner badge (' + lang + ')', async ({ browser }) => {
     await sandboxWorld();
-    const page = await openApp(await browser.newContext({ locale }), w, { page: writePage('sandbox-' + lang + '.html', { css: HIDE_CSS }) });
+    const page = await openApp(await browser.newContext({ locale }), w, { page: writePage('sandbox-' + lang + '.html', { css: HIDE_CSS, lang }) });
     await page.evaluate(() => { window.unlockP = store.unlock(); });
     await expect(byWds(page, 'unlock-submit')).toBeVisible();
     await expect(dialog(page).locator('h2')).toHaveText(t.unlock);
@@ -234,22 +274,18 @@ for (const [lang, locale, t] of [
     expect(sheetHtml).toContain(t.note);
     expect(sheetHtml).not.toMatch(/<th scope="row">(Wiederherstellungscode|Recovery code)</);   // the row of the code is gone
     await finishSheet(page);
-    // after unlock: the bar stays for the whole session, and cannot be hidden by the host page
-    const bar = page.locator('[data-wds=sandbox-bar]');
-    await expect(bar).toBeVisible();
-    await expect(bar).toHaveText(t.bar);
-    expect(await bar.evaluate((e) => getComputedStyle(e).position)).toBe('fixed');
-    expect(await bar.evaluate((e) => e.style.getPropertyPriority('display'))).toBe('important');
-    await shot(page, lang + '-sandbox-bar');
-    // the page moves down by the height of the bar, so that the bar covers none of the app; lock gives the space back
-    expect(await page.evaluate(() => parseFloat(document.documentElement.style.paddingTop))).toBeGreaterThan(10);
-    // the height is also a CSS custom property, for sticky headers: top: var(--wds-sandbox-bar, 0)
-    expect(await page.evaluate(() => parseFloat(document.documentElement.style.getPropertyValue('--wds-sandbox-bar')))).toBeGreaterThan(10);
+    // after unlock: a corner badge stays for the whole session; the host page cannot hide it, and it takes no click
+    const badge = page.locator('[data-wds=sandbox-badge]');
+    await expect(badge).toBeVisible();
+    await expect(badge).toHaveText(t.badge);
+    expect(await badge.evaluate((e) => getComputedStyle(e).position)).toBe('fixed');
+    expect(await badge.evaluate((e) => getComputedStyle(e).pointerEvents)).toBe('none');
+    expect(await badge.evaluate((e) => e.style.getPropertyPriority('display'))).toBe('important');
+    expect(await page.evaluate(() => document.documentElement.style.paddingTop)).toBe('');   // the page is not moved
+    await shot(page, lang + '-sandbox-badge');
     expect(await page.evaluate(() => store.status().sandbox)).toBe(true);
-    await page.evaluate(() => store.lock());
-    await expect(bar).toHaveCount(0);
-    expect(await page.evaluate(() => document.documentElement.style.paddingTop)).toBe('');
-    expect(await page.evaluate(() => document.documentElement.style.getPropertyValue('--wds-sandbox-bar'))).toBe('');
+    await lockPage(page);
+    await expect(badge).toHaveCount(0);   // the reloaded page shows nothing of the vault until it is unlocked
   });
 }
 
@@ -266,7 +302,7 @@ test('a normal scope shows none of the sandbox marks; status().sandbox is false'
   await byWds(page, 'create-submit').click();
   await expect(byWds(page, 'recovery-code')).toBeVisible();
   await finishSheet(page);
-  expect(await page.locator('[data-wds=sandbox-bar]').count()).toBe(0);
+  expect(await page.locator('[data-wds=sandbox-badge]').count()).toBe(0);
   expect(await page.evaluate(() => store.status().sandbox)).toBe(false);
 });
 
@@ -296,19 +332,22 @@ test('sandbox: an access ID remembered from before the last wipe opens the creat
   await expect(byWds(p4, 'access-id-input')).not.toHaveValue('');
 });
 
-test('sandbox: an unlocked session whose vault disappeared after the wipe time locks with reason "expired" and says so', async ({ browser }) => {
+test('sandbox: an unlocked session whose vault disappeared after the wipe time reloads the page, which reports the sandbox as emptied', async ({ browser }) => {
   await sandboxWorld({ sandbox: { next_wipe: Math.floor(Date.now() / 1000) + 2, last_wipe: null } });
   const page = await openApp(await browser.newContext(), w);
   await createByAttrs(page);
   await finishSheet(page);
-  await page.evaluate(() => { window.locks = []; store.onLock((r) => window.locks.push(r)); });
   await page.waitForTimeout(2500);
   w.world.server.wipe(w.scope);
+  w.world.server.scopes.get(w.scope).sandbox.last_wipe = Math.floor(Date.now() / 1000) + 60;
+  const loaded = page.waitForEvent('load');
   const err = await page.evaluate(() => store.get('x').then(() => null, (e) => e.name));
   expect(err).toBe('AuthError');
-  expect(await page.evaluate(() => window.locks)).toEqual(['expired']);
-  await expect(page.getByText('The sandbox was emptied on')).toBeVisible();
-  await expect(page.locator('[data-wds=sandbox-bar]')).toHaveCount(0);
+  await loaded;
+  expect(await page.evaluate(() => store.status().unlocked)).toBe(false);
+  await page.evaluate(() => { window.unlockP = store.unlock().catch(() => {}); });
+  await expect(dialog(page).getByText('The sandbox was emptied on')).toBeVisible();
+  await expect(page.locator('[data-wds=sandbox-badge]')).toHaveCount(0);
 });
 
 test('sandbox: a full sandbox says that it is emptied every night', async ({ browser }) => {
@@ -327,7 +366,7 @@ test('sandbox: the share dialog offers only "until the wipe", and that invite is
   const page = await openApp(await browser.newContext(), w);
   await createByAttrs(page);
   await finishSheet(page);
-  await page.evaluate(() => { window.shareP = store.share(); });
+  await page.evaluate(() => { window.shareP = store.openVault(); });
   await expect(byWds(page, 'invite-create')).toBeVisible();
   await byWds(page, 'invite-create').click();
   await expect(byWds(page, 'invite-code')).toBeVisible();   // the server (fake) refuses an invite that outlives the wipe
@@ -344,7 +383,7 @@ test('sandbox: the share dialog offers only "until the wipe", and that invite is
   await byWds(p2, 'passphrase').fill(PASS);
   await byWds(p2, 'unlock-submit').click();
   await p2.evaluate(() => window.unlockP);
-  await p2.evaluate(() => { window.shareP = store.share(); });
+  await p2.evaluate(() => { window.shareP = store.openVault(); });
   await expect(dialog(p2).getByText('An invite must be valid for at least one hour')).toBeVisible();
   expect(await byWds(p2, 'invite-create').count()).toBe(0);
 });
@@ -404,7 +443,7 @@ test('share dialog: aria-busy until the roster is refreshed; what the person cho
   await createByAttrs(page);
   await finishSheet(page);
   let release; w.world.server.gate = { path: '/slots/', until: new Promise((res) => { release = res; }) };   // the refresh of the roster (maintain) is held back
-  await page.evaluate(() => { window.shareP = store.share(); });
+  await page.evaluate(() => { window.shareP = store.openVault(); });
   await expect(byWds(page, 'invite-create')).toBeVisible();
   await expect(dialog(page)).toHaveAttribute('aria-busy', 'true');
   await byWds(page, 'invite-role').selectOption('read');

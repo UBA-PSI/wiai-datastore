@@ -10,13 +10,13 @@ import { Canaries, findIn } from './canary.mjs';
 import { DATASTORE_HOST, scanHtml } from './static-checks.mjs';
 import { instrument } from './page-instrument.mjs';
 import { RE_SCOPE, sriOfFile, rewriteScopes } from './targets.mjs';
-import { CANARY_PLACEHOLDER, MIGRATION_TEST_GLOBAL } from './config.mjs';
-import { dialog, dialogState, dialogSummary, briefError, chooseCreate, submitCreate, submitUnlock, formError, newPassphrase, viewOf } from './dialog-internals.mjs';
-import { confirmSheet } from './drive-library.mjs';
+import { CANARY_PLACEHOLDER } from './config.mjs';
+import { dialog, dialogState, dialogSummary, briefError, chooseCreate, submitCreate, submitUnlock, formError, newPassphrase, viewOf, confirmSheet } from './dialog-internals.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const DOCP = ' (tools/README.md)';   // where a finding text points for more
 const L = '(?<![\\p{L}\\p{N}])', R_ = '(?![\\p{L}\\p{N}])';
-const SAVE_RE = new RegExp(L + '(save|speichern|sichern|add|hinzufügen|hinzufuegen|ok|submit|senden|apply|übernehmen|anlegen|create|erstellen)' + R_, 'iu');
+const SAVE_RE = new RegExp(L + '(save|speichern|sichern|add|hinzufügen|hinzufuegen|ok|submit|senden|apply|übernehmen|anlegen|create|erstellen|buchen|book|reservieren)' + R_, 'iu');
 const NOT_SAVE_RE = new RegExp(L + '(delete|remove|clear|reset|cancel|close|löschen|entfernen|abbrechen|export|download|import|lock|sperren)' + R_, 'iu');
 
 // A 1x1 PNG; the generated upload appends a canary after its end (decoders ignore trailing bytes).
@@ -63,14 +63,14 @@ const whyHidden = (el) => {
   }
   if (getComputedStyle(el).visibility !== 'visible') return 'visibility:' + getComputedStyle(el).visibility;
   if (opacity < 0.2) return 'opacity ' + opacity.toFixed(2);
-  if (getComputedStyle(el).pointerEvents === 'none') return null;   // the browser cannot tell what covers it (the library's bar lets clicks through)
+  if (getComputedStyle(el).pointerEvents === 'none') return null;   // the browser cannot tell what covers it (the library's badge lets clicks through)
   const top = document.elementFromPoint(Math.min(Math.max(r.left + r.width / 2, 0), innerWidth - 1), Math.min(Math.max(r.top + r.height / 2, 0), innerHeight - 1));
   if (!top || !(top === el || el.contains(top))) return 'it is covered by <' + (top ? top.tagName.toLowerCase() + (top.id ? '#' + top.id : '') : 'nothing') + '>';
   return null;
 };
 
 // config: { locale, steps, afterReload, seed } of wds-verify.json; target: { name: 'mock' } or { name: 'sandbox', scopeId, serviceOrigin?, libraryFile? };
-// opts: { headed, waitMs, locale, migrationDelete } (migrationDelete: set window.__WDS_MIGRATION_TEST__ so that a migration deletes the old data in the sandbox too).
+// opts: { headed, waitMs, locale }.
 export async function dynamicChecks({ appPath, html, config = {}, library, target = { name: 'mock' }, opts = {} }) {
   const steps = config.steps || [], afterReload = config.afterReload || [], seed = config.seed || null;
   const seedPath = seed ? resolve(dirname(appPath), seed.page) : null;
@@ -109,7 +109,7 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
     if (sb) {
       const rw = rewriteScopes(pageHtml, scanHtml(pageHtml).scripts, target.scopeId);
       if (!rw.sites) {
-        add('sandbox-scope', 'fail', 'Scope of the app', 'wds-verify found no WDS.connect({ scope: "..." }) with a literal scope ID (or a constant that holds one, declared in the same script), so it cannot point the app at the sandbox without guessing. Write the scope ID as a string literal in the WDS.connect call, or use --target mock.');
+        add('sandbox-scope', 'fail', 'Scope of the app', 'wds-verify found no WDS.connect({ scope: "..." }) with a literal scope ID, so it cannot point the app at the sandbox. Write the scope ID as a string literal.');
         return { findings, info };
       }
       pageHtml = rw.html; info.replacedScopes = rw.replaced;
@@ -127,13 +127,12 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
     browser = await pw.chromium.launch({ headless: !opts.headed });
     const locale = opts.locale || config.locale || 'en-US';
     info.locale = locale;
-    if (seed) info.migrationDelete = !!opts.migrationDelete;
     const context = await browser.newContext({ locale, acceptDownloads: true, viewport: { width: 1200, height: 900 }, serviceWorkers: 'block' });
     const page = await context.newPage();
 
     // ---- observation ----
     const requests = [], externals = [], navigations = [], consoleLines = [], pageErrors = [], downloads = [], sockets = [], apiErrors = [];
-    const storeLog = [], netLog = [], exportWindows = [], storeErrors = [];
+    const storeLog = [], netLog = [], storeErrors = [];
     const pending = new Set();
     const unexpected = [];
     const note = (msg) => { if (!unexpected.includes(msg)) unexpected.push(msg); };
@@ -147,14 +146,9 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
       touch();
       if (rec.kind === 'net') netLog.push(rec);
       else if (rec.kind === 'store') storeLog.push(rec);
-      else if (rec.kind === 'export') exportWindows.push(rec);
       else if (rec.kind === 'error') storeErrors.push(rec);
     });
     await context.addInitScript(instrument);
-    // The migration test: store.migrateLocal keeps the old data in the sandbox (it is wiped tonight); this global, set before any script
-    // of the page runs (and honoured only in an automated browser), tells it that the data of this throw-away browser may go, so that its
-    // deletion path runs in the sandbox as well.
-    if (seed && opts.migrationDelete && sb) await context.addInitScript((name) => { window[name] = true; try { Object.defineProperty(navigator, 'webdriver', { get: () => true, configurable: true }); } catch (e) { /* already true in an automated browser */ } }, MIGRATION_TEST_GLOBAL);
     context.on('request', (r) => {
       pending.add(r); touch();
       let body = null; try { body = r.postDataBuffer(); } catch (e) { /* none */ }
@@ -221,7 +215,7 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
     const dlg = () => dialog(page);
     const ctl = (d, name) => d.locator('[data-wds="' + name + '"]');
     const present = async (d, name) => (await ctl(d, name).first().isVisible().catch(() => false));
-    const label = { banner: undefined, bar: undefined };   // the sandbox label: undefined (not looked at), 'visible', 'hidden', 'absent'
+    const label = { banner: undefined, badge: undefined };   // the sandbox label: undefined (not looked at), 'visible', 'hidden', 'absent'
     let createFailures = 0;
     const unavailableError = (e) => e.status === 429 || e.code === 'sandbox_disabled' || e.code === 'vault_limit_reached';
     const labelWhy = {};
@@ -302,27 +296,28 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
           return true;
         }
         case 'migrate': {
-          // store.migrateLocal asks whether to take over the data of the earlier version: save the (unencrypted) backup, then take over
-          const m = info.migrateDialog = info.migrateDialog || { asked: 0, backup: null, large: 0 };
+          // store.migrateLocal asks whether to take over the data of the earlier version: save the (unencrypted) copy, then take over
+          const m = info.migrateDialog = info.migrateDialog || { asked: 0, backup: null };
           m.asked++;
           try { m.backup = await libraryDownloadClick(ctl(d, 'migrate-backup')); }
-          catch (e) { note('the migration dialog: the backup download did not start: ' + briefError(e, 3, 300)); }
-          if (await present(d, 'migrate-skip-ack')) {   // rows that map leaves out (h.skip) are deleted with the old data: the box confirms it
-            m.skipped = (await ctl(d, 'migrate-skip-ack').locator('xpath=ancestor::div[1]').innerText({ timeout: 2000 }).catch(() => '')).replace(/\s+/g, ' ').slice(0, 160) || 'yes';
-            if (!(await ctl(d, 'migrate-yes').isEnabled({ timeout: 2000 }).catch(() => false))) await ctl(d, 'migrate-skip-ack').check({ timeout: 5000 });
-          }
+          catch (e) { note('the migration dialog: the copy of the old data did not download: ' + briefError(e, 3, 300)); }
           await ctl(d, 'migrate-yes').click({ timeout: 5000 });
           await sleep(200);
           return true;
         }
-        case 'migrate-large': {
-          // some entries are too large for the vault: download them (one ZIP), then delete the old data anyway
-          const m = info.migrateDialog = info.migrateDialog || { asked: 0, backup: null, large: 0 };
-          m.large = await d.locator('.wds-person').count();
-          try { await libraryDownloadClick(ctl(d, 'migrate-large-download')); }
-          catch (e) { info.largeStuck = briefError(e, 3, 300); note('the migration dialog: the download of the files that are too large did not start: ' + info.largeStuck); throw new RunAbort('migrate-large download'); }   // delete stays disabled without it
-          await ctl(d, 'migrate-delete').click({ timeout: 10000 });
+        case 'migrate-delete': {   // the second start after a copy (never in the sandbox): the person has seen the copy in the app and confirms the deletion
+          await ctl(d, 'migrate-delete-yes').click({ timeout: 5000 });
           await sleep(200);
+          return true;
+        }
+        case 'migrate-failed': {
+          note('the library reported that taking over the old data failed (view migrate-failed); the tool closed the dialog');
+          await ctl(d, 'migrate-close').click({ timeout: 3000 }).catch(() => {});
+          return true;
+        }
+        case 'revoked': case 'lock-unsaved': case 'offline': {
+          note('the library showed its "' + view + '" dialog; the tool answered it');
+          await ctl(d, (await present(d, 'end-ok')) ? 'end-ok' : 'close').click({ timeout: 3000 }).catch(() => {});
           return true;
         }
         case 'notice': {
@@ -384,9 +379,20 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
         await sleep(100);
       }
     }
+    let lastFilled = null;   // the last text field the tool typed into (Enter goes there when no button matches)
+    // A generated PNG whose name and bytes carry a canary (the upload step and a file input without a step); flagged: the values are the seed's.
+    let uploads = 0;
+    function makeUpload(flagged) {
+      const tg = canaries.nonce + 'u' + (++uploads);
+      const name = 'wdsfile-' + tg + '.png', marker = 'WDSCANARY-FILE-' + tg;
+      const mark = (c) => { if (flagged) c.seed = true; return c; };
+      mark(canaries.add('the name of the generated upload file', 'text', name));
+      mark(canaries.add('the bytes of the generated upload file', 'text', marker));
+      return { name, mimeType: 'image/png', buffer: Buffer.concat([PNG_1X1, Buffer.from(marker)]) };
+    }
     async function fillFields(round, onlyEmpty = false) {
       await drainDialogs();
-      const handles = await page.$$('input, textarea, [contenteditable=""], [contenteditable="true"]');
+      const handles = await page.$$('input, textarea, select, [contenteditable=""], [contenteditable="true"]');
       let typed = 0, count = 0, hidden = 0;
       for (const h of handles) {
         const d = await h.evaluate((el) => {
@@ -394,26 +400,30 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
           const r = el.getBoundingClientRect();
           const cs = getComputedStyle(el);
           const visible = r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none';
-          const type = el.tagName === 'INPUT' ? (el.getAttribute('type') || 'text').toLowerCase() : el.tagName === 'TEXTAREA' ? 'textarea' : 'contenteditable';
-          const value = el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' ? el.value : el.textContent;
+          const type = el.tagName === 'INPUT' ? (el.getAttribute('type') || 'text').toLowerCase() : el.tagName === 'TEXTAREA' ? 'textarea' : el.tagName === 'SELECT' ? 'select' : 'contenteditable';
+          const value = el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' ? (el.type === 'file' ? (el.files.length ? 'file' : '') : el.value) : el.textContent;
           const label = (el.getAttribute('aria-label') || el.id || el.getAttribute('name') || el.getAttribute('placeholder') || el.tagName.toLowerCase());
           // a modal dialog of the app (not the library's) that is open makes everything outside it inert: the tool cannot type there
           let modal = null;
           try { const ms = Array.from(document.querySelectorAll('dialog:modal')).filter((m) => !m.classList.contains('wds-root')); modal = ms.length ? ms[ms.length - 1] : null; } catch (e) { /* :modal is not supported */ }
           const behindModal = !!modal && !modal.contains(el);
           const sel = el.id ? '#' + el.id : el.getAttribute('name') ? el.tagName.toLowerCase() + '[name="' + el.getAttribute('name') + '"]' : label;
-          return { visible, type, disabled: !!el.disabled || !!el.readOnly || el.closest('[inert]') !== null || behindModal, behindModal, label: label.slice(0, 40), sel: sel.slice(0, 60), empty: !String(value || '').trim() };
+          return { visible, type, min: el.min || '', max: el.max || '', disabled: !!el.disabled || !!el.readOnly || el.closest('[inert]') !== null || behindModal, behindModal, label: label.slice(0, 40), sel: sel.slice(0, 60), empty: !String(value || '').trim() };
         }).catch(() => null);
         if (!d) continue;
-        if (!d.visible) { if (!['hidden', 'file'].includes(d.type)) hidden++; continue; }
+        if (!d.visible && d.type !== 'file') { if (d.type !== 'hidden') hidden++; continue; }   // a file input is often hidden behind a styled label: it can be filled all the same
         if (d.behindModal) { info.behindModal = (info.behindModal || 0) + 1; continue; }
         if (d.disabled) continue;
-        const kind = { email: 'email', url: 'url', tel: 'tel', number: 'number' }[d.type];
+        const kind = { email: 'email', url: 'url', tel: 'tel' }[d.type];
         const textLike = !kind && ['text', 'search', 'password', 'textarea', 'contenteditable'].includes(d.type);
         if (!kind && !textLike) {
-          // inputs without free text: give them a valid value so a form can be submitted, no canary
+          // inputs without free text: a valid generated value so that a form can be submitted; a canary only goes into text fields
+          if (!d.empty) continue;
           const fixed = { date: '2031-07-19', time: '13:37', 'datetime-local': '2031-07-19T13:37', month: '2031-07', week: '2031-W29' }[d.type];
-          if (fixed && d.empty) await h.fill(fixed).catch(() => {});
+          if (fixed) await h.fill(fixed).catch(() => {});
+          else if (d.type === 'number') await h.fill(d.min !== '' ? d.min : d.max !== '' && Number(d.max) < 7 ? d.max : '7').catch(() => {});
+          else if (d.type === 'select') await h.evaluate((el) => { const o = Array.from(el.options).find((x) => x.value && !x.disabled); if (o) { el.value = o.value; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); } }).catch(() => {});
+          else if (d.type === 'file') await h.setInputFiles(makeUpload(false), { timeout: 4000 }).catch((e) => note('could not fill a file input: ' + briefError(e, 2, 200)));
           continue;
         }
         if ((round > 1 || onlyEmpty) && !d.empty) continue; // second round: only fields the app emptied again (e.g. after "Add")
@@ -425,6 +435,7 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
           if (textLike && typed === 0 && round === 1) { await h.fill('', { timeout: 3000 }); await h.focus(); await page.keyboard.type(c.value, { delay: 12 }); typed++; }
           else await h.fill(c.value, { timeout: 4000 });
           await h.evaluate((el) => { el.dispatchEvent(new Event('change', { bubbles: true })); if (el.blur) el.blur(); }).catch(() => {});
+          lastFilled = h;
           count++;
         } catch (e) { note('could not type into ' + d.type + ' "' + d.label + '": ' + briefError(e, 3, 300)); }
       }
@@ -451,6 +462,26 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
       return out;
     }
     const pressed = new Set();   // the text of every button pressed over the whole run (by the tool or by a click step)
+    // No button matched the word list: a submit button of the app (never one with a delete word), else Enter in the last field that was typed into.
+    async function submitFallback() {
+      await drainDialogs();
+      for (const h of await page.$$('button[type=submit], input[type=submit]')) {
+        const d = await h.evaluate((el) => {
+          const r = el.getBoundingClientRect();
+          return { text: ((el.tagName === 'INPUT' ? el.value : el.innerText || el.textContent) || el.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' '), ok: !el.closest('.wds-root') && !el.disabled && r.width > 0 && r.height > 0 && el.closest('[inert]') === null };
+        }).catch(() => null);
+        if (!d || !d.ok || NOT_SAVE_RE.test(d.text)) continue;
+        info.clicks.push(d.text || '(submit button)'); pressed.add(d.text); clickTimes.push(Date.now());
+        await h.click({ timeout: 4000, noWaitAfter: true }).catch((e) => note('could not click "' + d.text + '": ' + briefError(e, 4, 400)));
+        await settle();
+        return;
+      }
+      if (lastFilled) {
+        info.clicks.push('(Enter)'); clickTimes.push(Date.now());
+        await lastFilled.press('Enter', { timeout: 3000 }).catch(() => {});
+        await settle();
+      }
+    }
     async function clickSaves(clicked) {
       for (let guard = 0; guard < 12; guard++) {
         await drainDialogs();
@@ -470,35 +501,12 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
       }
     }
 
-    // A click of a step. A library notice (the toast of the migration, the session notice; bottom right, sticky or about 9 s) can cover a button of the app's own
-    // dialog, and then the click waits for nothing. The tool says what covers the element; when it is a notice, it dismisses the notices and clicks again (a person has to do
-    // the same: porting.md, "Notices above your dialogs").
-    async function clickStep(loc, selector) {
-      try { await loc.click({ timeout: 5000 }); return; }
-      catch (e) {
-        const cover = await loc.evaluate((el) => {
-          const r = el.getBoundingClientRect();
-          if (!r.width || !r.height) return null;
-          const t = document.elementFromPoint(Math.min(Math.max(r.left + r.width / 2, 0), innerWidth - 1), Math.min(Math.max(r.top + r.height / 2, 0), innerHeight - 1));
-          if (!t || el.contains(t)) return null;
-          return { toast: !!t.closest('.wds-toasts'), what: t.tagName.toLowerCase() + (t.id ? '#' + t.id : '') + (typeof t.className === 'string' && t.className ? '.' + t.className.split(' ')[0] : '') };
-        }, undefined, { timeout: 1500 }).catch(() => null);
-        if (cover && cover.toast) {
-          const dismiss = page.locator('.wds-toasts [data-wds="toast-dismiss"]');
-          for (let k = 0; k < 6 && await dismiss.count().catch(() => 0); k++) await dismiss.first().click({ timeout: 2000 }).catch(() => {});
-          note('a notice of the library covered ' + selector + ' (it sits at the bottom right above dialogs, and stays until it is dismissed or, for the short ones, about 9 seconds); the tool dismissed it and clicked again. A person has to dismiss it too: leave room for it or put {"click": "[data-wds=\\"toast-dismiss\\"]"} before the click');
-          await loc.click({ timeout: 5000 });
-          return;
-        }
-        if (cover) throw new Error(briefError(e, 4, 400) + ' (the middle of the element is covered by <' + cover.what + '>)');
-        throw e;
-      }
-    }
+    // A click of a step. Notices of the library take no click (pointer-events: none), so a plain click is what a person does.
+    const clickStep = (loc) => loc.click({ timeout: 5000 });
 
     // The steps of wds-verify.json (steps, afterReload). Failures become findings; ids/titles say which list the step is in.
     const stepCount = { click: 0, fill: 0, upload: 0, wait: 0, select: 0, press: 0, download: 0 };
     const seedCount = { click: 0, fill: 0, upload: 0, wait: 0, select: 0, press: 0, download: 0 };
-    let uploads = 0;
     const requestedDownloads = [];
     async function runSteps(list, listName, afterEach, quiet = false) {
       const tag = listName === 'steps' ? '' : listName + ' ';
@@ -515,7 +523,7 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
             const loc = page.locator(s.click).first();
             const txt = await loc.evaluate((el) => ((el.tagName === 'INPUT' ? el.value : el.innerText || el.textContent) || '').trim().replace(/\s+/g, ' '), undefined, { timeout: 5000 }).catch(() => '');
             if (txt && listName !== 'seed') pressed.add(txt);
-            await clickStep(loc, s.click); await settle();
+            await clickStep(loc); await settle();
           }
           else if (s.upload) {
             cnt.upload++;
@@ -526,11 +534,7 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
               const fname = basename(payload);
               if (fname.length >= 8) flag(canaries.add('wds-verify.json upload file name ' + fname, 'text', fname));
             } else {
-              const tg = canaries.nonce + 'u' + (++uploads);
-              const name = 'wdsfile-' + tg + '.png', marker = 'WDSCANARY-FILE-' + tg;
-              flag(canaries.add('the name of the generated upload file', 'text', name));
-              flag(canaries.add('the bytes of the generated upload file', 'text', marker));
-              payload = { name, mimeType: 'image/png', buffer: Buffer.concat([PNG_1X1, Buffer.from(marker)]) };
+              payload = makeUpload(listName === 'seed');
             }
             clickTimes.push(Date.now());
             await page.locator(s.upload[0]).first().setInputFiles(payload, { timeout: 5000 });
@@ -547,8 +551,8 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
               if (clash) throw new Error('its text contains a value that was typed before the reload (' + (clash.selector || clash.label) + '), so the tool would see it again without the app reading anything back. Use another text or the {canary} placeholder');
             }
             await page.locator(s.fill[0]).first().fill(text, { timeout: 5000 });
-            await page.locator(s.fill[0]).first().evaluate((el) => { el.dispatchEvent(new Event('change', { bubbles: true })); }).catch(() => {});
-            if (text === '') { /* a reset of a field (an empty text): nothing to search for */ }
+            const itype = await page.locator(s.fill[0]).first().evaluate((el) => { el.dispatchEvent(new Event('change', { bubbles: true })); return el.tagName === 'INPUT' ? el.type : ''; }).catch(() => '');
+            if (text === '' || ['date', 'time', 'datetime-local', 'month', 'week', 'number', 'range', 'color'].includes(itype)) { /* an empty text, or a field that holds no free text: nothing to search for */ }
             else if (text.length >= 6) { const c = flag(canaries.add('wds-verify.json ' + tag + 'fill ' + s.fill[0], 'text', text, token)); c.round = round; c.selector = s.fill[0]; c.find = token || text; }
             else add(id, 'warn', title, 'The text "' + text + '" is shorter than 6 characters; it cannot be searched for. Use a longer unique text.');
             await settle();
@@ -640,11 +644,9 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
         await page.goto(pathToFileURL(seedPath).href, { waitUntil: 'load', timeout: 30000 });
         await sleep(300);
         await settle();
-        const fileInputs = await page.locator('input[type=file]').count().catch(() => 0);
         await runSteps(seed.steps, 'seed');
         await sleep(1200);   // a debounced save of the old app
         await settle();
-        if (fileInputs && !seedCount.upload) add('seed-files', 'warn', 'Seed: files of the old app', 'The old page (' + seed.page + ') has ' + fileInputs + ' file input(s) and the seed has no upload step, so no attachment is seeded and the migration of files (the store that holds them, the Blobs) is not exercised. Add {"upload": ["selector"]} to the seed steps.');
       } catch (e) {
         add('seed', 'fail', 'Seed: the old app', 'The old app (' + seed.page + ') could not be opened or driven: ' + String(e.message).split('\n')[0]);
         return;
@@ -655,10 +657,10 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
       oldBaseline = { local: state0.local.map(([k]) => k), idb: state0.idbCount.filter(([, n]) => n > 0).map(([k]) => k) };
       const stored = [...new Set(holders.map((h) => h.canary))];
       info.seed = { page: seed.page, steps: seed.steps.length, stored: stored.length, typed: canaries.items.filter((c) => c.seed).length };
-      if (!stored.length) add('seed', 'fail', 'Seed: the old app', 'After the seed steps the browser storage (localStorage, IndexedDB) holds none of the ' + info.seed.typed + ' typed value(s) of ' + seed.page + ', so the migration has nothing to migrate. Do the steps save the entry (a click on its save button)? Does the old app store anything in this browser at all?');
+      if (!stored.length) add('seed', 'fail', 'Seed: the old app', 'After the seed steps the browser storage holds none of the ' + info.seed.typed + ' typed value(s) of ' + seed.page + ', so there is nothing to migrate: do the steps save the entry?');
       else add('seed', 'pass', 'Seed: the old app', seed.page + ' stored ' + stored.length + ' of ' + info.seed.typed + ' typed value(s) in the browser storage (' + seed.steps.length + ' step(s)).');
       // what the old page did (requests, console, downloads) is not the app's business
-      for (const list of [requests, externals, navigations, consoleLines, pageErrors, downloads, sockets, apiErrors, netLog, storeLog, exportWindows, storeErrors]) list.length = 0;
+      for (const list of [requests, externals, navigations, consoleLines, pageErrors, downloads, sockets, apiErrors, netLog, storeLog, storeErrors]) list.length = 0;
       pending.clear(); touch();
     }
     try {
@@ -686,6 +688,7 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
       info.fields += await fillFields(1, !!seed);
       const clicked = new Set();
       await clickSaves(clicked);
+      if (!clicked.size && info.fields) await submitFallback();
       await sleep(300); await snapshotBefore();
       if (!seed) await runSteps(steps, 'steps', async () => { await sleep(120); await snapshotBefore(); });
       info.stepCount = stepCount;
@@ -693,7 +696,7 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
       await sleep(1100);
       const more = await fillFields(2);
       info.fields += more;
-      if (more) { await clickSaves(new Set()); }
+      if (more) { const again = new Set(); await clickSaves(again); if (!again.size) await submitFallback(); }
       await sleep(opts.waitMs !== undefined ? opts.waitMs : 2800);       // debounced autosave
       await settle(900);
       await snapshotBefore();
@@ -701,14 +704,24 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
       const rest = [];
       for (const b of await appButtons()) if (b.visible && b.text && !pressed.has(b.text) && !rest.includes(b.text)) rest.push(b.text);
       info.unpressed = rest.slice(0, 12);
-      if (sb) label.bar = await probeLabel('sandbox-bar');
+      if (sb) label.badge = await probeLabel('sandbox-badge');
       await snapshot();
 
       // reload: the data must come back (the page's own screen, after unlocking with the passphrase)
       const writtenBefore = requests.filter((r) => r.method === 'PUT' && /\/vaults\/[^/]+\/records\/[^/]+$/.test(new URL(r.url).pathname)).length;
       if (info.vaultCreated && writtenBefore) {
-        await page.reload({ waitUntil: 'load', timeout: 30000 }).catch((e) => note('reload failed: ' + String(e.message).split('\n')[0]));
+        // store.lock() saves what is pending and reloads the page; until the person unlocks, the page shows no vault data
+        const navigated = page.waitForNavigation({ waitUntil: 'load', timeout: 30000 }).then(() => true, () => false);
+        const called = await page.evaluate(() => { const s = (window.__wdsStores || [])[0]; if (!s || typeof s.lock !== 'function') return false; void s.lock(); return true; }).catch(() => false);
+        if (!called) { await page.reload({ waitUntil: 'load', timeout: 30000 }).catch((e) => note('reload failed: ' + String(e.message).split('\n')[0])); }
+        const reloadedByLock = called ? await navigated : null;
         await sleep(400);
+        const lockedText = await pageText();   // the unlock dialog is not answered yet
+        const typedBefore = canaries.items.filter((x) => x.round !== undefined && x.round !== 'afterReload' && x.round !== 'seed');
+        const stillThere = typedBefore.filter((c) => lockedText.includes(c.find || c.value));
+        if (reloadedByLock === false) add('lock-reload', 'fail', 'store.lock() reloads the page', 'The page was not reloaded within 30 s after store.lock(); the library reloads it once pending saves are done (docs/site/integration.md).');
+        else if (called) add('lock-reload', 'pass', 'store.lock() reloads the page', 'store.lock() reloaded the page.' + (stillThere.length ? '' : ' It showed no typed value before the unlock.'));
+        if (called && reloadedByLock && stillThere.length) add('lock-clean', 'fail', 'Data visible before the unlock', 'After store.lock() and the reload the page showed ' + stillThere.slice(0, 3).map((c) => '"' + (c.find || c.value).slice(0, 30) + '"').join(', ') + ' before the unlock. Render vault data only after await store.unlock().');
         await settle(900);
         const mark = reloadMark = texts.length;   // from here on: what is visible after the reload
         await snapshot();
@@ -759,20 +772,6 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
     await Promise.all(downloads.map((d) => d.done));
     // server side: the database of the mock after a checkpoint (the write-ahead log holds the latest pages)
     const dbFiles = !mock ? [] : readdirSync(mock.tmp).filter((f) => f.startsWith('wds.db')).map((f) => ({ f, data: readFileSync(join(mock.tmp, f)) }));
-    // sandbox: delete the vault again, best effort, through the owner API of the library if the page can reach one
-    if (sb && info.vaultCreated) {
-      const res = await page.evaluate(async () => {
-        const st = (window.__wdsStores || []).find((s) => s && typeof s.deleteVault === 'function');
-        if (!st) return 'none';
-        try { await st.deleteVault(); return 'deleted'; } catch (e) { return 'failed: ' + String((e && e.message) || e).slice(0, 100); }
-      }).catch(() => 'none');
-      info.sandboxCleanup = res;
-    }
-    // The test global is set by the tool (--migration-delete, sandbox) and by nobody else: a page that sets it itself deletes old data in the sandbox on its own.
-    if (libLoaded && !(opts.migrationDelete && sb)) {
-      const own = await page.evaluate((n) => window[n] === true || window[n] === 'true' || window[n] === 1, MIGRATION_TEST_GLOBAL).catch(() => false);
-      if (own) add('migration-test-global', 'fail', 'The page sets the migration test global', 'window.' + MIGRATION_TEST_GLOBAL + ' was true although this run did not set it: the app (or something it loads) sets it itself. Only wds-verify --migration-delete sets it, in a throw-away browser; in a real browser it makes a migration in the sandbox delete the old data, which is gone with the sandbox vault tonight. Remove the assignment.');
-    }
     await page.close({ runBeforeUnload: false }).catch(() => {});
 
     // ---- evaluate ----
@@ -806,8 +805,7 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
     for (const c of cookies) sinks.push({ sink: 'cookie', where: c.name, data: c.name + '=' + c.value });
     sinks.push({ sink: 'window.name', where: 'window.name', data: state.name || '' });
     for (const l of consoleLines) sinks.push({ sink: 'console output', where: l.slice(0, 80), data: l });
-    const inExport = (t) => exportWindows.some((w) => t >= w.start - 500 && t <= w.end + 4000);
-    const dlOutside = downloads.filter((d) => !inExport(d.t) && !d.requested);
+    const dlOutside = downloads.filter((d) => !d.requested);
     for (const d of dlOutside) sinks.push({ sink: 'download', where: d.filename, library: !!d.library, data: Buffer.concat([Buffer.from(d.filename + '\n'), d.bytes || Buffer.alloc(0)]) });
     for (const f of dbFiles) sinks.push({ sink: 'server database (mock)', where: f.f, data: f.data });
     const leaks = leakFindings(sinks, canaries, seedPlaces);
@@ -822,11 +820,11 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
         const secret = h.canary.kind === 'secret';
         lines.push('- ' + (secret ? 'the passphrase' : 'canary from ' + h.canary.label) + ' appears (' + h.enc + ') in ' + h.where);
       }
-      add('leak-' + sink, 'fail', 'Canary found in ' + sink, lines.slice(0, 6).join('\n') + (lines.length > 6 ? '\n- ... and ' + (lines.length - 6) + ' more' : '') + (sink === 'download' ? '\nA file that the person did not ask for was downloaded. An app never downloads data in the background; the only downloads are the library\'s backup in the migration dialog and files a person asks for with a button (a {"download": "#selector"} step in wds-verify.json).' : ''));
+      add('leak-' + sink, 'fail', 'Canary found in ' + sink, lines.slice(0, 6).join('\n') + (lines.length > 6 ? '\n- ... and ' + (lines.length - 6) + ' more' : '') + (sink === 'download' ? '\nAn app never downloads data in the background; a button the person presses is a {"download": "#selector"} step' + DOCP + '.' : ''));
     }
     if (downloads.length) {
-      const names = downloads.map((d) => d.filename + (inExport(d.t) ? ' (exportAll, not checked)' : d.library ? ' (offered by the library\'s migration dialog)' : d.requested ? ' (user-requested download, contains canaries: ' + (canaries.scan(d.bytes || Buffer.alloc(0)) ? 'yes' : 'no') + ')' : ''));
-      add('downloads', 'info', 'Downloads', names.join(', ') + (seed && downloads.some((d) => d.library && canaries.scan(d.bytes || Buffer.alloc(0), (c) => c.seed)) ? ' (a download of the library\'s migration dialog that holds the seeded old data: the backup it offers before it deletes; not counted as a leak)' : ''));
+      const names = downloads.map((d) => d.filename + (d.library ? ' (offered by the library\'s migration dialog)' : d.requested ? ' (user-requested download, contains canaries: ' + (canaries.scan(d.bytes || Buffer.alloc(0)) ? 'yes' : 'no') + ')' : ''));
+      add('downloads', 'info', 'Downloads', names.join(', ') + (seed && downloads.some((d) => d.library && canaries.scan(d.bytes || Buffer.alloc(0), (c) => c.seed)) ? ' (the copy of the old data that the library\'s migration dialog offers; not a leak)' : ''));
     }
 
     if (sb) add('database-not-inspected', 'info', 'Server database', 'Server database not inspected (sandbox target); the requests the app and the library sent were still searched for canaries.');
@@ -837,7 +835,7 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
       else add('vault', 'fail', 'Vault created', 'The app never opened the unlock dialog, so no vault was created and nothing could be stored. ' + (unexpected.length ? unexpected.join('; ') : 'Does the app call store.unlock() or a store method?'));
       const puts = requests.filter((r) => r.method === 'PUT' && /\/vaults\/[^/]+\/records\/[^/]+$/.test(new URL(r.url).pathname));
       info.recordWrites = puts.length;
-      if (info.vaultCreated && !puts.length) add('saved', 'fail', 'Data was saved', 'The test could not make the app store anything (no record write reached the datastore), so the leak checks prove little. Add steps in wds-verify.json next to the app, e.g. {"steps": [{"fill": ["#name", "some unique text"]}, {"click": "#save"}]}, or mark the app\'s save button with data-wds-verify="save".');
+      if (info.vaultCreated && !puts.length) add('saved', 'fail', 'Data was saved', 'No record write reached the datastore, so the leak checks prove little: add steps to wds-verify.json or mark the save button with data-wds-verify="save"' + DOCP + '.');
       else if (puts.length) add('saved', 'pass', 'Data was saved', puts.length + ' encrypted record write(s) reached the ' + (sb ? 'service' : 'mock') + '; the canaries were searched for in all of them.');
       if (info.fields === 0 && info.stepFills === 0) add('fields', 'warn', 'Input fields', 'No visible input, textarea or contenteditable element was found to type into.'
         + (info.behindModal ? ' ' + info.behindModal + ' field(s) sat behind a modal dialog of the app, which makes the page behind it inert while it is open: add a first step that closes it (for example {"click": "#welcome-ok"}), and the same step to afterReload if the app opens it at every start.' : ''));
@@ -846,48 +844,41 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
       if (seed && info.seed) {
         const fills = canaries.items.filter((c) => c.seed && c.round === 'seed');
         const shown = fills.filter(shownAfter), missing = fills.filter((c) => !shownAfter(c));
-        // Only what a person sees after reloading the page and unlocking the vault counts: it was read from the vault then. A prompt of the migration that names the old values, or a screen that lists the old storage
-        // directly, shows them before the copy (or without one) and proves nothing.
-        const looked = 'the start view after reloading and unlocking and every view an afterReload step opens were looked at';
-        let ran = true;   // did the migration visibly run? (the deletion is judged hard only then)
-        if (!fills.length) add('migration-visible', 'info', 'Migration: old data visible', 'The seed has no fill step, so there is no text to look for in the app (the uploaded file is only searched for in the requests).');
-        else if (!info.vaultCreated) { ran = false; add('migration-visible', 'fail', 'Migration: old data visible', 'No vault was created, so the app could not migrate anything.'); }
-        else if (reloadMark === null) { ran = false; add('migration-visible', 'fail', 'Migration: old data visible', 'The app wrote no record to the vault, so none of the ' + fills.length + ' value(s) typed into the old app can have come from it. The tool looks for them after reloading the page and unlocking the vault. Did the migration run? The app has to call await store.migrateLocal({ ... }) after the unlock (the library asks the question and the tool answers it); a prompt of the app\'s own is answered by steps (for example {"click": "#migrate-yes"}).'); }
-        else if (!shown.length) { ran = false; add('migration-visible', 'fail', 'Migration: old data visible', 'None of the ' + fills.length + ' value(s) typed into the old app is visible in the app after the migration, reloading and unlocking (' + looked + '). Did the migration run and copy them? ' + (info.migrateDialog ? 'The library asked and the tool took over the data, so check the map function of store.migrateLocal (does it return the items?)' : 'The library\'s question did not appear: does the app call await store.migrateLocal({ ... }) after the unlock, with the old database and keys of the seed page? A prompt of the app\'s own is answered by steps (for example {"click": "#migrate-yes"})') + '; or the app shows the data in a view that no step opens.'); }
-        else if (missing.length) { ran = shown.length > 0; add('migration-visible', 'warn', 'Migration: old data visible', shown.length + ' of ' + fills.length + ' value(s) typed into the old app are visible in the app after the migration, reloading and unlocking; missing: ' + missing.map((c) => c.selector).join(', ') + ' (' + looked + ').'); }
-        else add('migration-visible', 'pass', 'Migration: old data visible', 'All ' + fills.length + ' value(s) typed into the old app are visible in the app after the migration, reloading and unlocking (' + looked + ').'
-          + (sb && !opts.migrationDelete ? ' The sandbox keeps the old data, so a prompt or a screen that lists the old storage cannot be told from the copy here; --migration-delete (the old data is gone afterwards) proves that the values came from the vault.' : ''));
-        if (info.migrateDialog) add('migration-dialog', 'info', 'Migration: the library\'s dialog', 'The library asked whether to take over the old data' + (info.migrateDialog.asked > 1 ? ' (' + info.migrateDialog.asked + ' times)' : '') + '; the tool downloaded the backup' + (info.migrateDialog.backup ? ' (' + info.migrateDialog.backup + ')' : ' (the download did not start)') + ' and pressed "Take over"'
-          + (info.migrateDialog.large ? '; ' + info.migrateDialog.large + ' entr' + (info.migrateDialog.large === 1 ? 'y was' : 'ies were') + ' too large for the vault: the tool downloaded ' + (info.migrateDialog.large === 1 ? 'it' : 'them') + ' and deleted the old data anyway' : '') + '.');
-        if (info.migrateDialog && info.migrateDialog.skipped) add('migration-skipped-rows', 'warn', 'Migration: rows that map leaves out', 'The library\'s question named rows that the map function leaves out with h.skip ("' + info.migrateDialog.skipped + '"). They are deleted together with the old data: nobody can get them back from the vault. Use h.skip only for rows that are no user data (a cache); copy everything a person created, also an attachment whose parent entry is gone (with a null reference). The tool ticked the confirmation box.');
+        // Only what a person sees after the lock and the unlock counts: it was read from the vault then (a prompt that names the old values proves nothing).
+        const looked = 'the start view after the unlock and every view an afterReload step opens were looked at';
+        const failedLine = consoleLines.find((l) => /migrateLocal ".*" stopped/.test(l));   // the library says why in the console; the dialog says only that it failed
+        const asked = failedLine ? 'The library reported: ' + failedLine.replace(/^error: wds: /, '') : info.migrateDialog ? 'The library asked and the tool took over the data, so check the map function of store.migrateLocal.' : 'The library\'s question did not appear: does the app call await store.migrateLocal({ ... }) after the unlock (porting.md)?';
+        let ran = true;   // did the migration visibly run? (the old data is judged hard only then)
+        if (!fills.length) add('migration-visible', 'info', 'Migration: old data visible', 'The seed has no fill step, so there is no text to look for in the app.');
+        else if (!info.vaultCreated) { ran = false; add('migration-visible', 'fail', 'Migration: old data visible', 'No vault was created, so nothing could be migrated.'); }
+        else if (reloadMark === null) { ran = false; add('migration-visible', 'fail', 'Migration: old data visible', 'The app wrote no record to the vault, so nothing typed into the old app can have come from it. ' + asked); }
+        else if (!shown.length) { ran = false; add('migration-visible', 'fail', 'Migration: old data visible', 'None of the ' + fills.length + ' value(s) typed into the old app is visible after the migration, the lock and the unlock (' + looked + '). ' + asked); }
+        else if (missing.length) { ran = true; add('migration-visible', 'warn', 'Migration: old data visible', shown.length + ' of ' + fills.length + ' value(s) typed into the old app are visible; missing: ' + missing.map((c) => c.selector).join(', ') + ' (' + looked + ').'); }
+        else add('migration-visible', 'pass', 'Migration: old data visible', 'All ' + fills.length + ' value(s) typed into the old app are visible after the migration, the lock and the unlock (' + looked + ').');
         const seedHits = [...leaks.values()].flat().filter((h) => h.canary.seed);
         if (seedHits.length) add('migration-encrypted', 'fail', 'Migration: old data only encrypted', seedHits.slice(0, 5).map((h) => '- ' + h.canary.label + ' appears (' + h.enc + ') in ' + h.where).join('\n'));
         else if (info.recordWrites) add('migration-encrypted', 'pass', 'Migration: old data only encrypted', 'None of the seeded values appears in a request, a URL, the console or a ' + (sb ? 'cookie' : 'cookie or the server\'s database') + '; the ' + info.recordWrites + ' record write(s) carry them encrypted.');
         const baseline = info.seed.stored, left = seedLeft.length;
-        const expectDeleted = !sb || !!opts.migrationDelete;
         const wasDeleted = baseline > 0 && left === 0 && !leftover.length;
         if (!baseline) { /* nothing was seeded: the seed finding says so */ }
-        else if (!expectDeleted) {
-          if (left === baseline) add('migration-old-data', 'pass', 'Migration: old data kept in the sandbox', 'The old data is still in the old app\'s storage after the migration, as it must be while the vault is the sandbox (the sandbox is wiped tonight). Run again with --migration-delete to exercise the deletion.');
-          else add('migration-old-data', 'fail', 'Migration: old data kept in the sandbox', (wasDeleted ? 'The old data was deleted' : 'Part of the old data (' + (baseline - left) + ' of ' + baseline + ' value(s)) was deleted') + ' although the vault is the sandbox: the copy there is gone tonight, the old data would be lost for good. The migration must not delete while store.status().sandbox is true (store.migrateLocal does that for you; a hand-made migration must check it).');
-        } else if (wasDeleted) add('migration-old-data', 'pass', 'Migration: old data deleted', 'The old data is gone from the old app\'s storage after the migration (all ' + (oldBaseline.local.length + oldBaseline.idb.length) + ' key(s) and store(s) that the old app had filled)' + (sb ? ' (the run set window.' + MIGRATION_TEST_GLOBAL + ', so the sandbox run deleted like production)' : '') + '.');
+        else if (sb) {   // the library never deletes in the sandbox: the copy there is gone tonight
+          if (left === baseline) add('migration-old-data', 'pass', 'Migration: old data kept in the sandbox', 'The old data is still in the old app\'s storage, as it must be while the vault is the sandbox.');
+          else add('migration-old-data', 'fail', 'Migration: old data kept in the sandbox', 'The old data was (partly) deleted although the vault is the sandbox: it would be lost tonight. Only store.migrateLocal may move old data, and it never deletes there.');
+        } else if (wasDeleted) add('migration-old-data', 'pass', 'Migration: old data deleted', 'The old data is gone from the old app\'s storage after the migration (' + (oldBaseline.local.length + oldBaseline.idb.length) + ' key(s) and store(s) that the old app had filled).');
         else add('migration-old-data', ran ? 'fail' : 'warn', 'Migration: old data deleted', (leftover.length ? 'Still in the browser after the migration: ' + leftover.slice(0, 8).join('; ') + (leftover.length > 8 ? '; ...' : '') + '. ' : '')
-          + (left ? left + ' of ' + baseline + ' value(s) typed into the old app are among them. ' : '') + 'The migration should have deleted all of it' + (sb ? ' (the run set window.' + MIGRATION_TEST_GLOBAL + '; the migration must honour it: store.migrateLocal does, a hand-made one keeps only when the vault is the sandbox and the global is not set)' : '') + '. Did it forget a store or key in the options of store.migrateLocal (the store that holds attachments, a settings key)? '
-          + (ran ? 'Data that has to stay can be named in "seed": { "keep": [...] } of wds-verify.json.' : 'The migration did not visibly run (see "old data visible"), which is why.'));
+          + (left ? left + ' of ' + baseline + ' value(s) typed into the old app are among them. ' : '') + (ran ? 'Rows that map leaves out stay by design; name what may stay in "seed": { "keep": [...] } of wds-verify.json.' : 'The migration did not visibly run, which is why.'));
       }
       if (steps.length && info.stepCount) {
         const c = info.stepCount;
         const extra = ['select', 'press', 'download'].filter((k) => c[k]).map((k) => ', ' + c[k] + ' ' + k).join('');
         add('steps', 'info', 'wds-verify.json steps', steps.length + ' step(s) run (' + c.fill + ' fill, ' + c.click + ' click, ' + c.upload + ' upload, ' + c.wait + ' wait' + extra + ').');
       }
-      if (info.fileInputs && !(info.stepCount && info.stepCount.upload)) add('file-inputs', 'info', 'File inputs', 'The page has ' + info.fileInputs + ' file input(s) that the tool does not use. Add an {"upload": ["selector"]} step to wds-verify.json to test the upload path (a generated image whose name and bytes are searched for like canaries).');
+      if (info.fileInputs && !(info.stepCount && info.stepCount.upload)) add('file-inputs', 'info', 'File inputs', 'The page has ' + info.fileInputs + ' file input(s); the tool fills them with a generated image, an {"upload": [selector]} step does it on demand' + DOCP + '.');
     }
-    if (seed && opts.migrationDelete && !sb) add('migration-delete', 'info', '--migration-delete', 'The flag has no effect on the mock target: the mock is no sandbox, so the migration deletes the old data as in production anyway.');
     const notes = sb ? unexpected.filter((u) => !/pw\.hibp\.unavailable/.test(u)) : unexpected;
-    if (info.largeStuck) add('migration-large', 'fail', 'Migration: the files that are too large could not be downloaded', 'The library offers "Delete the old data anyway" only after the download of these files, so the tool stopped there and the old data stays: ' + info.largeStuck);
-    if (info.stuckError) add('dialog-error', 'fail', 'A library dialog stayed in its error view', 'The tool pressed "retry" three times and the dialog showed the error view again ("' + info.stuckError + '"). A person would be stuck in the same place: the storage service does not answer, or the dialog cannot be built (see the browser console).');
+    if (info.stuckError) add('dialog-error', 'fail', 'A library dialog stayed in its error view', 'The dialog showed its error view again after three retries ("' + info.stuckError + '"): the service does not answer, or the dialog cannot be built (see the console).');
     if (notes.length) add('driver', 'warn', 'Test run notes', notes.slice(0, 6).join('\n'));
-    if (info.locale !== 'en-US') add('locale', 'info', 'Browser language', 'The browser ran with the locale ' + info.locale + ' (the library dialogs follow it unless the app sets one).');
+    if (info.locale !== 'en-US') add('locale', 'info', 'Browser language', 'The browser ran with the locale ' + info.locale + ' (the library dialogs follow <html lang>, else this).');
 
     // data after a reload: the page must read its data back after unlocking
     if (reload && reload.total) {
@@ -897,7 +888,7 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
       const skipped = notShown === 1 ? ' 1 other typed value was neither shown as text nor written to the store before the reload and is not counted: ' + nameList + '.'
         : notShown ? ' ' + notShown + ' other typed values were neither shown as text nor written to the store before the reload and are not counted: ' + nameList + '.' : '';
       if (shown > 0 && everyRound) add('reload', 'pass', 'Data after reload', shown + ' of ' + total + ' typed value(s) are visible again after reloading and unlocking' + (hasAfter ? ' (the start view and every afterReload step looked at, together)' : '') + ' (at least one of every round).' + skipped);
-      else if (shown === 0 && !hasAfter) add('reload', 'fail', 'Data after reload', 'Records were written, but after reloading the page and unlocking the vault none of the ' + total + ' typed values is visible. The app does not read its data back when it starts (call store.get / list after unlock and show the values), or it shows the data only in a view that the tool does not open: then add "afterReload" steps to wds-verify.json, for example {"afterReload": [{"click": "#tab-notes"}]}.');
+      else if (shown === 0 && !hasAfter) add('reload', 'fail', 'Data after reload', 'After the lock, the reload and the unlock none of the ' + total + ' typed values is visible: the app does not show its data after await store.unlock(), or only in a view that no "afterReload" step opens' + DOCP + '.');
       else add('reload', 'warn', 'Data after reload', shown + ' of ' + total + ' typed value(s) are visible after the reload' + (hasAfter ? ' and the afterReload steps' : '') + '; the others are in views the tool does not open. '
         + (hasAfter ? 'Add afterReload steps that open the missing views (the tool looks after every step and takes all of them together).' : 'An app with tabs needs afterReload steps in wds-verify.json (they open the views that show the data; the tool looks after every step).') + skipped);
     }
@@ -906,15 +897,15 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
     // the sandbox label must stay visible (the app must not hide it) and the sandbox may be unavailable or full
     if (sb) {
       const problems = [];
-      const names = { banner: 'the banner in the library dialogs', bar: 'the bar at the top of the page' };
-      for (const k of ['banner', 'bar']) {
-        if (k === 'bar' && !info.vaultCreated) continue;
+      const names = { banner: 'the banner in the library dialogs', badge: 'the badge in the corner of the page' };
+      for (const k of ['banner', 'badge']) {
+        if (k === 'badge' && !info.vaultCreated) continue;
         if (label[k] === 'hidden') problems.push(names[k] + ' is hidden (' + (labelWhy['sandbox-' + k] || 'the app hides the sandbox label') + '); the app hides the sandbox label');
         else if (label[k] === 'absent') problems.push(names[k] + ' is missing (is the library tag the current one?)');
       }
-      if (label.banner === undefined && label.bar === undefined) { /* no library dialog was seen: nothing to judge */ }
+      if (label.banner === undefined && label.badge === undefined) { /* no library dialog was seen: nothing to judge */ }
       else if (problems.length) add('sandbox-label', 'fail', 'Sandbox label visible', 'The run was against the sandbox, which must label itself: ' + problems.join('; ') + '. People must be able to see that they are in a test environment; remove CSS or script that hides the library\'s elements.');
-      else add('sandbox-label', 'pass', 'Sandbox label visible', 'The sandbox banner' + (info.vaultCreated ? ' and the bar at the top' : '') + ' were visible to a person.');
+      else add('sandbox-label', 'pass', 'Sandbox label visible', 'The sandbox banner' + (info.vaultCreated ? ' and the corner badge' : '') + ' were visible to a person.');
       const quota = apiErrors.filter((e) => e.status === 413 || /quota/i.test(e.code)).length + storeErrors.filter((e) => e.name === 'QuotaError').length + consoleLines.filter((l) => /QuotaError/.test(l)).length;
       if (quota) add('sandbox-limit', 'info', 'Sandbox limit', 'A save hit a quota of the sandbox (smaller than the real scope\'s); that part is a sandbox limit, not tested.');
       const unav = apiErrors.find(unavailableError);
@@ -977,8 +968,8 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
     const shared = names.find((n) => roundOf(1).some((c) => findIn(lastValue(n), c.needles)) && roundOf(2).some((c) => findIn(lastValue(n), c.needles)));
     const only = names.length === 1 && !names[0].includes('/') ? names[0] : null;
     const onlyHeld = only ? typed.filter((c) => findIn(lastValue(only), c.needles)).length : 0;
-    if (shared) add('one-record', 'warn', 'One record for everything', 'The values of two different items (typed one after the other into the same fields) end up in the single record "' + shared + '". Every change rewrites everything and two people editing different items conflict. Split it: one record per item (e.g. "items/<id>") and one for settings.');
-    else if (only && typed.length >= 3 && onlyHeld >= 3) add('one-record', 'warn', 'One record for everything', 'All values (' + onlyHeld + ' of ' + typed.length + ' fields) end up in the single record "' + only + '". Every change rewrites everything and two people editing different parts conflict. Split it: one record per item or per topic (e.g. "settings", "items/<id>").');
+    if (shared) add('one-record', 'warn', 'One record for everything', 'The values of two different items end up in the single record "' + shared + '": use one record per item (integration.md, Modelling).');
+    else if (only && typed.length >= 3 && onlyHeld >= 3) add('one-record', 'warn', 'One record for everything', 'All values (' + onlyHeld + ' of ' + typed.length + ' fields) end up in the single record "' + only + '": use one record per item (integration.md, Modelling).');
     if (mock && mock.exited()) add('mock-server', 'fail', 'Local mock server', 'The mock server stopped during the run, so the results above are incomplete. Server output:\n' + mock.log().split('\n').slice(-8).join('\n'));
     info.durationMs = Date.now() - t0;
     return { findings, info };

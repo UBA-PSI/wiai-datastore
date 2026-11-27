@@ -2,7 +2,7 @@
 // wording. The old app is a tiny local-only notes page (IndexedDB "oldapp" + one localStorage key); the new app copies it into the vault.
 // The new app here migrates BY HAND (own prompt, own deletion, answered by steps): the tests check what the tool sees, whatever the app does, including the
 // bad ways (no copy, a plaintext copy, a deletion in the sandbox, a forgotten store). The good way, store.migrateLocal with the library's own dialogs, is in
-// verify-dynamic-roundf.test.mjs; a hand-made migration also gets the static finding 'hand-migration' (verify-static.test.mjs).
+// verify-dynamic-roundf.test.mjs; a hand-made migration also gets the static finding 'hand-storage' (verify-static.test.mjs).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
@@ -10,7 +10,6 @@ import { join } from 'node:path';
 import { writeApp, verify, run, miniApp, readApp, variant, tmpDir } from './helpers.mjs';
 import { startMock } from '../lib/wds-mock.mjs';
 import { parseConfig } from '../lib/config.mjs';
-import { renderReport } from '../wds-verify.mjs';
 
 const OLD_APP = `<!doctype html><html><head><meta charset="utf-8"><title>Old notes</title></head><body>
 <label>Title <input id="title" type="text"></label><button id="save" type="button">Save</button>
@@ -46,23 +45,23 @@ const MIGRATE = `
     if (db) { var tx = db.transaction('notes', 'readwrite'); tx.objectStore('notes').clear(); await new Promise(function (ok) { tx.oncomplete = ok; }); db.close(); }
     localStorage.removeItem('oldapp:prefs');
   }
+  var notes = store.collection('notes/');
   async function render() {
-    var out = [], l = await store.list('notes/');
-    for (var i = 0; i < l.length; i++) out.push((await store.get(l[i].name)).title);
-    $('list').textContent = out.join(' | ');
+    var all = await notes.getAll();
+    $('list').textContent = all.map(function (x) { return x.value.title; }).join(' | ');
   }
   async function migrate() {
     var rows = await readOld(), todo = [];
     for (var i = 0; i < rows.length; i++) if (await store.get('notes/' + rows[i].id) === undefined) todo.push(rows[i]);
     if (!todo.length) return;
     await new Promise(function (ok) { $('ask').hidden = false; $('yes').onclick = function () { $('ask').hidden = true; ok(); }; });
-    for (var j = 0; j < todo.length; j++) await store.set('notes/' + todo[j].id, { title: todo[j].title });
-    var keep = store.status().sandbox && !window.__WDS_MIGRATION_TEST__;
+    for (var j = 0; j < todo.length; j++) await notes.set(todo[j].id, { title: todo[j].title });
+    var keep = store.status().sandbox;
     $('result').textContent = keep ? 'the old data was kept' : 'the old data was deleted';
     await clearOld(keep);
     await render();
   }
-  $('add').addEventListener('click', function () { store.set('notes/' + Date.now(), { title: $('n').value }).then(render); });
+  $('add').addEventListener('click', function () { notes.add({ title: $('n').value }).then(render); });
   store.unlock().then(render).then(migrate);`;
 const newApp = (extra = '') => miniApp({ body: NEW_BODY, script: MIGRATE.replace('  store.unlock()', extra + '\n  store.unlock()') });
 
@@ -84,14 +83,11 @@ test('config: the seed block is validated, {canary} is allowed in fill texts', (
   assert.throws(() => parseConfig('{"seed":{"page":"old.html","steps":[{"nope":1}]}}'), /seed\.steps step 1 is not one of/);
 });
 
-test('seed: a missing old page and --migration-delete without a seed are usage errors', async () => {
+test('seed: a missing old page is a usage error', async () => {
   const dir = writeApp(newApp(), { seed: { page: 'nope.html', steps: SEED.steps } });
   const r = await run('wds-verify.mjs', [dir, '--static-only']);
   assert.equal(r.code, 2);
   assert.match(r.stderr, /seed\.page.*nope\.html.*not a file/);
-  const r2 = await run('wds-verify.mjs', [writeApp(newApp()), '--static-only', '--migration-delete']);
-  assert.equal(r2.code, 2);
-  assert.match(r2.stderr, /--migration-delete needs a "seed"/);
 });
 
 test('migration (mock): the old values are typed into the old app, the prompt is answered by a step, the values show up in the app, only encrypted, and the old data is gone', { timeout: 240000 }, async () => {
@@ -108,10 +104,9 @@ test('migration (mock): the old values are typed into the old app, the prompt is
   for (const id of ['leak-localStorage', 'leak-IndexedDB', 'leak-request body', 'leak-server database (mock)', 'leak-download']) assert.equal(r.find(id).level, 'pass', id);
   assert.equal(r.find('reload').level, 'pass');
   assert.equal(r.find('saved').level, 'pass');
-  assert.doesNotMatch(r.parsed.notTested.join('\n'), /migration of old local data was not tested/);
   // the app migrates by hand: the static check says what to use instead
-  assert.equal(r.find('hand-migration').level, 'warn');
-  assert.match(r.find('hand-migration').detail, /store\.migrateLocal \(porting\.md\)/);
+  assert.equal(r.find('hand-storage').level, 'warn');
+  assert.match(r.find('hand-storage').detail, /store\.migrateLocal \(porting\.md\)/);
 });
 
 test('migration: an app that never copies the old data fails (not visible), and the old data is still there', { timeout: 240000 }, async () => {
@@ -125,7 +120,7 @@ test('migration: an app that never copies the old data fails (not visible), and 
 });
 
 test('migration: an app that copies the old values to a plaintext key is a leak; an old app that stores nothing fails the seed', { timeout: 240000 }, async () => {
-  const leaky = variant(newApp(), "for (var j = 0; j < todo.length; j++) await store.set(", "for (var j = 0; j < todo.length; j++) localStorage.setItem('copy-' + j, todo[j].title);\n    for (var j = 0; j < todo.length; j++) await store.set(");
+  const leaky = variant(newApp(), "for (var j = 0; j < todo.length; j++) await notes.set(", "for (var j = 0; j < todo.length; j++) localStorage.setItem('copy-' + j, todo[j].title);\n    for (var j = 0; j < todo.length; j++) await notes.set(");
   const r = await verify(writeMigApp(leaky, { seed: SEED, steps: [{ click: '#yes' }] }));
   assert.equal(r.code, 1);
   assert.ok(r.titles('fail').includes('Canary found in localStorage'), r.titles('fail').join('|'));
@@ -149,7 +144,7 @@ test('without a seed, an app that mentions a migration is told that it was not t
 });
 
 test('migration: a prompt that names the old titles but never copies or deletes does not pass (the old data is still there); a download of the old data is a leak, also as JSON (only the library\'s backup is expected)', { timeout: 300000 }, async () => {
-  const prompting = variant(variant(variant(newApp(), "for (var j = 0; j < todo.length; j++) await store.set('notes/' + todo[j].id, { title: todo[j].title });", ''), 'await clearOld(keep);', ''),
+  const prompting = variant(variant(variant(newApp(), "for (var j = 0; j < todo.length; j++) await notes.set(todo[j].id, { title: todo[j].title });", ''), 'await clearOld(keep);', ''),
     "await new Promise(function (ok) { $('ask').hidden = false;", "await new Promise(function (ok) { $('ask').firstChild.textContent = 'Copy ' + todo.map(function (t) { return t.title; }).join(', ') + '? '; $('ask').hidden = false;");
   const r = await verify(writeMigApp(prompting, { seed: SEED, steps: [{ click: '#yes' }] }));
   assert.equal(r.code, 1, JSON.stringify(r.failures));
@@ -166,39 +161,21 @@ test('migration: a prompt that names the old titles but never copies or deletes 
   assert.match(json.find('leak-download').detail, /An app never downloads data in the background/);
 });
 
-test('migration: everything the old app stored must be gone, not only the places that hold a typed value; seed.keep names what stays; a file input without an upload step is pointed out', { timeout: 300000 }, async () => {
+test('migration: everything the old app stored must be gone, not only the places that hold a typed value; seed.keep names what stays', { timeout: 300000 }, async () => {
   const forgets = variant(newApp(), "localStorage.removeItem('oldapp:prefs');", '');
-  const withFile = OLD_APP.replace('<button id="save"', '<input type="file" id="f"><button id="save"');
-  const r = await verify(writeMigApp(forgets, { seed: SEED, steps: [{ click: '#yes' }] }, withFile));
+  const r = await verify(writeMigApp(forgets, { seed: SEED, steps: [{ click: '#yes' }] }));
   assert.equal(r.code, 1, JSON.stringify(r.failures));
   assert.equal(r.find('migration-visible').level, 'pass');
   assert.equal(r.find('migration-old-data').level, 'fail');
   assert.match(r.find('migration-old-data').detail, /localStorage key "oldapp:prefs"/);
-  assert.equal(r.find('seed-files').level, 'warn');
   const kept = await verify(writeMigApp(forgets, { seed: { ...SEED, keep: ['oldapp:prefs'] }, steps: [{ click: '#yes' }] }));
   assert.equal(kept.code, 0, JSON.stringify(kept.failures));
   assert.equal(kept.find('migration-old-data').level, 'pass');
-  assert.equal(kept.find('seed-files'), undefined);
-  // the mock ignores --migration-delete and says so
-  assert.equal(kept.find('migration-delete'), undefined);
-  const flagged = await verify(writeMigApp(forgets, { seed: { ...SEED, keep: ['oldapp:prefs'] }, steps: [{ click: '#yes' }] }), ['--migration-delete']);
-  assert.equal(flagged.find('migration-delete').level, 'info');
-  assert.match(flagged.find('migration-delete').detail, /no effect on the mock target/);
   assert.throws(() => parseConfig('{"seed":{"page":"old.html","steps":[{"fill":["#a","long text"]}],"keep":"oldapp:prefs"}}'), /seed\.keep/);
   assert.deepEqual(parseConfig(JSON.stringify({ seed: { ...SEED, keep: ['a', 'b/c'] } })).seed.keep, ['a', 'b/c']);
 });
 
-test('migration: a page that sets window.__WDS_MIGRATION_TEST__ itself is a failure; the report says when --migration-delete was used', { timeout: 300000 }, async () => {
-  const sets = variant(newApp(), '  store.unlock().then(render).then(migrate);', "  window['__WDS_' + 'MIGRATION_TEST__'] = true;\n  store.unlock().then(render).then(migrate);");
-  const r = await verify(writeMigApp(sets, { seed: SEED, steps: [{ click: '#yes' }] }));
-  assert.ok(r.titles('fail').includes('The page sets the migration test global'), r.titles('fail').join('|'));
-  const line = (name) => renderReport({ appPath: 'app.html', findings: [], info: { migrationDelete: true }, target: { name, reason: 'x' }, notTestedLines: [] });
-  assert.match(line('sandbox'), /Run with --migration-delete: the run set window\.__WDS_MIGRATION_TEST__ in a throw-away browser/);
-  assert.match(line('mock'), /Run with --migration-delete: no effect on this target/);
-  assert.doesNotMatch(renderReport({ appPath: 'app.html', findings: [], info: { migrationDelete: false }, target: { name: 'sandbox', reason: 'x' }, notTestedLines: [] }), /Run with --migration-delete/);
-});
-
-// ---- the sandbox: the old data is kept; with --migration-delete the deletion path runs there too ----
+// ---- the sandbox: the old data is kept ----
 let mock;
 before(async () => { mock = await startMock({ bundle: true, sandbox: true }); });
 after(async () => { if (mock) await mock.stop(); });
@@ -210,24 +187,17 @@ async function sbVerify(dir, args = []) {
   return { ...r, parsed, find: (id) => (parsed ? parsed.findings.find((f) => f.id === id) : undefined), titles: (level) => (parsed ? parsed.findings.filter((f) => f.level === level).map((f) => f.title) : []) };
 }
 
-test('migration (sandbox): the old data is kept; with --migration-delete (window.__WDS_MIGRATION_TEST__) it is deleted and the tool checks that; no "mock" in the findings', { timeout: 300000 }, async () => {
+test('migration (sandbox): the old data is kept, and an app that deletes it there fails; no "mock" in the findings', { timeout: 300000 }, async () => {
   const config = { seed: SEED, steps: [{ click: '#yes' }] };
   const kept = await sbVerify(writeMigApp(newApp(), config));
   assert.equal(kept.code, 0, JSON.stringify(kept.parsed && kept.parsed.findings.filter((f) => f.level === 'fail')) + kept.stderr);
   assert.equal(kept.find('migration-visible').level, 'pass');
   assert.equal(kept.find('migration-old-data').level, 'pass');
   assert.match(kept.find('migration-old-data').title, /kept in the sandbox/);
-  assert.match(kept.parsed.notTested.join('\n'), /deletion of the old data was not exercised.*--migration-delete/);
   assert.doesNotMatch(JSON.stringify(kept.parsed.findings.map((f) => f.title + ' ' + f.detail)).replace(/--target mock/g, ''), /\bmock\b/i, 'a sandbox run never says "mock"');
   assert.match(kept.find('saved').detail, /reached the service/);
-  const del = await sbVerify(writeMigApp(newApp(), config), ['--migration-delete']);
-  assert.equal(del.code, 0, JSON.stringify(del.parsed && del.parsed.findings.filter((f) => f.level === 'fail')) + del.stderr);
-  assert.equal(del.find('migration-old-data').level, 'pass');
-  assert.match(del.find('migration-old-data').title, /deleted/);
-  assert.match(del.find('migration-old-data').detail, /__WDS_MIGRATION_TEST__/);
-  assert.equal(del.find('migration-visible').level, 'pass');
-  // an app that deletes in the sandbox although the flag is not set (it ignores store.status().sandbox) fails
-  const careless = variant(newApp(), 'var keep = store.status().sandbox && !window.__WDS_MIGRATION_TEST__;', 'var keep = false;');
+  // an app that deletes in the sandbox (it ignores store.status().sandbox) fails
+  const careless = variant(newApp(), 'var keep = store.status().sandbox;', 'var keep = false;');
   const bad = await sbVerify(writeMigApp(careless, config));
   assert.equal(bad.code, 1);
   assert.ok(bad.titles('fail').includes('Migration: old data kept in the sandbox'), bad.titles('fail').join('|'));

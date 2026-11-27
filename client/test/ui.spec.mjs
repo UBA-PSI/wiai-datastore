@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { writeFileSync } from 'node:fs';
 import {
-  startTestWorld, openApp, mockHibp, shot, dialog, createVaultViaUi, unlockViaUi, nodeClient, writePage, tmpDir, SRI, VERSION,
+  startTestWorld, openApp, mockHibp, shot, dialog, createVaultViaUi, unlockViaUi, lockPage, nodeClient, writePage, tmpDir, SRI, VERSION,
   recoverByFaculty, redeemViaUi, core, I,
 } from './ui-helpers.mjs';
 
@@ -78,11 +78,10 @@ test('create vault: passphrase rules, breach check, access sheet, then set/get a
 
   const got = await page.evaluate(async () => {
     const saved = await store.set('settings', { theme: 'dark', list: [1, 2, 3] });
-    return { saved, value: await store.get('settings'), names: (await store.list()).map((r) => r.name) };
+    return { saved, value: await store.get('settings') };
   });
   expect(got.saved.version).toBe(1);
   expect(got.value).toEqual({ theme: 'dark', list: [1, 2, 3] });
-  expect(got.names).toEqual(['settings']);
   // the server only holds ciphertext
   const vault = [...w.world.server.vaults.values()][0];
   const stored = JSON.stringify([...vault.records.values()], (k, v) => (v instanceof Uint8Array ? Buffer.from(v).toString('latin1') : v));
@@ -143,9 +142,9 @@ test('new device: key file by choosing, key file of another app is refused, new-
   await expect(d3.getByRole('alert').filter({ hasText: /unknown|not valid/ })).toBeVisible();
 });
 
-test('records: JSON, bytes, File and Blob values, list with prefix, remove', async ({ context }) => {
+test('records: JSON, bytes, File and Blob values (a file comes back as a Blob with its type), remove', async ({ context }) => {
   const page = await openApp(context, w);
-  await createVaultViaUi(page);
+  const vault = await createVaultViaUi(page);
   await page.locator('#file').setInputFiles({ name: 'report.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 hello') });
   const r = await page.evaluate(async () => {
     const bytes = new Uint8Array(70000).map((_, i) => i % 251);
@@ -153,23 +152,23 @@ test('records: JSON, bytes, File and Blob values, list with prefix, remove', asy
     const f = document.getElementById('file').files[0];
     await store.set('files/' + f.name, f);
     await store.set('note', { t: 1 });
-    const list = await store.list('files/');
-    const blob = await store.getBlob('files/report.pdf');
+    const blob = await store.get('files/report.pdf');
     const back = await store.get('files/data.bin');
-    const all = (await store.list()).map((x) => x.name);
     let reserved = null;
     try { await store.set('.wds/labels', {}); } catch (e) { reserved = e.name; }
     return {
-      list: list.map((x) => [x.name, x.kind, x.mime, x.length]), blobType: blob.type, blobText: await blob.text(),
-      same: back.length === 70000 && back[69999] === 69999 % 251, all, reserved,
+      blobType: blob.type, blobText: await blob.text(), isBlob: back instanceof Blob && blob instanceof Blob,
+      same: back.size === 70000 && new Uint8Array(await back.arrayBuffer())[69999] === 69999 % 251, reserved,
       removed: await store.remove('note'), after: await store.get('note'), removedAgain: await store.remove('note'),
     };
   });
-  expect(r.list).toEqual([['files/data.bin', 'bytes', null, 70000], ['files/report.pdf', 'bytes', 'application/pdf', 14]]);
+  const node = nodeClient(w);
+  await node.unlock({ accessId: idOf(vault), passphrase: vault.passphrase });
+  expect((await node.list('files/')).map((x) => [x.name, x.kind, x.mime, x.length])).toEqual([['files/data.bin', 'bytes', null, 70000], ['files/report.pdf', 'bytes', 'application/pdf', 14]]);
+  expect(r.isBlob).toBe(true);
   expect(r.blobType).toBe('application/pdf');
   expect(r.blobText).toBe('%PDF-1.4 hello');
   expect(r.same).toBe(true);
-  expect(r.all).toEqual(['files/data.bin', 'files/report.pdf', 'note']);
   expect(r.reserved).toBe('UsageError');
   expect(r.removed).toEqual({ name: 'note', deleted: true, resolution: 'deleted' });
   expect(r.after).toBeUndefined();
@@ -215,7 +214,7 @@ test('conflict dialog: keep mine, keep theirs, download both, and the merge hand
   // an app handler replaces the dialog
   await other.put('note', { text: 'theirs v6' });
   const merged = await page.evaluate(async () => {
-    store.onConflict((c) => c.merge((mine, theirs) => ({ text: theirs.text + ' + ' + mine.text })));
+    store.onConflict((c) => ({ merged: { text: c.theirs.value.text + ' + ' + c.mine.value.text } }));
     return store.set('note', { text: 'mine v6' });
   });
   expect(merged.resolution).toBe('merged');
@@ -241,10 +240,10 @@ test('autosave: debounced, one write for a burst, flush on demand', async ({ con
   const before = puts();
   await page.evaluate(() => {
     window.state = { n: 0 };
-    window.as = store.autosave('draft', () => window.state, { delayMs: 300 });
+    window.as = store.autosave('draft', () => window.state, { delayMs: 300, onStatus: (s) => { window.status = s; } });
     for (let i = 1; i <= 5; i++) { window.state = { n: i }; window.as.changed(); }
   });
-  await expect.poll(() => page.evaluate(() => window.as.status)).toBe('saved');
+  await expect.poll(() => page.evaluate(() => window.status)).toBe('saved');
   expect(puts() - before).toBe(1);
   expect(await page.evaluate(() => store.get('draft'))).toEqual({ n: 5 });
   await page.evaluate(async () => { window.state = { n: 6 }; window.as.changed(); await window.as.flush(); });
@@ -257,7 +256,7 @@ test('share: an invite that was opened with its code is revoked, not cancelled; 
   const owner = await openApp(await browser.newContext(), w);
   await createVaultViaUi(owner);
   await owner.evaluate(async () => { await store.set('a', { v: 1 }); });
-  await owner.evaluate(() => { window.shareP = store.share(); });
+  await owner.evaluate(() => { window.shareP = store.openVault(); });
   const sd = dialog(owner);
   const makeInvite = async (label) => {
     void label;
@@ -276,7 +275,7 @@ test('share: an invite that was opened with its code is revoked, not cancelled; 
   expect(res.status).toBe(200);
   // the dialog reads the server's view again after a reopen
   await sd.getByRole('button', { name: 'Close' }).click();
-  await owner.evaluate(() => { window.shareP = store.share(); });
+  await owner.evaluate(() => { window.shareP = store.openVault(); });
   const sd2 = dialog(owner);
   const invites = sd2.locator('li').filter({ hasText: /Invite (not used yet|opened with its code)/ });
   await expect(invites).toHaveCount(2);
@@ -307,9 +306,9 @@ test('share: invite, redeem on another browser, redemption notice, revoke with r
     await store.set('a', { v: 1 }); await store.set('b', { v: 2 }); await store.set('files/x.bin', new Uint8Array(1000));
     await store.set('a', { v: 1, again: true });
   });
-  await owner.evaluate(() => { window.shareP = store.share(); });
+  await owner.evaluate(() => { window.shareP = store.openVault(); });
   const sd = dialog(owner);
-  await expect(sd.getByRole('heading', { name: 'Sharing and access' })).toBeVisible();
+  await expect(sd.getByRole('heading', { name: 'Vault' })).toBeVisible();
   await expect(sd.getByText('Faculty recovery key').first()).toBeVisible();
   await sd.getByLabel('Access', { exact: true }).selectOption('write');
   await sd.getByLabel('Label (optional)').fill('Anna');
@@ -351,12 +350,14 @@ test('share: invite, redeem on another browser, redemption notice, revoke with r
 
   // owner: unlocks again, is told about the redemption, reviews it and revokes
   await sd.getByRole('button', { name: 'Close' }).click();
-  await owner.evaluate(() => store.lock());
+  await lockPage(owner);
   await unlockViaUi(owner, null, vault.passphrase);
-  const redeemedNotice = owner.getByRole('status').filter({ hasText: 'An invitation was redeemed.' });
-  await expect(redeemedNotice).toBeVisible();
-  await shot(owner, 'en-redeemed-toast');
-  await redeemedNotice.getByRole('button', { name: 'Review' }).click();
+  const redeemedDialog = dialog(owner);   // a dialog with OK, not a line that disappears
+  await expect(redeemedDialog.getByRole('heading', { name: 'New access' })).toBeVisible();
+  await expect(redeemedDialog).toContainText('An invitation was redeemed.');
+  await shot(owner, 'en-redeemed-notice');
+  await redeemedDialog.getByRole('button', { name: 'OK' }).click();
+  await owner.evaluate(() => { window.shareP = store.openVault(); });
   const sd2 = dialog(owner);
   await expect(sd2.getByText('Anna')).toBeVisible();
   await expect(sd2.getByText(/Joined /)).toBeVisible();
@@ -371,31 +372,37 @@ test('share: invite, redeem on another browser, redemption notice, revoke with r
   expect(w.world.server.usage(vaultObj).json.old_epoch_blobs).toBe(0);
   await sd2.getByRole('button', { name: 'Close' }).click();
 
-  // the revoked member is locked out at once; the owner still reads everything, including what the member wrote
+  // the revoked member is locked out at once: a dialog says so, then the page reloads; the owner still reads everything, including what the member wrote
   const r = await member.evaluate(() => store.get('a').then(() => 'read', (e) => e.name));
   expect(r).toBe('AuthError');
-  await expect(member.getByText('Your access to this vault was removed')).toBeVisible();
+  const gone = dialog(member);
+  await expect(gone.getByRole('heading', { name: 'Your access was removed' })).toBeVisible();
+  await expect(gone.getByText('Your access to this vault was removed')).toBeVisible();
+  expect(await member.evaluate(() => store.status().unlocked)).toBe(false);
+  const reloaded = member.waitForEvent('load');
+  await gone.getByRole('button', { name: 'OK' }).click();
+  await reloaded;
   expect(await member.evaluate(() => store.status().unlocked)).toBe(false);
   expect(await owner.evaluate(async () => [await store.get('a'), await store.get('c')])).toEqual([{ v: 1, again: true }, { v: 3 }]);
-  expect(await owner.evaluate(async () => (await store.list()).map((r) => r.name))).toEqual(['a', 'b', 'c', 'files/x.bin']); // the label record stays hidden
-  await owner.evaluate(() => { window.shareP = store.share(); });
+  await owner.evaluate(() => { window.shareP = store.openVault(); });
   await expect(dialog(owner).getByText('Anna')).toHaveCount(0);
 });
 
-test('exportAll downloads a valid ZIP with a manifest', async ({ context }) => {
+test('the vault dialog exports everything as a valid ZIP with a manifest', async ({ context }) => {
   const page = await openApp(context, w);
   await createVaultViaUi(page);
   await page.evaluate(async () => {
     await store.set('settings', { a: 1 }); await store.set('files/data.bin', new Uint8Array([1, 2, 3, 250]));
     await store.set('notes/ü ö.txt', { umlaut: true });
   });
+  await page.evaluate(() => { window.vaultP = store.openVault(); });
   const dl = page.waitForEvent('download');
-  const res = await page.evaluate(() => store.exportAll());
+  await dialog(page).getByRole('button', { name: 'Export everything (ZIP, unencrypted)' }).click();
   const file = join(tmpDir(), 'export.zip');
   const download = await dl;
   await download.saveAs(file);
   expect(download.suggestedFilename()).toBe(w.scope + '-export.zip');
-  expect(res.count).toBe(3);
+  await expect(dialog(page).getByText('Export finished: 3 records.')).toBeVisible();
   const listing = execFileSync('unzip', ['-t', file]).toString();
   expect(listing).toContain('No errors detected');
   const manifest = JSON.parse(execFileSync('unzip', ['-p', file, 'wds-export.json']).toString());
@@ -406,28 +413,33 @@ test('exportAll downloads a valid ZIP with a manifest', async ({ context }) => {
   expect(manifest.records.some((x) => /^\.wds/.test(x.name))).toBe(false);
 });
 
-test('offline: OfflineError, and the notice offers the backup', async ({ context }) => {
+test('offline: OfflineError, and one dialog (once per episode) offers the backup', async ({ context }) => {
   const page = await openApp(context, w);
   await createVaultViaUi(page);
   await page.evaluate(() => store.set('draft', { text: 'first' }));
   await page.route('**/datastore/api/**', (route) => route.abort('internetdisconnected'));
   const r = await page.evaluate(() => store.set('draft', { text: 'precious' }).then(() => 'saved', (e) => e.name));
   expect(r).toBe('OfflineError');
-  const notice = page.getByRole('alert').filter({ hasText: 'Saving failed' });
-  await expect(notice).toBeVisible();
+  const notice = dialog(page);
+  await expect(notice.getByRole('heading', { name: 'Not saved' })).toBeVisible();
   await shot(page, 'en-offline');
   const dl = page.waitForEvent('download');
-  await notice.getByRole('button', { name: 'Download backup' }).click();
+  await notice.getByRole('button', { name: 'Download unsaved values (backup)' }).click();
   const d = await dl;
   expect(d.suggestedFilename()).toBe('draft.unsaved.json');
   expect(JSON.parse(readFileSync(await d.path(), 'utf8'))).toEqual({ text: 'precious' });
+  await notice.getByRole('button', { name: 'Close' }).first().click();
+  const again = await page.evaluate(() => store.set('draft', { text: 'again' }).then(() => 'saved', (e) => e.name));
+  expect(again).toBe('OfflineError');
+  await expect(page.getByRole('dialog')).toHaveCount(0);   // shown once per offline episode
   await page.unroute('**/datastore/api/**');
   expect((await page.evaluate(() => store.set('draft', { text: 'precious' }))).version).toBe(2);
 });
 
-test('German texts follow navigator.language', async ({ browser }) => {
-  const ctx = await browser.newContext({ locale: 'de-DE' });
+test('texts follow <html lang> (also when it changes), without it navigator.language', async ({ browser }) => {
+  const ctx = await browser.newContext({ locale: 'fr-FR' });
   const page = await openApp(ctx, w);
+  await page.evaluate(() => document.documentElement.setAttribute('lang', 'de'));
   await page.evaluate(() => { window.unlockP = store.unlock(); });
   const d = dialog(page);
   await expect(d.getByRole('heading', { name: 'Daten entsperren' })).toBeVisible();
@@ -447,8 +459,16 @@ test('German texts follow navigator.language', async ({ browser }) => {
   await d.getByLabel('Ich habe das Zugangsblatt und den Wiederherstellungscode gesichert.').check();
   await d.getByRole('button', { name: 'Weiter' }).click();
   expect((await page.evaluate(() => window.unlockP)).role).toBe('owner');
-  await page.evaluate(() => { window.shareP = store.share(); });
-  await expect(dialog(page).getByRole('heading', { name: 'Teilen und Zugriff' })).toBeVisible();
+  await page.evaluate(() => { window.shareP = store.openVault(); });
+  await expect(dialog(page).getByRole('heading', { name: 'Tresor' })).toBeVisible();
+  await dialog(page).getByRole('button', { name: 'Schließen' }).first().click();
+  await page.evaluate(() => document.documentElement.removeAttribute('lang'));   // no lang: the browser language (French here) is not German, so English
+  await page.evaluate(() => { window.shareP = store.openVault(); });
+  await expect(dialog(page).getByRole('heading', { name: 'Vault' })).toBeVisible();
+  await dialog(page).getByRole('button', { name: 'Close' }).first().click();
+  await page.evaluate(() => document.documentElement.setAttribute('lang', 'de-AT'));
+  await page.evaluate(() => { window.shareP = store.openVault(); });
+  await expect(dialog(page).getByRole('heading', { name: 'Tresor' })).toBeVisible();
   await expect(dialog(page).getByText('Wiederherstellungsschlüssel der Fakultät').first()).toBeVisible();
   await shot(page, 'de-share');
 });
@@ -479,13 +499,6 @@ test('dialog accessibility: role, label, focus trap, inert page, focus restored,
   await createVaultViaUi(page);
   expect(await page.evaluate(() => document.activeElement && document.activeElement.id)).toBe('app-button'); // focus returned to the opener
   expect(await inertProbe()).toBe(true); // the page is usable again
-  // a cancelable unlock closes with Escape and rejects with code "cancelled"
-  await page.evaluate(() => store.lock());
-  await page.evaluate(() => { window.cancelP = store.unlock({ cancelable: true }).then(() => 'unlocked', (e) => e.code); });
-  await expect(dialog(page)).toBeVisible();
-  await page.keyboard.press('Escape');
-  expect(await page.evaluate(() => window.cancelP)).toBe('cancelled');
-  await expect(page.getByRole('dialog')).toHaveCount(0);
 });
 
 test('the bundle loads from a file:// page with Subresource Integrity, and a wrong hash blocks it', async ({ context }) => {
@@ -501,11 +514,11 @@ test('the bundle loads from a file:// page with Subresource Integrity, and a wro
 
 test('history dialog: list versions, preview, restore', async ({ context }) => {
   const page = await openApp(context, w);
-  await createVaultViaUi(page);
+  const vault = await createVaultViaUi(page);
   await page.evaluate(async () => { await store.set('doc', { t: 'one' }); await store.set('doc', { t: 'two' }); await store.set('doc', { t: 'three' }); });
   await page.evaluate(() => { window.histP = store.showHistory('doc'); });
   const d = dialog(page);
-  await expect(d.getByRole('heading', { name: 'History of "doc"' })).toBeVisible();
+  await expect(d.getByRole('heading', { name: 'History of this entry' })).toBeVisible();
   await expect(d.locator('li')).toHaveCount(3);
   await d.locator('li').filter({ hasText: 'Version 1' }).getByRole('button', { name: 'Preview' }).click();
   await expect(d.locator('pre')).toContainText('one');
@@ -514,13 +527,15 @@ test('history dialog: list versions, preview, restore', async ({ context }) => {
   await d.locator('li').filter({ hasText: 'Version 1' }).getByRole('button', { name: 'Restore' }).click();
   expect(await page.evaluate(() => window.histP)).toEqual({ restored: 1 });
   expect(await page.evaluate(() => store.get('doc'))).toEqual({ t: 'one' });
-  expect((await page.evaluate(() => store.history('doc'))).versions.length).toBe(4);
+  const node = nodeClient(w);
+  await node.unlock({ accessId: idOf(vault), passphrase: vault.passphrase });
+  expect((await node.history('doc')).versions.length).toBe(4);
 });
 
 test('a pending faculty recovery request is shown at unlock and can be cancelled', async ({ context }) => {
   const page = await openApp(context, w);
   const vault = await createVaultViaUi(page);
-  await page.evaluate(() => store.lock());
+  await lockPage(page);
   const v = [...w.world.server.vaults.values()][0];
   v.recovery = { method: 'code', requested: Math.floor(Date.now() / 1000), ready_at: Math.floor(Date.now() / 1000) + 259200 };
   await page.evaluate(() => { window.unlockP = store.unlock(); });
@@ -560,7 +575,7 @@ test('faculty recovery: the owner is told at unlock, must acknowledge before cha
   expect(recoveryCode).toMatch(/^([0-9A-Z]{4}-){11}[0-9A-Z]{4}$/);
 
   // variant 1: dismiss the notice without acknowledging
-  await page.evaluate(() => store.lock());
+  await lockPage(page);
   await page.evaluate(() => { window.unlockP = store.unlock(); });
   const d = dialog(page);
   await d.getByLabel('Passphrase', { exact: true }).fill(vault.passphrase);
@@ -570,7 +585,7 @@ test('faculty recovery: the owner is told at unlock, must acknowledge before cha
   await shot(page, 'en-recovered-notice');
   await notice.getByRole('button', { name: 'Close' }).click();
   await page.evaluate(() => window.unlockP);
-  await page.evaluate(() => { window.shareP = store.share(); });
+  await page.evaluate(() => { window.shareP = store.openVault(); });
   const sd = dialog(page);
   await expect(sd.locator('[data-wds=recovered-notice]')).toBeVisible();
   await expect(sd.getByText('Added by the faculty during a recovery')).toBeVisible();
@@ -584,15 +599,15 @@ test('faculty recovery: the owner is told at unlock, must acknowledge before cha
   await sd.getByRole('button', { name: 'Close' }).click();
 
   // the acknowledgement is remembered on this device: the next unlock does not show the notice again (review finding)
-  await page.evaluate(() => store.lock());
+  await lockPage(page);
   await page.evaluate(() => { window.unlockP = store.unlock(); });
   const d2 = dialog(page);
   await d2.getByLabel('Passphrase', { exact: true }).fill(vault.passphrase);
   await d2.getByRole('button', { name: 'Unlock' }).click();
   await page.evaluate(() => window.unlockP);
   await expect(page.locator('[data-wds=recovered-notice]')).toHaveCount(0);
-  await page.evaluate(() => { window.shareP = store.share(); });
-  await expect(dialog(page).getByRole('heading', { name: 'Sharing and access' })).toBeVisible();
+  await page.evaluate(() => { window.shareP = store.openVault(); });
+  await expect(dialog(page).getByRole('heading', { name: 'Vault' })).toBeVisible();
   await expect(dialog(page).locator('[data-wds=recovered-notice]')).toHaveCount(0);
   await dialog(page).getByRole('button', { name: 'Create invite code' }).click();
   await expect(dialog(page).locator('[data-wds=invite-code]')).toBeVisible();
@@ -616,7 +631,7 @@ test('faculty recovery: the recovered owner can revoke the old owner slot, and t
 
   const owner = await openApp(await browser.newContext(), w);
   await redeemViaUi(owner, recoveryCode, 'brand-new-owner-passphrase');
-  await owner.evaluate(() => { window.shareP = store.share(); });
+  await owner.evaluate(() => { window.shareP = store.openVault(); });
   const sd = dialog(owner);
   const row = sd.locator('[data-wds=person]').filter({ hasText: 'ID ' + oldSlot.slice(0, 8) });
   await expect(row).toHaveCount(1);
@@ -645,7 +660,7 @@ test('own access: change passphrase, renew keys, key file, lock', async ({ conte
   const hibp = await mockHibp(page);
   const vault = await createVaultViaUi(page);
   await page.evaluate(() => store.set('x', { n: 1 }));
-  await page.evaluate(() => { window.shareP = store.share(); });
+  await page.evaluate(() => { window.shareP = store.openVault(); });
   const sd = dialog(page);
   await sd.locator('summary').filter({ hasText: 'Change passphrase' }).click();
   await sd.getByLabel('New passphrase').fill('a-completely-different-passphrase');
@@ -658,9 +673,11 @@ test('own access: change passphrase, renew keys, key file, lock', async ({ conte
   const kf = page.waitForEvent('download');
   await sd.getByRole('button', { name: 'Download key file' }).click();
   expect(JSON.parse(readFileSync(await (await kf).path(), 'utf8')).access_id).toBe(idOf(vault));
-  await sd.getByRole('button', { name: 'Lock now' }).click();
+  const reloaded = page.waitForEvent('load');
+  await sd.getByRole('button', { name: 'Lock now' }).click();   // lock = save what is pending, then reload the page
+  await reloaded;
   await expect(page.getByRole('dialog')).toHaveCount(0);
-  expect(await page.evaluate(() => store.isUnlocked())).toBe(false);
+  expect(await page.evaluate(() => store.status().unlocked)).toBe(false);
   // the old passphrase no longer works, the new one does, and the data is intact (keys were renewed in place)
   await page.evaluate(() => { window.getP = store.get('x'); });
   const d = dialog(page);
@@ -686,7 +703,7 @@ test('read-only member: no invite section, writes are refused with a notice', as
   const r = await member.evaluate(() => store.set('x', { n: 2 }).then(() => 'saved', (e) => e.name + ':' + e.code));
   expect(r).toBe('AuthError:forbidden');
   await expect(member.getByText('This access is read-only')).toBeVisible();
-  await member.evaluate(() => { window.shareP = store.share(); });
+  await member.evaluate(() => { window.shareP = store.openVault(); });
   const sd = dialog(member);
   await expect(sd.getByText('You have access as: Read only.')).toBeVisible();
   await expect(sd.getByText('Only the owner can invite people or change who has access.')).toBeVisible();
@@ -696,7 +713,7 @@ test('read-only member: no invite section, writes are refused with a notice', as
 
 test('concurrent calls while locked share one unlock dialog', async ({ context }) => {
   const page = await openApp(context, w);
-  await page.evaluate(() => { window.calls = Promise.all([store.get('a'), store.set('b', { n: 1 }), store.list()]); });
+  await page.evaluate(() => { window.calls = Promise.all([store.get('a'), store.set('b', { n: 1 }), store.get('c')]); });
   await expect(page.getByRole('dialog')).toHaveCount(1);
   await page.waitForTimeout(300);
   await expect(page.getByRole('dialog')).toHaveCount(1);
@@ -707,10 +724,10 @@ test('concurrent calls while locked share one unlock dialog', async ({ context }
   await d.getByRole('button', { name: 'Create vault' }).click();
   await d.getByLabel('I have saved the access sheet and the recovery code.').check();
   await d.getByRole('button', { name: 'Continue' }).click();
-  const [a, b, list] = await page.evaluate(() => window.calls);
+  const [a, b, c] = await page.evaluate(() => window.calls);
   expect(a).toBeUndefined();
   expect(b.version).toBe(1);
-  expect(Array.isArray(list)).toBe(true); // ran in parallel with the write, so its content is not defined
+  expect(c).toBeUndefined();
 });
 
 test('enrollment by join code, and the breach check being unreachable is reported but does not block', async ({ context }) => {
@@ -755,17 +772,16 @@ test('closed enrollment, an outdated-library advisory and a suspended scope', as
     const vault = await createVaultViaUi(page);
     const orig = w3.world.server.getScope.bind(w3.world.server);
     w3.world.server.getScope = (id) => { const r = orig(id); r.json.library.deprecated = [VERSION]; r.json.status = 'suspended'; return r; };
-    await page.evaluate(() => store.lock());
+    await lockPage(page);
     await unlockViaUi(page, null, vault.passphrase);
-    await expect(page.getByRole('alert').filter({ hasText: 'outdated version of the storage library' })).toBeVisible();
-    await expect(page.getByRole('alert').filter({ hasText: 'paused by the faculty' })).toBeVisible();
-    await page.getByRole('alert').filter({ hasText: 'outdated version' }).getByRole('button', { name: 'Dismiss' }).click();
-    await expect(page.getByRole('alert').filter({ hasText: 'outdated version' })).toHaveCount(0);
+    await expect(page.locator('[data-wds-notice=advisory]')).toContainText('outdated version of the storage library');
+    await expect(page.locator('[data-wds-notice=suspended]')).toContainText('paused by the faculty');
+    await expect(page.locator('[data-wds-notice=advisory]')).toHaveCount(0, { timeout: 12000 });   // a notice is a status line: it goes away by itself
     expect(await page.evaluate(() => store.get('nothing'))).toBeUndefined();
   } finally { await w3.close(); }
 });
 
-test('newer versions saved elsewhere are reported on focus; interrupted re-encryption resumes at unlock', async ({ browser }) => {
+test('changes saved elsewhere reach onChange on focus (remote: true); interrupted re-encryption resumes at unlock', async ({ browser }) => {
   const page = await openApp(await browser.newContext(), w);
   const vault = await createVaultViaUi(page);
   await page.evaluate(async () => { await store.set('shared', { n: 1 }); await store.set('other', { n: 1 }); });
@@ -773,12 +789,10 @@ test('newer versions saved elsewhere are reported on focus; interrupted re-encry
   await node.unlock({ accessId: idOf(vault), passphrase: vault.passphrase });
   await node.get('shared');
   await node.put('shared', { n: 2 });
-  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-  await expect(page.getByRole('status').filter({ hasText: 'Newer versions were saved elsewhere: "shared"' })).toBeVisible();
-  await shot(page, 'en-stale');
-  // an app handler replaces the notice
+  await page.evaluate(() => { window.changes = []; store.onChange((c) => window.changes.push(c)); window.dispatchEvent(new Event('focus')); });
+  await expect.poll(() => page.evaluate(() => window.changes)).toEqual([{ names: ['shared'], remote: true }]);
+  expect(await page.locator('[data-wds-notice=stale]').count()).toBe(0);   // no notice of the library: the app renders on onChange
   await node.put('shared', { n: 3 });
-  await page.evaluate(() => { window.stale = []; store.onStale((rows) => window.stale.push(rows.map((r) => r.name))); });
   // revoke from another device without re-encrypting, then unlock here: the library resumes the work and says so
   const inv = await node.createInvite({ role: 'write' });
   const member = nodeClient(w);
@@ -786,9 +800,9 @@ test('newer versions saved elsewhere are reported on focus; interrupted re-encry
   await node.revoke(member.status().slotId, { rekey: false });
   const v = [...w.world.server.vaults.values()][0];
   expect(w.world.server.usage(v).json.old_epoch_blobs).toBeGreaterThan(0);
-  await page.evaluate(() => store.lock());
+  await lockPage(page);
   await unlockViaUi(page, null, vault.passphrase);
-  await expect(page.getByRole('status').filter({ hasText: /Re-encryption finished/ })).toBeVisible();
+  await expect(page.locator('[data-wds-notice=rekey]')).toContainText('Re-encryption finished');
   expect(w.world.server.usage(v).json.old_epoch_blobs).toBe(0);
   expect(await page.evaluate(() => store.get('shared'))).toEqual({ n: 3 });
 });
@@ -802,7 +816,6 @@ test('print sheet, and themeable through CSS custom properties', async ({ contex
     }, true);
   });
   await page.reload();
-  await page.evaluate((c) => { window.store = WDS.connect(c); }, { scope: w.scope, baseUrl: w.service, escrowPins: w.pins });
   await page.evaluate(() => document.documentElement.style.setProperty('--wds-accent', 'rgb(200, 0, 0)'));
   await page.evaluate(() => { window.unlockP = store.unlock(); });
   const d = dialog(page);
@@ -818,28 +831,33 @@ test('print sheet, and themeable through CSS custom properties', async ({ contex
   expect(await page.locator('iframe[srcdoc]').getAttribute('srcdoc')).toContain(accessId);
 });
 
-test('record names are shown through the label option and the history title, and a read member cannot press Restore', async ({ browser }) => {
+test('dialogs name a record by the title of its list entry, else "this entry", never by its name; a read member cannot press Restore', async ({ browser }) => {
   const ctx = await browser.newContext();
   const page = await openApp(ctx, w);
-  await page.evaluate((c) => { window.store = WDS.connect(Object.assign({ label: (n) => (n.startsWith('books/') ? 'My book' : n) }, c)); },
-    { scope: w.scope, baseUrl: w.service, escrowPins: w.pins });
   const vault = await createVaultViaUi(page);
-  await page.evaluate(async () => { await store.set('books/179249e9', { t: 'one' }); await store.set('books/179249e9', { t: 'two' }); });
-  await page.evaluate(() => { window.h1 = store.showHistory('books/179249e9'); });
+  const name = await page.evaluate(async () => {
+    window.books = store.collection('books/', { meta: (v) => ({ title: v.title }) });
+    await books.load();
+    const added = await books.add({ title: 'My book', t: 'one' });
+    await store.set(added.name, { title: 'My book', t: 'two' });
+    return added.name;
+  });
+  await page.evaluate((n) => { window.h1 = store.showHistory(n); }, name);
   await expect(dialog(page).getByRole('heading', { name: 'History of "My book"' })).toBeVisible();
   await dialog(page).getByRole('button', { name: 'Close' }).first().click();
-  await page.evaluate(() => { window.h2 = store.showHistory('books/179249e9', { title: 'Reading list entry' }); });
-  await expect(dialog(page).getByRole('heading', { name: 'History of "Reading list entry"' })).toBeVisible();
+  await page.evaluate(() => store.set('plain/entry', { t: 1 }));
+  await page.evaluate(() => { window.h2 = store.showHistory('plain/entry'); });
+  await expect(dialog(page).getByRole('heading', { name: 'History of this entry' })).toBeVisible();
   await dialog(page).getByRole('button', { name: 'Close' }).first().click();
   // the conflict dialog says "My book", not the record name
   const other = nodeClient(w);
   await other.unlock({ accessId: idOf(vault), passphrase: vault.passphrase });
-  await other.get('books/179249e9');
-  await other.put('books/179249e9', { t: 'theirs' });
-  await page.evaluate(() => { window.setP = store.set('books/179249e9', { t: 'mine' }); });
+  await other.get(name);
+  await other.put(name, { title: 'My book', t: 'theirs' });
+  await page.evaluate((n) => { window.setP = store.set(n, { title: 'My book', t: 'mine' }); }, name);
   const d = dialog(page);
-  await expect(d.getByText('"My book" was changed after you last loaded it.')).toBeVisible();
-  await expect(d.getByText('179249e9')).toHaveCount(0);
+  await expect(d.getByText('changed "My book" after you last loaded it.')).toBeVisible();
+  await expect(d.getByText(name.slice('books/'.length))).toHaveCount(0);
   await d.getByRole('button', { name: 'Keep mine' }).click();
   await page.evaluate(() => window.setP);
 
@@ -849,7 +867,7 @@ test('record names are shown through the label option and the history title, and
   const invite = await ownerNode.createInvite({ role: 'read' });
   const member = await openApp(await browser.newContext(), w);
   await redeemViaUi(member, invite.code.display, 'read-member-passphrase-2');
-  await member.evaluate(() => { window.h = store.showHistory('books/179249e9'); });
+  await member.evaluate((n) => { window.h = store.showHistory(n); }, name);
   const md = dialog(member);
   await expect(md.locator('li')).toHaveCount(4);
   const restores = md.getByRole('button', { name: 'Restore' });
@@ -857,6 +875,6 @@ test('record names are shown through the label option and the history title, and
   await md.getByRole('button', { name: 'Preview' }).first().click();
   await expect(md.locator('pre')).toBeVisible();
   // the owner can restore an old version
-  await page.evaluate(() => { window.h3 = store.showHistory('books/179249e9'); });
+  await page.evaluate((n) => { window.h3 = store.showHistory(n); }, name);
   await expect(dialog(page).locator('li').filter({ hasText: 'Version 1' }).getByRole('button', { name: 'Restore' })).toBeEnabled();
 });

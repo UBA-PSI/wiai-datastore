@@ -41,9 +41,14 @@ test('the user documentation uses the names that the dialogs show', () => {
 });
 
 test('language detection and text lookup', () => {
-  assert.equal(I.detectLang('de-AT'), 'de');
-  assert.equal(I.detectLang('en-US'), 'en');
-  assert.equal(I.detectLang('fr'), 'en');
+  // <html lang> decides; without it navigator.language
+  const lang = (attr) => { globalThis.document = { documentElement: { getAttribute: () => attr } }; try { return I.detectLang(); } finally { delete globalThis.document; } };
+  assert.equal(lang('de-AT'), 'de');
+  assert.equal(lang('DE'), 'de');
+  assert.equal(lang('en-US'), 'en');
+  assert.equal(lang('fr'), 'en');
+  assert.equal(lang('fr'), 'en', 'a lang attribute that is not German means English, whatever the browser speaks');
+  assert.equal(typeof I.detectLang(), 'string');   // no document (Node): navigator.language
   assert.equal(I.makeT('de')('unlock.title'), 'Daten entsperren');
   assert.equal(I.makeT('en')('pw.tooShort', { n: 5 }), 'At least 12 characters are required (5 so far).');
   assert.equal(I.makeT('en')('no.such.key'), 'no.such.key');
@@ -271,6 +276,8 @@ test('production bundle: no test hooks, private hash-wasm, works beside an AMD l
   const ctx = mkCtx({});
   vm.runInContext(text, ctx);
   assert.equal(vm.runInContext('[typeof WDSCore.setRandom, typeof WDSCore.setArgon2, typeof WDSCore.internals, typeof hashwasm, Object.isFrozen(WDSCore)].join(" ")', ctx), 'undefined undefined undefined undefined true');
+  assert.equal(vm.runInContext('JSON.stringify(Object.keys(WDS.internals.testHooks))', ctx), '[]');   // the hooks of the library's own tests (the focus check at once) are only in the test bundles
+  assert.equal(build({ root, escrowPins: pins, retiredEscrow: retired, testHooks: true }).sri !== r.sri, true);
 
   // the pinned escrow keys cannot be replaced by app code, neither through WDS.connect nor through the core
   assert.deepEqual(JSON.parse(vm.runInContext('JSON.stringify(new WDSCore.Client({ scope: "x-k7m2a9", escrowPins: ["Z".repeat(43)], retiredEscrow: [] }).escrowPins)', ctx)), pins);

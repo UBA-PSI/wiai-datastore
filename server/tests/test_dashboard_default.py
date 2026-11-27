@@ -325,7 +325,6 @@ class PromptSentences(DashCase):
             self.assertIn(prompt_mod.PRIVACY_EN, on)                          # the official sentence stays word for word
             self.assertIn(prompt_mod.PRIVACY_DE, on)
             self.assertLess(on.index(prompt_mod.PRIVACY_DE), on.index(prompt_mod.HIBP_DE))    # right after it
-            self.assertIn("https://api.pwnedpasswords.com", on)               # the CSP line stays
             off, _ = self.prompt(lang, hibp="")
             self.assertNotIn(prompt_mod.HIBP_EN, off)
             self.assertNotIn(prompt_mod.HIBP_DE, off)
@@ -339,16 +338,15 @@ class PromptSentences(DashCase):
         self.assertIn("five characters of a checksum", prompt_mod.HIBP_EN)
         self.assertIn("fünf Zeichen einer Prüfsumme", prompt_mod.HIBP_DE)
 
-    def test_porting_and_the_join_code_file(self):
+    def test_porting_and_no_join_code_file(self):
         for lang in ("en", "de"):
             text, snippet = self.prompt(lang)
-            self.assertIn("/docs/porting.md", text)
-            self.assertIn("store.migrateLocal", text)
-            self.assertIn("~/.wds/join-code", text)
+            self.assertIn("/llms.txt", text)                                      # llms.txt points to porting.md and the rules
+            self.assertNotIn("~/.wds", text + snippet)
+            self.assertNotIn("deleteVault", text + snippet)
             self.assertNotIn("WDS_JOIN_CODE", text + snippet)
             self.assertNotIn("MiB", text)
-            self.assertIn("/docs/porting.md", snippet)
-            self.assertIn("store.migrateLocal", snippet)
+            self.assertIn("/llms.txt", snippet)
         text, _ = self.prompt("en", enrollment="open")
         self.assertNotIn("join-code", text)                                   # no code, no file
 
@@ -380,8 +378,8 @@ class SandboxScope(DashCase):
 class PlainLanguage(DashCase):
     NEW_KEYS = ("create_defaults", "create_more", "f_description_hint", "sid_hint", "vault_explain", "who_reads", "expert_title", "expert_hint",
                 "expert_remember", "expert_forget", "expert_remember_hint", "next_steps", "step_prompt", "step_code", "step_code_open",
-                "step_code_closed", "step_users", "step_users_hint", "users_doc", "usage_title", "usage_text", "usage_near", "test_vault_hint",
-                "help_title", "help_text", "help_contact", "join_code_test_hint")
+                "step_code_closed", "step_users", "step_users_hint", "users_doc", "usage_title", "usage_text", "usage_near",
+                "help_title", "help_text", "help_contact", "join_code_claude_hint")
 
     def test_new_texts_exist_in_both_languages_and_differ(self):
         for key in self.NEW_KEYS:
@@ -451,10 +449,10 @@ class LayLanguage(DashCase):
         d = re.sub(r"<pre.*?</pre>", "", d, flags=re.S)                      # the text for Claude names the file; the person's own texts do not
         self.assertNotIn("~/.wds", d)
         self.assertNotIn("Textdatei", d)
-        self.assertIn("Claude bittet Sie vielleicht um Hilfe bei einem freiwilligen Test und erklärt Ihnen jeden Schritt.", d)
+        self.assertIn("Claude braucht den Code nicht: Claude testet in der Testumgebung.", d)
         self.assertIn("Sie müssen den Text nicht verstehen; Claude liest ihn.", d)
         en, _ = split_default_and_expert(self.a.get(f"/scopes/{self.scope}?lang=en").text)
-        self.assertIn("Claude may ask you for help with an optional test and explains every step.", en)
+        self.assertIn("Claude does not need the code: Claude tests in the sandbox.", en)
         self.assertNotIn("against this app", en)                            # "your app" and "this app" were both called app
 
     def test_the_recovery_code_is_explained_next_to_the_users_guide(self):
@@ -472,9 +470,6 @@ class LayLanguage(DashCase):
     def test_mentions_of_the_expert_area_are_links_to_anchors_inside_it(self):
         page = self.a.get(f"/scopes/{self.scope}").text
         d, e = split_default_and_expert(page)
-        self.assertIn('<a href="#vaults">Experteneinstellungen › Tresore</a>', d)
-        self.assertIn("Kennung = erste Spalte der Tabelle", d)
-        self.assertIn("Claude löscht ihn selbst und nennt Ihnen dessen Kennung.", d)
         self.assertNotIn("die Uhrzeit des Tests", d)                         # never pick a vault by time among the users' vaults
         for anchor in ("vaults", "limits", "enrollment", "admins"):
             self.assertIn(f'id="{anchor}"', e)

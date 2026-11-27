@@ -107,7 +107,7 @@ export const scopeDoc = (over = {}) => ({ scope: 'wds-verify-demo-k7m2a9', name:
 
 export const findingTitles = (jsonOut) => JSON.parse(jsonOut).findings.filter((f) => f.level === 'fail').map((f) => f.title);
 export async function verify(dir, args = []) {
-  const r = await run('wds-verify.mjs', [dir, '--json', ...args]);
+  const r = await run('wds-verify.mjs', [dir, '--json', ...(args.includes('--target') ? [] : ['--target', 'mock']), ...args]);
   let parsed = null;
   try { parsed = JSON.parse(r.stdout); } catch (e) { /* the tool failed before it could report */ }
   const by = (level) => (parsed ? parsed.findings.filter((f) => f.level === level) : []);

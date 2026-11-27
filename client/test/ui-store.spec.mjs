@@ -1,9 +1,10 @@
-// Browser tests of the store API (wds-ui.js): conflict handlers, remove(), getMany, autosave, lock snapshots, collections.
+// Browser tests of the store API (wds-ui.js): conflicts, remove(), get, autosave, lock = reload, collections.
 import { test, expect } from '@playwright/test';
-import { startTestWorld, openApp, dialog, createVaultViaUi, unlockViaUi, nodeClient, redeemViaUi, core, I } from './ui-helpers.mjs';
+import { readFileSync } from 'node:fs';
+import { startTestWorld, openApp, dialog, createVaultViaUi, unlockViaUi, lockPage, nodeClient, redeemViaUi } from './ui-helpers.mjs';
 
 let w;
-test.beforeEach(async () => { w = await startTestWorld(); });
+test.beforeEach(async () => { w = await startTestWorld(); live.clear(); });
 test.afterEach(async () => { await w.close(); });
 
 const idOf = (v) => v.accessId.replace(/-/g, '');
@@ -24,50 +25,53 @@ async function device(browser, vault, cfg) {
 }
 // somebody else saves a newer version of name, so that the next write of the page conflicts
 async function bump(other, name, value) { await other.get(name); await other.put(name, value); }
+// the check that runs when the page gets the focus (here at once): what another device changed reaches onChange
+// (the list entries of the other devices are written in the background: they are flushed first, so that the check sees them)
+const live = new Set();
+async function sync(page, { flush = true } = {}) {
+  if (flush) await Promise.all([...live].map((p) => p.evaluate(() => (window.notes ? notes._flush() : null)).catch(() => null)));
+  await page.evaluate(() => WDS.internals.testHooks.checkNow());
+}
 
-test('conflict handlers: exact name, then prefix, then global; handlers that decide nothing, throw or reject hand over to the dialog; c.ask()', async ({ browser }) => {
+test('conflicts: one handler decides with "mine", "theirs" or { merged }; undecided, throwing and rejecting handlers hand over to the dialog; a second one is a UsageError', async ({ browser }) => {
   const { page, other } = await setup(browser);
   const consoleErrors = [];
   page.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(m.text()); });
-  await page.evaluate(async () => { for (const n of ['notes/a', 'notes/b', 'cfg', 'free']) await store.set(n, { v: 1 }); });
+  await page.evaluate(async () => { for (const n of ['a', 'b', 'c', 'free']) await store.set(n, { v: 1 }); });
   await page.evaluate(() => {
     window.calls = [];
-    store.onConflict((c) => { calls.push('global:' + c.name + ':' + c.op); c.keepTheirs(); });
-    window.offPrefix = store.onConflict('notes/', (c) => { calls.push('prefix:' + c.name); c.keepMine(); });
-    window.offExact = store.onConflict('notes/a', (c) => { calls.push('exact:' + c.name); c.merge((m, t) => ({ merged: [m.v, t.v] })); });
+    store.onConflict((c) => {
+      calls.push(c.name + ':' + c.mine.deleted);
+      if (c.name === 'a') return { merged: { merged: [c.mine.value.v, c.theirs.value.v] } };
+      if (c.name === 'b') return 'mine';
+      return 'theirs';
+    });
   });
-  await bump(other, 'notes/a', { v: 2 });
-  const r1 = await page.evaluate(() => store.set('notes/a', { v: 3 }));
+  await bump(other, 'a', { v: 2 });
+  const r1 = await page.evaluate(() => store.set('a', { v: 3 }));
   expect(r1.resolution).toBe('merged');
   expect(r1.value).toEqual({ merged: [3, 2] });   // set() reports what was stored
-  expect((await other.getRecord('notes/a')).value).toEqual({ merged: [3, 2] });
-  await bump(other, 'notes/b', { v: 2 });
-  expect((await page.evaluate(() => store.set('notes/b', { v: 3 }))).resolution).toBe('mine');
-  await bump(other, 'cfg', { v: 2 });
-  const r3 = await page.evaluate(() => store.set('cfg', { v: 3 }));
+  expect((await other.getRecord('a')).value).toEqual({ merged: [3, 2] });
+  await bump(other, 'b', { v: 2 });
+  expect((await page.evaluate(() => store.set('b', { v: 3 }))).resolution).toBe('mine');
+  await bump(other, 'c', { v: 2 });
+  const r3 = await page.evaluate(() => store.set('c', { v: 3 }));
   expect([r3.resolution, r3.value]).toEqual(['theirs', { v: 2 }]);
-  expect(await page.evaluate(() => calls)).toEqual(['exact:notes/a', 'prefix:notes/b', 'global:cfg:set']);
-  // unsubscribing the exact handler moves the name to the prefix handler
-  await page.evaluate(() => window.offExact());
-  await bump(other, 'notes/a', { v: 4 });
-  expect((await page.evaluate(() => store.set('notes/a', { v: 5 }))).resolution).toBe('mine');
-  // overlapping prefixes are refused; the same prefix again replaces; unrelated ones are fine
-  const errs = await page.evaluate(() => {
-    const out = [];
-    for (const p of ['notes/x/', 'not', 'notes/']) { try { store.onConflict(p === 'not' ? 'notes' : p, () => {}); out.push('ok:' + p); } catch (e) { out.push(e.name + ':' + p); } }
-    try { store.onConflict('other/', () => {}); out.push('ok:other/'); } catch (e) { out.push(e.name); }
-    try { store.onConflict('.wds/x', () => {}); } catch (e) { out.push(e.name); }
-    return out;
-  });
-  expect(errs).toEqual(['UsageError:notes/x/', 'ok:not', 'ok:notes/', 'ok:other/', 'UsageError']);
+  expect(await page.evaluate(() => calls)).toEqual(['a:false', 'b:false', 'c:false']);
+  // a second handler is a UsageError (one per page); null removes the first
+  expect(await page.evaluate(() => { try { store.onConflict(() => 'mine'); return 'ok'; } catch (e) { return e.name; } })).toBe('UsageError');
+  await page.evaluate(() => { store.onConflict(null); store.onConflict(() => 'mine'); });
+  await bump(other, 'c', { v: 4 });
+  expect((await page.evaluate(() => store.set('c', { v: 5 }))).resolution).toBe('mine');
+  expect(await page.evaluate(() => calls.length)).toBe(3);
+  expect(await page.evaluate(() => { try { store.onConflict('notes/', () => {}); return 'ok'; } catch (e) { return e.name; } })).toBe('UsageError');
 
   // undecided, throwing and rejecting handlers open the built-in dialog
-  await page.evaluate(() => { store.onConflict(null); store.onConflict('notes/', null); });
   await page.evaluate(() => {
-    window.handlers = { undecided: () => {}, throwing: () => { throw new Error('boom'); }, rejecting: async () => { throw new Error('nope'); } };
+    window.handlers = { undecided: () => {}, throwing: () => { throw new Error('boom'); }, rejecting: async () => { throw new Error('nope'); }, junk: () => ({ merged: undefined, x: 1 }) && 'whatever' };
   });
   for (const kind of ['undecided', 'throwing', 'rejecting']) {
-    await page.evaluate((k) => { store.onConflict('free', window.handlers[k]); }, kind);
+    await page.evaluate((k) => { store.onConflict(null); store.onConflict(window.handlers[k]); }, kind);
     await bump(other, 'free', { v: kind });
     await page.evaluate(() => { window.setP = store.set('free', { v: 'mine' }); });
     const d = dialog(page);
@@ -77,25 +81,23 @@ test('conflict handlers: exact name, then prefix, then global; handlers that dec
   }
   expect(consoleErrors.some((m) => m.includes('boom'))).toBe(true);
   expect(consoleErrors.some((m) => m.includes('nope'))).toBe(true);
-  // c.ask() shows the dialog from inside the handler
-  await page.evaluate(() => { store.onConflict('free', async (c) => { window.asked = await c.ask(); }); });
-  await bump(other, 'free', { v: 'ask' });
-  await page.evaluate(() => { window.setP = store.set('free', { v: 'mine again' }); });
-  await dialog(page).getByRole('button', { name: 'Keep theirs' }).click();
-  const r = await page.evaluate(() => window.setP);
-  expect([r.resolution, r.value]).toEqual(['theirs', { v: 'ask' }]);
-  expect(await page.evaluate(() => window.asked)).toBe('theirs');
-  // a conflict while removing: op and mine.deleted
-  await page.evaluate(() => { store.onConflict('free', (c) => { window.seen = [c.op, c.mine.deleted, c.theirs.value]; c.keepMine(); }); });
+  // a conflict while removing: mine.deleted
+  await page.evaluate(() => { store.onConflict(null); store.onConflict((c) => { window.seen = [c.mine.deleted, c.theirs.value]; return 'mine'; }); });
   await bump(other, 'free', { v: 'changed' });
   const rm = await page.evaluate(() => store.remove('free'));
   expect(rm).toEqual({ name: 'free', deleted: true, resolution: 'mine' });
-  expect(await page.evaluate(() => window.seen)).toEqual(['remove', true, { v: 'changed' }]);
+  expect(await page.evaluate(() => window.seen)).toEqual([true, { v: 'changed' }]);
   expect(await page.evaluate(() => store.get('free'))).toBeUndefined();
+  // { merged } does not apply to a delete: the dialog decides
+  await page.evaluate(() => { store.onConflict(null); store.onConflict(() => ({ merged: 1 })); });
+  await bump(other, 'b', { v: 'again' });
+  await page.evaluate(() => { window.rmP = store.remove('b'); });
+  await dialog(page).getByRole('button', { name: 'Keep the entry' }).click();
+  expect((await page.evaluate(() => window.rmP)).resolution).toBe('theirs');
   expect(page.errors).toEqual([]);
 });
 
-test('remove(): four results; autosave handles pause during the request and stop, resume or report the kept version', async ({ browser }) => {
+test('remove(): four results; it stops the autosave handle of that name', async ({ browser }) => {
   const { page, other } = await setup(browser);
   const r = await page.evaluate(async () => {
     await store.set('r1', { v: 1 });
@@ -107,105 +109,76 @@ test('remove(): four results; autosave handles pause during the request and stop
 
   await page.evaluate(async () => {
     await store.set('doc', { t: 0 });
-    window.states = []; window.replaced = []; window.errs = []; window.state = { t: 1 };
-    window.h = store.autosave('doc', () => window.state, { delayMs: 300, onStatus: (s) => states.push(s), onResolved: (res) => replaced.push(res.value), onError: (e) => errs.push(e.message) });
+    window.states = []; window.state = { t: 1 };
+    window.h = store.autosave('doc', () => window.state, { delayMs: 300, onStatus: (s, info) => states.push(s + (info && info.resolution ? ':' + info.resolution : '')) });
     h.changed(); await h.flush();
   });
-  expect(await page.evaluate(() => h.status)).toBe('saved');
-  // "theirs": the other side's newer version is kept; the handle is paused while the dialog is open
+  expect(await page.evaluate(() => states)).toEqual(['dirty', 'saving', 'saved']);
+  // "theirs": the other side's newer version is kept; the handle is stopped
   await bump(other, 'doc', { t: 'theirs' });
   await page.evaluate(() => { window.rmP = store.remove('doc'); });
   const d = dialog(page);
   await expect(d.getByRole('heading', { name: 'This entry was changed in the meantime' })).toBeVisible();
-  const before = puts();
-  await page.evaluate(() => { window.state = { t: 2 }; h.changed(); });
-  await sleep(900);
-  expect(puts()).toBe(before);   // nothing was saved while the remove request was open
   await d.getByRole('button', { name: 'Keep the entry' }).click();
-  const res = await page.evaluate(() => window.rmP);
-  expect(res).toEqual({ name: 'doc', deleted: false, resolution: 'theirs', value: { t: 'theirs' } });
-  expect(await page.evaluate(() => replaced)).toEqual([{ t: 'theirs' }]);
-  expect(await page.evaluate(() => h.status)).not.toBe('stopped');
-  // resumed: the edit made meanwhile is saved now
-  await expect.poll(() => page.evaluate(() => h.status)).toBe('saved');
+  expect(await page.evaluate(() => window.rmP)).toEqual({ name: 'doc', deleted: false, resolution: 'theirs', value: { t: 'theirs' } });
+  const before = puts();
+  await page.evaluate(() => { window.state = { t: 2 }; h.changed(); });   // a no-op: the handle is stopped
+  await sleep(700);
+  expect(puts()).toBe(before);
+  expect(await page.evaluate(() => states.slice(-1)[0])).toBe('saved');
+  // a new handle for the name is possible after remove()
+  await page.evaluate(() => { window.h = store.autosave('doc', () => window.state, { delayMs: 100 }); h.changed(); return h.flush(); });
   expect(await page.evaluate(() => store.get('doc'))).toEqual({ t: 2 });
-  // "deleted": the handle stops, and every changed() after that reports it
-  const rm = await page.evaluate(() => store.remove('doc'));
-  expect(rm.resolution).toBe('deleted');
-  const after = await page.evaluate(() => { h.changed(); h.changed(); return { status: h.status, errs: errs.slice(), err: h.error && h.error.message }; });
-  expect(after.status).toBe('stopped');
-  expect(after.errs).toHaveLength(2);
-  expect(after.errs[0]).toContain('autosave handle stopped (removed)');
-  expect(after.err).toContain('stopped (removed)');
-  // a failed request: the handle is resumed unchanged and still saves
-  await page.evaluate(async () => {
-    await store.set('doc2', { t: 0 });
-    window.state2 = { t: 5 };
-    window.h2 = store.autosave('doc2', () => window.state2, { delayMs: 400 });
-    h2.changed();
-  });
-  await page.route('**/datastore/api/**', (route) => route.abort('internetdisconnected'));
-  const failed = await page.evaluate(() => store.remove('doc2').then(() => 'removed', (e) => e.name));
-  expect(failed).toBe('OfflineError');
-  await page.unroute('**/datastore/api/**');
-  expect(await page.evaluate(() => h2.status)).not.toBe('stopped');
-  await expect.poll(() => page.evaluate(() => h2.status), { timeout: 20000 }).toBe('saved');
-  expect(await page.evaluate(() => store.get('doc2'))).toEqual({ t: 5 });
 });
 
-test('getMany: order, missing records, at most 6 requests at a time, fresh reads', async ({ browser }) => {
-  const { page, other } = await setup(browser);
-  await page.evaluate(async () => { for (let i = 0; i < 12; i++) await store.set('m/' + i, { i }); });
-  const r = await page.evaluate(async () => ({
-    vals: await store.getMany(['m/3', 'm/none', 'm/0']),
-    empty: await store.getMany([]),
-    badName: await store.getMany(['.wds/x']).then(() => 'ok', (e) => e.name),
-  }));
-  expect(r.vals).toEqual([{ i: 3 }, undefined, { i: 0 }]);
-  expect(r.empty).toEqual([]);
-  expect(r.badName).toBe('UsageError');
-  // the number of requests in flight never exceeds the cap (a fresh page: nothing is cached)
-  const p2 = await device(browser, (await (async () => ({ accessId: (await page.evaluate(() => store.status().accessId)), passphrase: 'purple-elephant-marching-slowly' }))()));
-  const names = Array.from({ length: 12 }, (_, i) => 'm/' + i);
+test('get: a Blob for files and the JSON value otherwise, asks the server every time; collection.getAll reads at most 6 records at a time', async ({ browser }) => {
+  const { page, vault, other } = await setup(browser);
+  const r = await page.evaluate(async () => {
+    await store.set('j', { i: 1 }); await store.set('f', new Uint8Array([1, 2, 3]), { mime: 'application/x-test' }); await store.set('g', new Blob(['hi'], { type: 'text/plain' }));
+    const f = await store.get('f'), g = await store.get('g');
+    return { j: await store.get('j'), f: [f instanceof Blob, f.type, [...new Uint8Array(await f.arrayBuffer())]], g: [g.type, await g.text()], none: await store.get('none'), bad: await store.get('.wds/x').then(() => 'ok', (e) => e.name) };
+  });
+  expect(r).toEqual({ j: { i: 1 }, f: [true, 'application/x-test', [1, 2, 3]], g: ['text/plain', 'hi'], none: undefined, bad: 'UsageError' });
+  // every get asks the server: what another device saved a moment ago is there
+  await other.get('j'); await other.put('j', { i: 'new' });
+  expect(await page.evaluate(() => store.get('j'))).toEqual({ i: 'new' });
+  await other.put('q', { i: 1 }); await other.list('q');
+  await other.put('q', { i: 2 });
+  expect(await page.evaluate(() => store.get('q'))).toEqual({ i: 2 });
+  // collection.getAll: at most 6 requests in flight
+  await page.evaluate(async () => { window.items = store.collection('m/'); await items.load(); for (let i = 0; i < 12; i++) await items.set('m' + i, { i }); });
+  const p2 = await device(browser, vault);
   w.world.server.delayMs = 60;
   w.world.server.resetInflight();
-  const vals = await p2.evaluate((n) => store.getMany(n), names);
-  expect(vals.map((v) => v.i)).toEqual(names.map((_, i) => i));
+  const vals = await p2.evaluate(async () => { const c = store.collection('m/'); return (await c.getAll()).map((x) => x.value.i); });
+  expect(vals).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);   // in the order of the list
   expect(w.world.server.maxInflight).toBeLessThanOrEqual(6);
   expect(w.world.server.maxInflight).toBeGreaterThan(1);
   w.world.server.delayMs = 0;
-  // fresh: list() keeps the records it downloaded for a moment; fresh ignores that copy
-  await other.put('q/1', { i: 1 });
-  await other.put('q/2', { i: 2 });
-  await p2.evaluate(async () => { await store.list('q/'); });
-  await other.put('q/1', { i: 'new' });
-  expect(await p2.evaluate(() => store.get('q/1'))).toEqual({ i: 1 });   // the copy list() kept
-  await other.put('q/2', { i: 'new' });
-  await p2.evaluate(async () => { await store.list('q/'); });   // list() sees q/2 changed and downloads it again
-  expect(await p2.evaluate(() => store.getMany(['q/2'], { fresh: true }))).toEqual([{ i: 'new' }]);
-  await p2.evaluate(async () => { await store.list('q/'); });
-  expect(await p2.evaluate(() => store.get('q/2', { fresh: true }))).toEqual({ i: 'new' });
   // an error other than "missing" rejects
   await p2.route('**/datastore/api/**', (route) => route.abort('internetdisconnected'));
-  expect(await p2.evaluate(() => store.getMany(['m/1', 'm/2']).then(() => 'ok', (e) => e.name))).toBe('OfflineError');
+  expect(await p2.evaluate(() => store.get('m/m1').then(() => 'ok', (e) => e.name))).toBe('OfflineError');
 });
 
-test('autosave: one live handle per name, undefined state, flush never rejects, statuses', async ({ browser }) => {
-  const { page } = await setup(browser);
+test('autosave: one live handle per name, stop() ends it, undefined state, flush never rejects, onStatus(status, info)', async ({ browser }) => {
+  const { page, other } = await setup(browser);
   const r = await page.evaluate(async () => {
     window.state = { n: 1 };
     const log = [];
     const h1 = store.autosave('draft', () => window.state, { delayMs: 60000, onStatus: (s) => log.push('h1:' + s) });
     h1.changed();
-    const h2 = store.autosave('draft', () => window.state, { delayMs: 60000, onStatus: (s) => log.push('h2:' + s) });
-    // the old handle was flushed (its pending save completes) and then stopped
-    await new Promise((res) => { const i = setInterval(() => { if (h1.status === 'stopped') { clearInterval(i); res(); } }, 20); });
-    return { h1: h1.status, h2: h2.status, log, stored: await store.get('draft') };
+    const dup = (() => { try { store.autosave('draft', () => window.state); return 'ok'; } catch (e) { return e.name; } })();
+    const status = await h1.flush();
+    h1.stop();
+    h1.changed(); h1.changed();   // a no-op after stop
+    const h2 = store.autosave('draft', () => ({ n: 2 }), { delayMs: 60000, onStatus: (s) => log.push('h2:' + s) });
+    h2.changed(); await h2.flush(); h2.stop();
+    return { dup, status, log, stored: await store.get('draft') };
   });
-  expect(r.h1).toBe('stopped');
-  expect(r.h2).toBe('idle');
-  expect(r.stored).toEqual({ n: 1 });
-  expect(r.log).toContain('h1:saved');
+  expect(r.dup).toBe('UsageError');
+  expect(r.status).toBe('saved');
+  expect(r.log).toEqual(['h1:dirty', 'h1:saving', 'h1:saved', 'h2:dirty', 'h2:saving', 'h2:saved']);
+  expect(r.stored).toEqual({ n: 2 });
   // getState returning undefined: no write, status back to the previous non-dirty one
   const before = puts();
   const u = await page.evaluate(async () => {
@@ -213,76 +186,82 @@ test('autosave: one live handle per name, undefined state, flush never rejects, 
     const seen = [];
     const h = store.autosave('maybe', () => (window.nothing ? undefined : { x: 1 }), { delayMs: 50, onStatus: (s) => seen.push(s) });
     h.changed(); await h.flush();
-    return { status: h.status, seen };
+    return seen;
   });
-  expect(u.status).toBe('idle');
-  expect(u.seen).toEqual(['dirty', 'idle']);
+  expect(u).toEqual(['dirty', 'idle']);
   expect(puts()).toBe(before);
-  // flush() never rejects, also when saving fails; error and onError carry the reason
+  // a lost conflict is reported by onChange({ remote: true }), the one way to learn that the open entry is another text now; onStatus says saved
+  await page.evaluate(async () => {
+    await store.set('shared', { v: 0 });
+    window.infos = []; window.changes = [];
+    window.hs = store.autosave('shared', () => ({ v: 'mine' }), { delayMs: 60000, onStatus: (s, info) => { if (s === 'saved') infos.push(info); } });
+    store.onConflict(() => 'theirs');
+    store.onChange((c) => { if (c.remote) changes.push(c.names); });
+  });
+  await bump(other, 'shared', { v: 'theirs' });
+  await page.evaluate(async () => { hs.changed(); await hs.flush(); });
+  expect(await page.evaluate(() => infos)).toEqual([undefined]);
+  expect(await page.evaluate(() => changes)).toEqual([['shared']]);
+  // the editor still holds the old text: its next save meets the other version again (it is not overwritten silently)
+  await page.evaluate(() => { store.onConflict(null); hs.changed(); window.hsP = hs.flush(); });
+  await expect(page.locator('[data-wds-view=conflict]')).toBeVisible();
+  await page.locator('[data-wds=conflict-theirs]').click();
+  expect(await page.evaluate(() => hsP)).toBe('saved');
+  await page.evaluate(() => hs.stop());
+  // flush() never rejects, also when saving fails; the status carries the error
   await page.route('**/datastore/api/**', (route) => route.abort('internetdisconnected'));
   const f = await page.evaluate(async () => {
     const errs = [];
-    const h = store.autosave('failing', () => ({ x: 1 }), { delayMs: 60000, onError: (e) => errs.push(e.name) });
+    const h = store.autosave('failing', () => ({ x: 1 }), { delayMs: 60000, onStatus: (s, info) => { if (s === 'error') errs.push(info.error.name); } });
     h.changed();
-    const status = await h.flush();
-    return { status, errs, error: h.error && h.error.name };
+    return { status: await h.flush(), errs };
   });
-  expect(f).toEqual({ status: 'error', errs: ['OfflineError'], error: 'OfflineError' });
+  expect(f).toEqual({ status: 'error', errs: ['OfflineError'] });
 });
 
-test('lock keeps unsaved autosave state (read once, before onLock clears the screen) and writes it after the next unlock of the same vault', async ({ browser }) => {
+test('lock = save what is pending, then reload; offline, a dialog offers the backup first and then "Lock anyway"', async ({ browser }) => {
   const { page, vault } = await setup(browser);
   await page.evaluate(() => {
-    window.getCalls = 0; window.unlocks = []; window.locks = [];
-    const out = document.getElementById('out');
-    window.start = () => {
-      window.starts = (window.starts || 0) + 1;
-      window.h = store.autosave('draft', () => { window.getCalls++; return { text: out.textContent }; }, { delayMs: 60000 });
-    };
-    store.onLock((reason) => { window.locks.push(reason); out.textContent = ''; });
-    store.onUnlock((st) => window.unlocks.push(st.vaultId));
-    store.onUnlock(window.start); store.onUnlock(window.start);   // the same function twice registers once
-    window.start();
-    out.textContent = 'precious words'; h.changed();
+    window.state = { text: 'precious words' };
+    window.h = store.autosave('draft', () => window.state, { delayMs: 60000 });
+    h.changed();
+  });
+  await lockPage(page);   // online: the pending value is saved first
+  expect(await page.evaluate(() => store.status().unlocked)).toBe(false);
+  await unlockViaUi(page, vault.accessId, vault.passphrase);
+  expect(await page.evaluate(() => store.get('draft'))).toEqual({ text: 'precious words' });
+  expect(await page.evaluate(() => document.documentElement.getAttribute('data-wds-role'))).toBe('owner');
+
+  // offline: the save fails, the person is asked
+  await page.evaluate(() => {
+    window.state = { text: 'unsaved words' };
+    window.h = store.autosave('draft', () => window.state, { delayMs: 60000 });
+    h.changed();
+    window.beforeUnloadPrevented = false;
+    window.addEventListener('beforeunload', (ev) => { window.beforeUnloadPrevented = ev.defaultPrevented; });
   });
   await page.route('**/datastore/api/**', (route) => route.abort('internetdisconnected'));
-  await page.evaluate(() => store.lock());
-  expect(await page.evaluate(() => ({ calls: getCalls, locks, out: document.getElementById('out').textContent, status: h.status }))).toEqual({ calls: 1, locks: ['user'], out: '', status: 'stopped' });
+  await page.evaluate(() => { void store.lock(); });
+  const d = dialog(page);
+  await expect(d.getByRole('heading', { name: 'Not everything is saved' })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.hasAttribute('data-wds-role'))).toBe(false);
+  const dl = page.waitForEvent('download');
+  await d.getByRole('button', { name: 'Download unsaved values (backup)' }).click();
+  expect(JSON.parse(readFileSync(await (await dl).path(), 'utf8'))).toEqual({ text: 'unsaved words' });
+  await expect(d).toBeVisible();   // the backup does not decide anything
+  const loaded = page.waitForEvent('load');
+  await d.getByRole('button', { name: 'Lock anyway' }).click();
+  await loaded;
+  expect(await page.evaluate(() => store.status().unlocked)).toBe(false);
   await page.unroute('**/datastore/api/**');
   await unlockViaUi(page, vault.accessId, vault.passphrase);
-  // the snapshot was written before onUnlock handlers ran, and getState() was not called again for it
-  expect(await page.evaluate(() => store.get('draft'))).toEqual({ text: 'precious words' });
-  const after = await page.evaluate(() => ({ calls: getCalls, starts, unlocks: unlocks.length, live: h.status }));
-  expect(after).toEqual({ calls: 1, starts: 2, unlocks: 1, live: 'idle' });   // start() ran once on the unlock; the first handle had stopped, the new one is live
-  const stored = await page.evaluate(() => store.get('draft'));
-  expect(stored.text).toBe('precious words');
-  // start() twice: the older handle is superseded, a save produces exactly one write
-  await page.evaluate(() => { window.start(); window.h.changed(); });
-  const n0 = puts();
-  await page.evaluate(() => window.h.flush());
-  expect(puts() - n0).toBe(1);
-});
-
-test('lock snapshots of one vault are dropped, with a notice, when another vault is unlocked', async ({ browser }) => {
-  const { page } = await setup(browser);
-  await page.evaluate(() => {
-    window.h = store.autosave('draft', () => ({ text: 'lost?' }), { delayMs: 60000 });
-    window.h.changed();
-  });
-  await page.route('**/datastore/api/**', (route) => route.abort('internetdisconnected'));
-  await page.evaluate(() => store.lock());
-  await page.unroute('**/datastore/api/**');
-  // a second vault in the same app (new vault created on the lock screen)
-  await createVaultViaUi(page, 'second-vault-passphrase-with-words');
-  await expect(page.getByText('Unsaved changes of the previously open vault could not be saved.')).toBeVisible();
-  expect(await page.evaluate(() => store.get('draft'))).toBeUndefined();
+  expect(await page.evaluate(() => store.get('draft'))).toEqual({ text: 'precious words' });   // the unsaved edit is gone; it was handed out as a backup
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Collections
 // ---------------------------------------------------------------------------------------------------------------------
 const NOTES = () => { window.notes = store.collection('notes/', { meta: (v) => ({ t: v.t }) }); return window.notes.load().then((l) => l.length); };
-const ids = (items) => items.map((i) => i.id).sort();
 const idsOf = (page) => page.evaluate(() => notes.items().map((i) => i.id).sort());
 
 async function twoDevices(browser) {
@@ -290,10 +269,11 @@ async function twoDevices(browser) {
   const vault = await createVaultViaUi(a);
   const b = await device(browser, vault);
   await a.evaluate(NOTES); await b.evaluate(NOTES);
+  live.add(a); live.add(b);
   return { a, b, vault };
 }
 
-test('collection: no lost update when two devices add and remove (op replay on the latest index)', async ({ browser }) => {
+test('collection: no lost update when two devices add and remove (op replay on the latest index); items come in insertion order', async ({ browser }) => {
   const { a, b, vault } = await twoDevices(browser);
   await b.evaluate(() => notes.set('x', { t: 'x' }));
   await a.evaluate(() => notes.set('y', { t: 'y' }));   // a had not seen x
@@ -301,46 +281,32 @@ test('collection: no lost update when two devices add and remove (op replay on t
   expect(await idsOf(a)).toEqual(['x', 'y', 'z']);
   await b.evaluate(() => notes.remove('x'));   // b's list was stale
   await a.evaluate(() => notes.set('w', { t: 'w' }));
-  await a.evaluate(() => notes.refresh()); await b.evaluate(() => notes.refresh());
+  await sync(a); await sync(b);
   expect(await idsOf(a)).toEqual(['w', 'y', 'z']);
   expect(await idsOf(b)).toEqual(['w', 'y', 'z']);
   const c = await device(browser, vault);
-  expect(await c.evaluate(() => store.collection('notes/').load().then((l) => l.map((i) => i.id).sort()))).toEqual(['w', 'y', 'z']);
+  expect(await c.evaluate(() => store.collection('notes/').load().then((l) => l.map((i) => i.id)))).toEqual(['y', 'z', 'w']);   // the order the entries were added in
   // meta travels with the index: a list renders without loading the items
-  expect(await c.evaluate(() => store.collection('notes/').items().find((i) => i.id === 'y').meta)).toEqual({ t: 'y' });
-  expect(await c.evaluate(() => store.list('notes/').then((r) => r.map((x) => x.name).sort()))).toEqual(['notes/w', 'notes/y', 'notes/z']);
-});
-
-test('collection: the same result when the clock of one device is a day ahead', async ({ browser }) => {
-  const { a, b } = await twoDevices(browser);
-  await b.evaluate(() => { const real = Date.now.bind(Date); Date.now = () => real() + 86400000; });
-  await b.evaluate(() => notes.set('x', { t: 'x' }));
-  await a.evaluate(() => notes.set('y', { t: 'y' }));
-  await a.evaluate(() => notes.set('z', { t: 'z' }));
-  await b.evaluate(() => notes.remove('x'));
-  await a.evaluate(() => notes.set('w', { t: 'w' }));
-  await a.evaluate(() => notes.refresh()); await b.evaluate(() => notes.refresh());
-  expect(await idsOf(a)).toEqual(['w', 'y', 'z']);
-  expect(await idsOf(b)).toEqual(['w', 'y', 'z']);
+  expect(await c.evaluate(() => { const col = store.collection('notes/'); return col.load().then(() => col.items().find((i) => i.id === 'y').meta); })).toEqual({ t: 'y' });
 });
 
 test('collection: an item deleted on one device and kept (edited) on another stays visible on both', async ({ browser }) => {
   const { a, b } = await twoDevices(browser);
   await a.evaluate(() => notes.set('x', { t: 'same' }));
-  await b.evaluate(() => notes.refresh());
+  await sync(b);
   expect(await idsOf(b)).toEqual(['x']);
-  await b.evaluate(() => { store.onConflict('notes/', (c) => c.keepMine()); });
+  await b.evaluate(() => { store.onConflict(() => 'mine'); });
   await a.evaluate(() => notes.remove('x'));
   // b edits without a meta change: the entity conflicts with the deletion, b keeps its version, the item comes back
   const res = await b.evaluate(() => notes.set('x', { t: 'same', extra: 1 }));
   expect(res.resolution).toBe('mine');
-  await a.evaluate(() => notes.refresh()); await b.evaluate(() => notes.refresh());
+  await sync(a); await sync(b);
   expect(await idsOf(a)).toEqual(['x']);
   expect(await idsOf(b)).toEqual(['x']);
   expect(await a.evaluate(() => notes.get('x'))).toEqual({ t: 'same', extra: 1 });
 });
 
-test('collection: a failed index write keeps the item and rejects with stored/id/record; the queued change goes out with the next write or on "online"; rebuild() repairs orphans', async ({ browser }) => {
+test('collection: a failed index write does not fail add/set: the item is stored, the list entry waits in the queue and goes out with the next write, on "online", on focus, before lock', async ({ browser }) => {
   const { a, b, vault } = await twoDevices(browser);
   const failSecondPut = async (page) => {
     let n = 0;
@@ -351,38 +317,42 @@ test('collection: a failed index write keeps the item and rejects with stored/id
     });
   };
   await failSecondPut(a);
-  const err = await a.evaluate(() => notes.set('k1', { t: 'lost?' }).then(() => null, (e) => ({ name: e.name, stored: e.stored, id: e.id, record: e.record })));
-  expect(err).toEqual({ name: 'OfflineError', stored: true, id: 'k1', record: 'notes/k1' });
-  // the item exists, the index on the server does not list it yet
-  expect(await a.evaluate(() => store.get('notes/k1'))).toEqual({ t: 'lost?' });
-  await b.evaluate(() => notes.refresh());
+  const res = await a.evaluate(() => notes.set('k1', { t: 'kept' }).then((r) => r.version, (e) => e.name));
+  expect(res).toBe(1);   // the item record is stored: the call resolves
+  await expect(dialog(a).getByRole('heading', { name: 'Not saved' })).toBeVisible();   // the failed index write was offline with unsaved changes: one dialog
+  await dialog(a).getByRole('button', { name: 'Close' }).first().click();
+  expect(await a.evaluate(() => store.get('notes/k1'))).toEqual({ t: 'kept' });
+  await sync(b, { flush: false });
   expect(await idsOf(b)).toEqual([]);
   expect(await idsOf(a)).toEqual(['k1']);   // this device's list already shows it: the change waits in the queue
-  // the next add carries the waiting change: no second add of k1 is needed
+  // the next write carries the waiting change
   await a.unroute('**/datastore/api/**');
   await a.evaluate(() => notes.set('k3', { t: 'later' }));
-  await b.evaluate(() => notes.refresh());
+  await sync(b);
   expect(await idsOf(b)).toEqual(['k1', 'k3']);
   // "online" retries by itself
   await failSecondPut(a);
-  await a.evaluate(() => notes.set('k4', { t: 'offline' }).catch(() => null));
+  await a.evaluate(() => notes.set('k4', { t: 'offline' }));
   await a.unroute('**/datastore/api/**');
   await a.evaluate(() => window.dispatchEvent(new Event('online')));
-  await expect.poll(async () => { await b.evaluate(() => notes.refresh()); return idsOf(b); }, { timeout: 15000 }).toEqual(['k1', 'k3', 'k4']);
-  // a record under the prefix that no index lists (its page went away before the index write): rebuild() brings it back
+  await expect.poll(async () => { await sync(b); return idsOf(b); }, { timeout: 15000 }).toEqual(['k1', 'k3', 'k4']);
+  // a record under the prefix that no index lists: the export brings it back into the list (orphan repair)
   const owner = nodeClient(w);
   await owner.unlock({ accessId: idOf(vault), passphrase: vault.passphrase });
   await owner.put('notes/k2', { t: 'gone' });
   const d = await device(browser, vault);
   await d.evaluate(NOTES);
   expect(await idsOf(d)).toEqual(['k1', 'k3', 'k4']);
-  const rebuilt = await d.evaluate(() => notes.rebuild().then((l) => l.map((i) => i.id + ':' + i.meta.t).sort()));
-  expect(rebuilt).toEqual(['k1:lost?', 'k2:gone', 'k3:later', 'k4:offline']);
-  await b.evaluate(() => notes.refresh());
-  expect(await idsOf(b)).toEqual(['k1', 'k2', 'k3', 'k4']);
+  await d.evaluate(() => { void store.openVault(); });
+  const dl = d.waitForEvent('download');
+  await dialog(d).getByRole('button', { name: 'Export everything (ZIP, unencrypted)' }).click();
+  await dl;
+  await expect(dialog(d).getByText(/Export finished: \d+ records\./)).toBeVisible();
+  await expect.poll(() => idsOf(d)).toEqual(['k1', 'k2', 'k3', 'k4']);
+  await expect.poll(async () => { await sync(b); return idsOf(b); }, { timeout: 15000 }).toEqual(['k1', 'k2', 'k3', 'k4']);
 });
 
-test('collection: writes are coalesced, and after 10 conflicting rounds the call fails with the item stored', async ({ browser }) => {
+test('collection: writes are coalesced; when the index write keeps conflicting, the items stay stored and the entries stay queued', async ({ browser }) => {
   const { a, b, vault } = await twoDevices(browser);
   w.world.server.delayMs = 80;
   const before = puts();
@@ -392,28 +362,29 @@ test('collection: writes are coalesced, and after 10 conflicting rounds the call
   });
   w.world.server.delayMs = 0;
   expect(r).toEqual(['p', 'q', 'r', 's', 't']);
-  const indexPuts = puts() - before - 5;
-  expect(indexPuts).toBeLessThanOrEqual(2);   // one write for the first, one follow-up for the rest
-  await b.evaluate(() => notes.refresh());
+  await expect.poll(() => puts() - before - 5).toBeGreaterThan(0);
+  await expect.poll(() => puts() - before - 5).toBeLessThanOrEqual(2);   // one write for the first, one follow-up for the rest
+  await sync(b);
   expect(await idsOf(b)).toEqual(['p', 'q', 'r', 's', 't']);
-  // every round conflicts: 10 rounds with a pause between them, then ConflictError with stored
+  // every round conflicts: 10 rounds with a pause between them, then the write fails; the item is stored and its entry stays queued
   const owner = nodeClient(w);
   await owner.unlock({ accessId: idOf(vault), passphrase: vault.passphrase });
   const indexRid = await owner._rid('notes.index');
   w.world.server.failPreconditions = (rid) => rid === indexRid;
   const t0 = Date.now(), n0 = w.world.server.requests.filter((x) => x.method === 'PUT' && x.path.endsWith(indexRid)).length;
-  const err = await a.evaluate(() => notes.set('late', { t: 'late' }).then(() => null, (e) => ({ name: e.name, stored: e.stored, id: e.id, record: e.record })));
-  w.world.server.failPreconditions = null;
-  expect(err).toEqual({ name: 'ConflictError', stored: true, id: 'late', record: 'notes/late' });
-  expect(w.world.server.requests.filter((x) => x.method === 'PUT' && x.path.endsWith(indexRid)).length - n0).toBe(10);
+  const res = await a.evaluate(() => notes.set('late', { t: 'late' }).then((x) => x.version, (e) => e.name));
+  expect(res).toBe(1);
+  await expect.poll(() => w.world.server.requests.filter((x) => x.method === 'PUT' && x.path.endsWith(indexRid)).length - n0, { timeout: 20000 }).toBe(10);
   expect(Date.now() - t0).toBeGreaterThanOrEqual(9 * 50);   // jitter of 50 to 500 ms between rounds
-  // the operation is still queued and goes out with the next write
+  await expect(dialog(a).getByRole('heading', { name: 'Not saved' })).toHaveCount(0);   // a conflict is not an offline episode
+  w.world.server.failPreconditions = null;
+  // the entry is still queued and goes out with the next write
   await a.evaluate(() => notes.set('next', { t: 'next' }));
-  await b.evaluate(() => notes.refresh());
+  await sync(b);
   expect(await idsOf(b)).toEqual(['late', 'next', 'p', 'q', 'r', 's', 't']);
 });
 
-test('collection: records that are gone are skipped and removed lazily; records the index does not know are found by list()', async ({ browser }) => {
+test('collection: records that are gone are skipped and removed from the list lazily', async ({ browser }) => {
   const { a, vault } = await twoDevices(browser);
   const other = nodeClient(w);
   await other.unlock({ accessId: idOf(vault), passphrase: vault.passphrase });
@@ -424,19 +395,12 @@ test('collection: records that are gone are skipped and removed lazily; records 
   expect(got).toEqual({ one: { t: 'one' }, two: undefined, all: ['one'] });
   expect(puts()).toBe(before);   // reading writes nothing
   expect(await idsOf(a)).toEqual(['one']);   // the memory already drops it
-  // an orphan: a record under the prefix that the index does not list
-  await other.put('notes/orph', { t: 'orphan' });
-  const before2 = puts();
-  const listed = await a.evaluate(async () => { const changes = []; notes.onChange((c) => changes.push(c.added)); await store.list('notes/'); return { ids: notes.items().map((i) => i.id).sort(), changes }; });
-  expect(listed.ids).toEqual(['one', 'orph']);
-  expect(listed.changes).toEqual([['orph']]);
-  expect(puts()).toBe(before2);   // still no write
-  await a.evaluate(() => notes.set('three', { t: 'three' }));   // the next write carries both lazy changes
+  await a.evaluate(() => notes.set('three', { t: 'three' }));   // the next write carries the removal
   const fresh = await device(browser, vault);
-  expect(await fresh.evaluate(() => store.collection('notes/').load().then((l) => l.map((i) => i.id).sort()))).toEqual(['one', 'orph', 'three']);
+  expect(await fresh.evaluate(() => store.collection('notes/').load().then((l) => l.map((i) => i.id).sort()))).toEqual(['one', 'three']);
 });
 
-test('collection: a read member never writes the index; meta limit, names, options, items() before load and after lock', async ({ browser }) => {
+test('collection: a read member never writes the index; meta limit, names, options, items() before load', async ({ browser }) => {
   const { a, vault } = await twoDevices(browser);
   await a.evaluate(() => notes.set('seen', { t: 'seen' }));
   const owner = nodeClient(w);
@@ -448,59 +412,42 @@ test('collection: a read member never writes the index; meta limit, names, optio
   const seen = await m.evaluate(async () => {
     const c = store.collection('notes/', { meta: (v) => ({ t: v.t }) });
     await c.load();
-    return { items: c.items().map((i) => i.id), all: (await c.getAll()).map((x) => x.value.t), add: await c.set('no', { t: 'no' }).then(() => 'ok', (e) => e.name) };
+    return { items: c.items().map((i) => i.id), all: (await c.getAll()).map((x) => x.value.t), add: await c.set('no', { t: 'no' }).then(() => 'ok', (e) => e.name), role: document.documentElement.getAttribute('data-wds-role') };
   });
-  expect(seen).toEqual({ items: ['seen'], all: ['seen'], add: 'AuthError' });
+  expect(seen).toEqual({ items: ['seen'], all: ['seen'], add: 'AuthError', role: 'read' });
   expect(puts()).toBe(putsBefore);
   // meta over 512 bytes is a UsageError and nothing is written
   const r = await a.evaluate(async () => {
     const out = {};
     out.big = await notes.set('big', { t: 'x'.repeat(600) }).then(() => 'ok', (e) => e.name);
-    out.bigStored = (await store.list('notes/')).some((x) => x.name === 'notes/big');
+    out.bigStored = await store.get('notes/big');
     out.badId = await Promise.all(['a/b', '', 'x'.repeat(201)].map((id) => notes.set(id, { t: 1 }).then(() => 'ok', (e) => e.name)));
     await notes.set('abc.pdf', { t: 'pdf' });
     out.dotted = notes.items().some((i) => i.id === 'abc.pdf');
     out.generated = (await notes.add({ t: 'g' })).id;
-    out.names = [notes.prefix, notes.indexName];
     for (const p of ['notes', '.wds/x/']) { try { store.collection(p); out['p:' + p] = 'ok'; } catch (e) { out['p:' + p] = e.name; } }
-    // one object per prefix; the options of the latest call win
-    const f1 = () => ({ which: 1 }), f2 = () => ({ which: 2 });
-    const c1 = store.collection('opt/', { meta: f1 }), c2 = store.collection('opt/', { meta: f2 });
-    out.same = c1 === c2;
-    await c2.set('o1', { q: 1 });
-    out.meta = c2.items()[0].meta;
-    out.custom = store.collection('custom/', { index: 'my-index' }).indexName;
-    out.inside = (() => { try { store.collection('inside/', { index: 'inside/idx' }); return 'ok'; } catch (e) { return e.name; } })();
+    out.badMeta = (() => { try { store.collection('bad/', { meta: 5 }); return 'ok'; } catch (e) { return e.name; } })();
+    out.keys = Object.keys(notes).filter((k) => k[0] !== '_').sort();
     return out;
   });
   expect(r.big).toBe('UsageError');
-  expect(r.bigStored).toBe(false);
+  expect(r.bigStored).toBeUndefined();
   expect(r.badId).toEqual(['UsageError', 'UsageError', 'UsageError']);
   expect(r.dotted).toBe(true);
   expect(r.generated).toMatch(/^[0-9a-z]{10}$/);
-  expect(r.names).toEqual(['notes/', 'notes.index']);
   expect(r['p:notes']).toBe('UsageError');
   expect(r['p:.wds/x/']).toBe('UsageError');
-  expect(r.same).toBe(true);
-  expect(r.meta).toEqual({ which: 2 });
-  expect(r.custom).toBe('my-index');
-  expect(r.inside).toBe('UsageError');
-  // items() needs a load first, and again after a lock
-  const lockCheck = await a.evaluate(async () => {
-    const c = store.collection('fresh/');
-    const before = (() => { try { c.items(); return 'ok'; } catch (e) { return e.name + ':' + /load/.test(e.message); } })();
-    const hasBefore = (() => { try { c.has('x'); return 'ok'; } catch (e) { return e.name; } })();
-    await notes.load(); notes.items();
-    await store.lock();
-    const afterLock = (() => { try { notes.items(); return 'ok'; } catch (e) { return e.name; } })();
-    return { before, hasBefore, afterLock };
-  });
-  expect(lockCheck).toEqual({ before: 'UsageError:true', hasBefore: 'UsageError', afterLock: 'UsageError' });
+  expect(r.badMeta).toBe('UsageError');
+  expect(r.keys).toEqual(['add', 'autosave', 'get', 'getAll', 'items', 'load', 'remove', 'set']);
+  // items() needs a load first
+  const before = await a.evaluate(() => { const c = store.collection('fresh/'); try { c.items(); return 'ok'; } catch (e) { return e.name + ':' + /load/.test(e.message); } });
+  expect(before).toBe('UsageError:true');
 });
 
-test('collection: autosave keeps the index meta current, written at most every 10 s, and on lock', async ({ browser }) => {
+test('collection: autosave keeps the index meta current, written at most every 10 s, and before the lock', async ({ browser }) => {
   const { a, b } = await twoDevices(browser);
   await a.evaluate(() => notes.set('doc', { t: 'v1' }));
+  await a.evaluate(() => notes._flush());
   const n0 = puts();
   await a.evaluate(async () => {
     window.state = { t: 'v2' };
@@ -509,58 +456,52 @@ test('collection: autosave keeps the index meta current, written at most every 1
     window.state = { t: 'v3' }; h.changed(); await h.flush();
   });
   expect(puts() - n0).toBe(2);   // two entity writes; the index waits: its last write was moments ago
+  expect(await a.evaluate(() => notes.items()[0].meta)).toEqual({ t: 'v3' });   // this device's list is current at once
   const mid = puts();
   await sleep(1500);
   expect(puts()).toBe(mid);   // the next meta change waits for the 10 s window
-  await a.evaluate(() => store.lock());   // flushed on lock
-  await b.evaluate(() => notes.refresh());
+  await lockPage(a);   // flushed before the reload
+  await sync(b);
   expect(await b.evaluate(() => notes.items().find((i) => i.id === 'doc').meta)).toEqual({ t: 'v3' });
 });
 
-test('collection: a newer index on another device is merged on focus, onChange fires, no "newer versions" notice', async ({ browser }) => {
+test('onChange: own writes (remote: false) and, on focus, what another device changed in a list (remote: true, item names), without a notice', async ({ browser }) => {
   const { a, b } = await twoDevices(browser);
-  await a.evaluate(() => { window.changes = []; notes.onChange((c) => changes.push({ added: c.added, removed: c.removed, changed: c.changed, n: c.items.length })); });
+  await a.evaluate(() => { window.changes = []; store.onChange((c) => changes.push(c)); });
+  await a.evaluate(() => notes.set('mine', { t: 'm' }));
+  await a.evaluate(() => store.set('plain', { v: 1 }));
+  await a.evaluate(async () => { const h = notes.autosave('mine', () => ({ t: 'm2' }), { delayMs: 50 }); h.changed(); await h.flush(); h.stop(); });
+  await a.evaluate(() => notes.remove('mine'));
+  expect(await a.evaluate(() => changes)).toEqual([
+    { names: ['notes/mine'], remote: false }, { names: ['plain'], remote: false }, { names: ['notes/mine'], remote: false }, { names: ['notes/mine'], remote: false },
+  ]);
+  await a.evaluate(() => { changes.length = 0; });
   await b.evaluate(() => notes.set('nb', { t: 'from b' }));
-  await a.evaluate(() => window.dispatchEvent(new Event('focus')));
-  await expect.poll(() => a.evaluate(() => changes.length)).toBe(1);
-  expect(await a.evaluate(() => changes[0])).toEqual({ added: ['nb'], removed: [], changed: [], n: 1 });
+  await sync(a);
+  await expect.poll(() => a.evaluate(() => changes)).toEqual([{ names: ['notes/nb'], remote: true }]);
   expect(await idsOf(a)).toEqual(['nb']);
-  await expect(a.getByText(/Newer versions/)).toHaveCount(0);
-  // the same function registered twice fires once
-  await a.evaluate(() => { window.dup = 0; const f = () => { window.dup++; }; notes.onChange(f); notes.onChange(f); });
-  await b.evaluate(() => notes.set('nb2', { t: 'again' }));
-  await a.evaluate(() => notes.refresh());
-  expect(await a.evaluate(() => window.dup)).toBe(1);
+  await expect(a.locator('[data-wds-notice]')).toHaveCount(0);
+  // a change of meta only, and a removal
+  await a.evaluate(() => { changes.length = 0; });
+  await b.evaluate(() => notes.set('nb', { t: 'changed' }));
+  await b.evaluate(() => notes.remove('nb'));
+  await sync(a);
+  await expect.poll(() => a.evaluate(() => changes)).toEqual([{ names: ['notes/nb'], remote: true }]);
+  expect(await idsOf(a)).toEqual([]);
+  // a handler that was removed is not called
+  await a.evaluate(() => { store.onChange(null); changes.length = 0; });
+  await b.evaluate(() => notes.set('nb3', { t: 'x' }));
+  await sync(a); await sleep(300);
+  expect(await a.evaluate(() => changes)).toEqual([]);
+  expect(await idsOf(a)).toEqual(['nb3']);
 });
 
-
-test('collection: calls queued behind a failing index write fail too (stored), and nothing stays pending', async ({ browser }) => {
-  const { a, vault } = await twoDevices(browser);
-  const owner = nodeClient(w);
-  await owner.unlock({ accessId: idOf(vault), passphrase: vault.passphrase });
-  const indexRid = await owner._rid('notes.index');
-  await a.route('**/datastore/api/**', async (route) => {
-    const r = route.request();
-    if (r.method() === 'PUT' && r.url().endsWith(indexRid)) { await sleep(500); return route.abort('internetdisconnected'); }
-    return route.continue();
-  });
-  const res = await a.evaluate(() => Promise.all(['m1', 'm2', 'm3', 'm4'].map((id) => notes.set(id, { t: id }).then(() => 'ok', (e) => ({ name: e.name, stored: e.stored, id: e.id })))));
-  expect(res.map((r) => r.stored)).toEqual([true, true, true, true]);
-  expect(res.map((r) => r.id)).toEqual(['m1', 'm2', 'm3', 'm4']);
-  await a.unroute('**/datastore/api/**');
-  // the changes stayed queued: the next write carries them
-  await a.evaluate(() => notes.set('m5', { t: 'm5' }));
-  const b = await device(browser, vault);
-  await b.evaluate(NOTES);
-  expect(await idsOf(b)).toEqual(['m1', 'm2', 'm3', 'm4', 'm5']);
-});
-
-test('collection: an index that did not exist at load time is never overwritten blindly (list() of another prefix does not change the base)', async ({ browser }) => {
+test('collection: an index that did not exist at load time is never overwritten blindly', async ({ browser }) => {
   const { a, b } = await twoDevices(browser);   // both loaded a missing index
   await a.evaluate(() => notes.set('a1', { t: 'from a' }));
-  await b.evaluate(() => store.list('files/'));   // the core now knows the index version, the collection does not
+  await b.evaluate(() => store.get('notes.index'));   // the core now knows the index version, the collection does not
   await b.evaluate(() => notes.set('b1', { t: 'from b' }));
-  await b.evaluate(() => notes.refresh()); await a.evaluate(() => notes.refresh());
+  await sync(b); await sync(a);
   expect(await idsOf(a)).toEqual(['a1', 'b1']);
   expect(await idsOf(b)).toEqual(['a1', 'b1']);
   expect(await b.evaluate(() => notes.items().find((i) => i.id === 'a1').meta)).toEqual({ t: 'from a' });
@@ -572,7 +513,7 @@ test('collection: a delayed op with an older entity version does not overwrite t
   await owner.unlock({ accessId: idOf(vault), passphrase: vault.passphrase });
   const indexRid = await owner._rid('notes.index');
   await a.evaluate(() => notes.set('n', { t: 'v1' }));
-  await b.evaluate(() => notes.refresh());
+  await sync(b);
   await b.evaluate(() => store.get('notes/n'));   // b knows version 1 of the note
   let release; const gate = new Promise((r) => { release = r; });
   await b.route('**/datastore/api/**', async (route) => {
@@ -580,115 +521,106 @@ test('collection: a delayed op with an older entity version does not overwrite t
     if (r.method() === 'PUT' && r.url().endsWith(indexRid)) await gate;
     return route.continue();
   });
-  const pending = b.evaluate(() => notes.set('n', { t: 'B1' }).then(() => 'done'));   // entity v2 is stored, its index op waits
-  await expect.poll(() => a.evaluate(() => store.get('notes/n', { fresh: true })), { timeout: 10000 }).toEqual({ t: 'B1' });
+  await b.evaluate(() => { window.pendingSet = notes.set('n', { t: 'B1' }).then(() => 'done'); });   // entity v2 is stored, its index op waits
+  await expect.poll(() => a.evaluate(() => store.get('notes/n')), { timeout: 10000 }).toEqual({ t: 'B1' });
   await a.evaluate(() => notes.set('n', { t: 'A2' }));   // v3, index entry written
   release();
-  await pending;
-  await a.evaluate(() => notes.refresh()); await b.evaluate(() => notes.refresh());
-  expect(await a.evaluate(() => notes.items().map((i) => i.meta.t))).toEqual(['A2']);
-  expect(await b.evaluate(() => notes.items().map((i) => i.meta.t))).toEqual(['A2']);
-  expect(await a.evaluate(() => store.get('notes/n', { fresh: true }))).toEqual({ t: 'A2' });
+  await b.evaluate(() => window.pendingSet);
+  await expect.poll(async () => { await sync(a); await sync(b); return [await a.evaluate(() => notes.items().map((i) => i.meta.t)), await b.evaluate(() => notes.items().map((i) => i.meta.t))]; }, { timeout: 15000 }).toEqual([['A2'], ['A2']]);
+  expect(await a.evaluate(() => store.get('notes/n'))).toEqual({ t: 'A2' });
 });
 
-test('collection: a refresh whose read was overtaken by a write does not drop the new item', async ({ browser }) => {
-  const { a, vault } = await twoDevices(browser);
+test('collection: a check whose read was overtaken by a write does not drop the new item', async ({ browser }) => {
+  const { a, b, vault } = await twoDevices(browser);
   const owner = nodeClient(w);
   await owner.unlock({ accessId: idOf(vault), passphrase: vault.passphrase });
   const indexRid = await owner._rid('notes.index');
   await a.evaluate(() => notes.set('one', { t: 'one' }));
+  await b.evaluate(() => notes.set('other', { t: 'other' }));   // the index on the server is newer than a's copy: the check reads it
   await a.route('**/datastore/api/**', async (route) => {
     const r = route.request();
     if (r.method() === 'GET' && r.url().includes(indexRid)) { const resp = await route.fetch(); await sleep(800); return route.fulfill({ response: resp }); }
     return route.continue();
   });
-  const refreshing = a.evaluate(() => notes.refresh().then(() => 'ok'));
-  await sleep(200);
+  const checking = sync(a);
+  await sleep(300);
   await a.evaluate(() => notes.set('two', { t: 'two' }));   // written while the (older) read is still on its way
-  await refreshing;
+  await checking;
   await a.unroute('**/datastore/api/**');
-  expect(await idsOf(a)).toEqual(['one', 'two']);
+  expect(await idsOf(a)).toEqual(['one', 'other', 'two']);
 });
 
-test('lock keeps the pre-lock state even when onLock clears the very object getState returned', async ({ browser }) => {
-  const { page, vault } = await setup(browser);
-  await page.evaluate(() => {
-    window.state = { text: 'precious words', items: [1, 2, 3] };
-    window.h = store.autosave('draft', () => window.state, { delayMs: 60000 });
-    store.onLock(() => { window.state.text = ''; window.state.items.length = 0; });
-    window.h.changed();
-  });
-  await page.route('**/datastore/api/**', (route) => route.abort('internetdisconnected'));
-  await page.evaluate(() => store.lock());
-  expect(await page.evaluate(() => window.state)).toEqual({ text: '', items: [] });
-  await page.unroute('**/datastore/api/**');
-  await unlockViaUi(page, vault.accessId, vault.passphrase);
-  expect(await page.evaluate(() => store.get('draft'))).toEqual({ text: 'precious words', items: [1, 2, 3] });
-});
-
-test('collection: add({ created }) orders the list; flush() resolves when queued index changes are on the server and rejects while they cannot be written', async ({ browser }) => {
-  const { a, b, vault } = await twoDevices(browser);
-  await a.evaluate(() => notes.set('late', { t: 'late' }, { created: 2000 }));
-  await a.evaluate(() => notes.set('early', { t: 'early' }, { created: 1000 }));
-  expect(await a.evaluate(() => notes.items().map((i) => i.id + ':' + i.created))).toEqual(['early:1000', 'late:2000']);
-  expect(await a.evaluate(() => notes.add({ t: 'x' }, { created: 'yesterday' }).then(() => 'ok', (e) => e.name))).toBe('UsageError');
-  await a.evaluate(() => notes.flush());   // nothing waiting: resolves at once
-  // an index write fails: the change is queued, flush() fails too and keeps it; when the network is back flush() writes it
-  const owner = nodeClient(w);
-  await owner.unlock({ accessId: idOf(vault), passphrase: vault.passphrase });
-  const indexRid = await owner._rid('notes.index');
-  await a.route('**/datastore/api/**', (route) => (route.request().method() === 'PUT' && route.request().url().endsWith(indexRid) ? route.abort('internetdisconnected') : route.continue()));
-  const err = await a.evaluate(() => notes.set('q', { t: 'q' }).then(() => null, (e) => ({ stored: e.stored, id: e.id })));
-  expect(err).toEqual({ stored: true, id: 'q' });
-  expect(await a.evaluate(() => notes.flush().then(() => 'ok', (e) => ({ name: e.name, stored: e.stored })))).toEqual({ name: 'OfflineError', stored: undefined });
-  await a.unroute('**/datastore/api/**');
-  await a.evaluate(() => notes.flush());
-  await b.evaluate(() => notes.refresh());
-  expect(await idsOf(b)).toEqual(['early', 'late', 'q']);
-});
-
-test('collection.set is an upsert: a new id gets its index entry (created from the option or now), an existing entry keeps its date, and a record this page has not read is a conflict, not a silent overwrite', async ({ browser }) => {
+test('collection.set is an upsert: a new id gets its list entry, an existing entry keeps its place, and a record this page has not read is a conflict, not a silent overwrite', async ({ browser }) => {
   const { a, b } = await twoDevices(browser);
-  const before = Date.now();
-  await a.evaluate(() => notes.set('n1', { t: 'one' }, { created: 1000 }));
+  await a.evaluate(() => notes.set('n1', { t: 'one' }));
   await a.evaluate(() => notes.set('n2', { t: 'two' }));
-  const mine = await a.evaluate(() => notes.items().map((i) => [i.id, i.created, i.meta.t]));
-  expect(mine[0]).toEqual(['n1', 1000, 'one']);
-  expect(mine[1][0]).toBe('n2'); expect(mine[1][1]).toBeGreaterThanOrEqual(before); expect(mine[1][2]).toBe('two');
-  // the index entry is on the server: another device sees both after a refresh, without reading the items
-  await b.evaluate(() => notes.refresh());
+  expect(await a.evaluate(() => notes.items().map((i) => [i.id, i.meta.t]))).toEqual([['n1', 'one'], ['n2', 'two']]);
+  // the list entry is on the server: another device sees both after a check, without reading the items
+  await sync(b);
   expect(await idsOf(b)).toEqual(['n1', 'n2']);
-  // set on an existing entry: meta follows, the creation date stays
-  await a.evaluate(() => notes.set('n1', { t: 'one!' }, { created: 5 }));
-  expect(await a.evaluate(() => notes.items().filter((i) => i.id === 'n1').map((i) => [i.created, i.meta.t]))).toEqual([[1000, 'one!']]);
-  // a bad created is refused before anything is written
-  expect(await a.evaluate(() => notes.set('n3', { t: 'x' }, { created: 'yesterday' }).then(() => 'ok', (e) => e.name))).toBe('UsageError');
-  expect(await a.evaluate(() => notes.get('n3'))).toBeUndefined();
-  expect(await idsOf(a)).toEqual(['n1', 'n2']);
+  // set on an existing entry: meta follows, the place stays
+  await a.evaluate(() => notes.set('n1', { t: 'one!' }));
+  expect(await a.evaluate(() => notes.items().map((i) => [i.id, i.meta.t]))).toEqual([['n1', 'one!'], ['n2', 'two']]);
   // b lists n1 but has never read it: its set() meets the stored version, and the conflict rules decide (here: the handler keeps b's value)
-  await b.evaluate(() => { window.calls = []; store.onConflict('notes/', (c) => { calls.push(c.name + ':' + c.op); c.keepMine(); }); });
+  await b.evaluate(() => { window.calls = []; store.onConflict((c) => { calls.push(c.name + ':' + c.mine.deleted); return 'mine'; }); });
   const r1 = await b.evaluate(() => notes.set('n1', { t: 'from b' }));
   expect(r1.resolution).toBe('mine');
-  expect(await b.evaluate(() => calls)).toEqual(['notes/n1:set']);
-  await a.evaluate(() => notes.refresh());
-  expect(await a.evaluate(() => notes.items().filter((i) => i.id === 'n1').map((i) => [i.created, i.meta.t]))).toEqual([[1000, 'from b']]);
+  expect(await b.evaluate(() => calls)).toEqual(['notes/n1:false']);
+  await sync(a);
+  expect(await a.evaluate(() => notes.items().filter((i) => i.id === 'n1').map((i) => i.meta.t))).toEqual(['from b']);
   expect(await a.evaluate(() => notes.get('n1'))).toEqual({ t: 'from b' });
-  // keeping the stored version instead: the value is not overwritten and the index shows its meta
-  await b.evaluate(() => { store.onConflict('notes/', (c) => c.keepTheirs()); });
+  // keeping the stored version instead: the value is not overwritten and the list shows its meta
+  await b.evaluate(() => { store.onConflict(null); store.onConflict(() => 'theirs'); });
   await a.evaluate(() => notes.set('n2', { t: 'two, edited by a' }));
   const r2 = await b.evaluate(() => notes.set('n2', { t: 'from b' }));
   expect([r2.resolution, r2.value]).toEqual(['theirs', { t: 'two, edited by a' }]);
   expect(await b.evaluate(() => notes.items().filter((i) => i.id === 'n2').map((i) => i.meta.t))).toEqual(['two, edited by a']);
 });
 
-test('collection.get(id, { fresh }): ignores the copy list() kept, like store.get; without the option the kept copy is returned; a missing record still queues the index repair', async ({ browser }) => {
-  const { page, vault, other } = await setup(browser);
-  const p2 = await device(browser, vault);
-  await p2.evaluate(async () => { window.items = store.collection('items/'); await items.load(); });
-  await other.put('items/a', { i: 1 });
-  await p2.evaluate(async () => { await store.list('items/'); });          // list() keeps what it downloaded for a moment
-  await other.put('items/a', { i: 'new' });
-  expect(await p2.evaluate(() => items.get('a'))).toEqual({ i: 1 });
-  expect(await p2.evaluate(() => items.get('a', { fresh: true }))).toEqual({ i: 'new' });
-  expect(await p2.evaluate(() => items.get('missing', { fresh: true }))).toBeUndefined();
+test('autosave: a re-read of the record while the editor holds unsaved text does not move the base; a re-read in the clean state does', async ({ browser }) => {
+  const { page, other } = await setup(browser);
+  await page.evaluate(async () => { await store.set('note', { t: 'v1' }); window.text = await store.get('note'); window.h = store.autosave('note', () => window.text, { delayMs: 60000 }); });
+  // another member saves; the app (an onChange handler, a total over all records) reads the record again while the person has typed
+  await bump(other, 'note', { t: 'theirs' });
+  await page.evaluate(async () => { window.text = { t: 'v1 and more typing' }; h.changed(); await store.get('note'); window.p = h.flush(); });
+  await expect(dialog(page).getByRole('heading', { name: 'Another device or person saved a newer version' })).toBeVisible();
+  await dialog(page).getByRole('button', { name: 'Keep theirs' }).click();
+  expect(await page.evaluate(() => p)).toBe('saved');
+  expect((await other.getRecord('note')).value).toEqual({ t: 'theirs' });
+  // in the clean state a re-read is what the page shows: the next edit builds on it
+  await bump(other, 'note', { t: 'theirs 2' });
+  await page.evaluate(async () => { window.text = await store.get('note'); window.text = { t: 'theirs 2, edited' }; h.changed(); await h.flush(); });
+  expect(await page.evaluate(() => store.get('note'))).toEqual({ t: 'theirs 2, edited' });
+});
+
+test('a failed security check is a dialog with OK, once per page; the page goes on', async ({ browser }) => {
+  const { page } = await setup(browser);
+  await page.evaluate(() => store.set('safe', { t: 1 }));
+  await page.route(/\/records\//, async (route) => {
+    if (route.request().method() !== 'GET') return route.continue();
+    const res = await route.fetch();
+    const body = Buffer.from(await res.body());
+    body[body.length - 1] ^= 1;
+    await route.fulfill({ response: res, body });
+  });
+  const err = () => page.evaluate(() => store.get('safe').then(() => null, (e) => e.name));
+  expect(await err()).toBe('IntegrityError');
+  const d = dialog(page);
+  await expect(d.getByRole('heading', { name: 'A security check failed' })).toBeVisible();
+  await expect(d).toContainText('Do not enter new data');
+  await d.getByRole('button', { name: 'OK' }).click();
+  await expect(page.locator('dialog.wds-dialog')).toHaveCount(0);
+  expect(await err()).toBe('IntegrityError');
+  await sleep(300);
+  await expect(page.locator('dialog.wds-dialog')).toHaveCount(0);   // not shown a second time
+});
+
+test('lock empties the page before the reload: no typed text can be put back into the fields', async ({ browser }) => {
+  const { page } = await setup(browser);
+  await page.evaluate(() => { const i = document.createElement('input'); i.id = 'secret'; document.body.appendChild(i); i.value = 'plain text of the vault'; });
+  await page.evaluate(() => { addEventListener('pagehide', () => sessionStorage.setItem('at-unload', document.body.children.length + ':' + (document.getElementById('secret') ? 'field' : 'no field'))); });
+  const reloaded = page.waitForEvent('load');
+  await page.evaluate(() => { store.lock(); });
+  await reloaded;
+  expect(await page.evaluate(() => sessionStorage.getItem('at-unload'))).toBe('0:no field');
 });

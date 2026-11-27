@@ -29,12 +29,12 @@ export function tmpDir() {
 }
 
 // A file:// page that loads the bundle (from disk, or from the test server with SRI).
-export function writePage(name, { src, integrity, css } = {}) {
+export function writePage(name, { src, integrity, css, lang } = {}) {   // no <html lang> unless asked for: the library then follows navigator.language
   const dir = tmpDir();
   const tag = integrity
     ? '<script src="' + src + '" integrity="' + integrity + '" crossorigin="anonymous"></script>'
     : '<script src="' + (src || ('file://' + BUNDLE)) + '"></script>';
-  const html = '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>wds ui test</title>' + (css ? '<style>' + css + '</style>' : '') + tag + '</head>' +
+  const html = '<!doctype html><html' + (lang ? ' lang="' + lang + '"' : '') + '><head><meta charset="utf-8"><title>wds ui test</title>' + (css ? '<style>' + css + '</style>' : '') + tag + '</head>' +
     '<body><main id="app"><h1>Test app</h1><p id="out"></p><input type="file" id="file"><button id="app-button">App button</button></main></body></html>';
   const p = join(dir, name);
   writeFileSync(p, html);
@@ -69,15 +69,22 @@ export function pixelAt(png, x, y) {
   return [prev[x * bpp], prev[x * bpp + 1], prev[x * bpp + 2]];
 }
 
-// Open the page and create the store: window.store.
+// Open the page and create the store: window.store. The store is created again after every load, so after a lock (which reloads the page) `store` is a fresh one.
 export async function openApp(context, w, { page: url, cfg } = {}) {
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
+  await page.addInitScript((c) => { document.addEventListener('DOMContentLoaded', () => { window.store = WDS.connect(c); }); }, Object.assign({ scope: w.scope, baseUrl: w.service, escrowPins: w.pins }, cfg || {}));
   await page.goto(url || writePage('app.html'));
-  await page.evaluate((c) => { window.store = WDS.connect(c); }, Object.assign({ scope: w.scope, baseUrl: w.service, escrowPins: w.pins }, cfg || {}));
   page.errors = errors;
   return page;
+}
+
+// store.lock() saves what is pending and reloads the page: resolves when the new page has loaded (its store is locked).
+export async function lockPage(page) {
+  const loaded = page.waitForEvent('load');
+  await page.evaluate(() => { void store.lock(); });
+  await loaded;
 }
 
 // HIBP stand-in: the passphrase in opts.pwned is "found"; everything else is padded noise.

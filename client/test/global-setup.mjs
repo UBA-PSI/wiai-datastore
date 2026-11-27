@@ -7,6 +7,6 @@ import { build } from '../build.mjs';
 export const TEST_BUNDLE_DIR = fileURLToPath(new URL('../test-results/bundle', import.meta.url));
 
 export default async function globalSetup() {
-  const r = build({ allowAnyPinCount: true, escrowPins: [], retiredEscrow: [], dist: TEST_BUNDLE_DIR });
+  const r = build({ allowAnyPinCount: true, escrowPins: [], retiredEscrow: [], dist: TEST_BUNDLE_DIR, testHooks: true });
   console.log('bundle for browser tests: ' + r.file + ' (' + r.sri + ')');
 }

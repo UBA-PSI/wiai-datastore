@@ -1,7 +1,7 @@
 // Browser tests of what a person sees in the dialogs of wds-ui.js: layout inside a host page with aggressive global CSS, error
 // texts, the language switch, notices. (ui.spec.mjs covers the behaviour; these tests cover the look and the wording.)
 import { test, expect } from '@playwright/test';
-import { startTestWorld, openApp, mockHibp, dialog, createVaultViaUi, nodeClient, writePage, core } from './ui-helpers.mjs';
+import { startTestWorld, openApp, mockHibp, dialog, createVaultViaUi, unlockViaUi, lockPage, nodeClient, writePage, core } from './ui-helpers.mjs';
 
 let w;
 test.beforeEach(async () => { w = await startTestWorld(); });
@@ -76,11 +76,11 @@ test('unlocking a deleted vault says that the vault was deleted, not that an inv
       const ctx = await browser.newContext({ locale: 'en-US' });
       const page = await openApp(ctx, w2);
       const vault = await createVaultViaUi(page);
-      await page.evaluate(() => store.lock());
+      await lockPage(page);
       const owner = nodeClient(w2);                                               // the owner deletes the vault from another device
       await owner.unlock({ accessId: core.normalizeCode(vault.accessId), passphrase: vault.passphrase });
       await owner.deleteVault();
-      await page.evaluate((l) => { store.setLocale(l); window.unlockP = store.unlock().catch(() => {}); }, locale.slice(0, 2));
+      await page.evaluate((l) => { document.documentElement.setAttribute('lang', l); window.unlockP = store.unlock().catch(() => {}); }, locale.slice(0, 2));
       const d = dialog(page);
       await d.getByLabel(locale === 'en-US' ? 'Access ID' : 'Zugangskennung').fill(vault.accessId);
       await d.getByLabel(locale === 'en-US' ? 'Passphrase' : 'Passphrase', { exact: true }).fill(vault.passphrase);
@@ -138,15 +138,14 @@ test('passphrases: well-known German ones are refused, and without a breach chec
   await expect(d.getByRole('heading', { name: 'Save your access sheet' })).toBeVisible();
 });
 
-test('setLocale: dialogs and notices follow the app; the faculty key has its own badge; hints sit under their buttons; lock clears notices', async ({ browser }) => {
+test('<html lang>: dialogs follow the page language; the faculty key has its own badge; hints sit under their buttons; lock leaves no notice', async ({ browser }) => {
   const ctx = await browser.newContext({ locale: 'en-US', viewport: { width: 1000, height: 900 } });
   const page = await openApp(ctx, w);
   await createVaultViaUi(page);
-  expect(await page.evaluate(() => store.locale)).toBe('en');
-  expect(await page.evaluate(() => store.setLocale('de-AT'))).toBe('de');
-  await page.evaluate(() => { window.shareP = store.share(); });
+  await page.evaluate(() => document.documentElement.setAttribute('lang', 'de-AT'));
+  await page.evaluate(() => { window.shareP = store.openVault(); });
   const d = dialog(page);
-  await expect(d.getByRole('heading', { name: 'Teilen und Zugriff' })).toBeVisible();
+  await expect(d.getByRole('heading', { name: 'Tresor' })).toBeVisible();
   const escrow = d.locator('[data-wds=person-escrow]');
   await expect(escrow).toContainText('Wiederherstellungsschlüssel der Fakultät');
   await expect(escrow.locator('.wds-badge')).toHaveText('Fakultät, nur zur Wiederherstellung');
@@ -156,25 +155,25 @@ test('setLocale: dialogs and notices follow the app; the faculty key has its own
   await expect(group).toHaveCount(1);
   await expect(group.locator('.wds-hint')).toContainText('Ersetzt die Schlüssel');
   await expect(d.locator('.wds-act').filter({ has: page.getByRole('button', { name: 'Jetzt sperren' }) }).locator('.wds-hint')).toBeVisible();
+  // the export reports in the language of the page
+  await page.evaluate(() => store.set('a', { x: 1 }));
+  await d.getByRole('button', { name: 'Alles exportieren (ZIP, unverschlüsselt)' }).click();
+  await expect(d.getByText('Export abgeschlossen: 1 Datensätze.')).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toHaveCount(0);
-  // a notice in the language of the app, and no notice left on the lock screen
-  await page.evaluate(() => store.set('a', { x: 1 }));
-  await page.evaluate(() => { window.exp = store.exportAll(); });
-  const toast = page.locator('.wds-toast');
-  await expect(toast.filter({ hasText: 'Export abgeschlossen: 1 Datensätze.' })).toBeVisible();
-  await page.evaluate(() => window.exp);
-  await page.evaluate(() => store.lock());
-  await expect(page.locator('.wds-toast')).toHaveCount(0);
+  await lockPage(page);
+  await expect(page.locator('.wds-notice')).toHaveCount(0);
   await ctx.close();
 });
 
-test('a notice with a 390 px screen does not grow over the page', async ({ browser }) => {
+test('a notice on a 390 px screen stays inside the screen', async ({ browser }) => {
+  const first = await openApp(await browser.newContext(), w);
+  const vault = await createVaultViaUi(first);
   const ctx = await browser.newContext({ locale: 'en-US', viewport: { width: 390, height: 700 } });
   const page = await openApp(ctx, w);
-  await createVaultViaUi(page);
-  await page.evaluate(() => { for (let i = 0; i < 6; i++) store.exportAll().catch(() => {}); });
-  const box = await page.locator('.wds-toasts').boundingBox();
+  await unlockViaUi(page, vault.accessId, vault.passphrase);   // a new device: a notice
+  await expect(page.locator('[data-wds-notice=newdevice]')).toBeVisible();
+  const box = await page.locator('.wds-notices').boundingBox();
   expect(box.height).toBeLessThanOrEqual(700 * 0.4 + 2);
   expect(box.x).toBeGreaterThanOrEqual(0);
   expect(box.x + box.width).toBeLessThanOrEqual(390);

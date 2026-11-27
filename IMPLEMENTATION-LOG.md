@@ -909,3 +909,136 @@ Library SRI unchanged by a rebuild: `sha384-zNTgKx5jm6ESzFb+xzoqPjMSbtWdS/DSbc5D
 Freeze library version 1.0.0 (`node client/build.mjs --freeze`) before the first app embeds its tag.
 
 Nothing committed. `tools/lib/dialog-internals.mjs` is untracked.
+
+## Round I: complexity reduction
+
+### Principle
+
+The owner asked for another creative, critical, adversarial pass: the datastore must be as simple as possible for the developer's Claude to use correctly, easy for the lay app developer to see through (what is stored where, who can read it, what happens on conflict, lock, share and migration), and client-app-agnostic. The principle: **a small, general core; edge cases and special cases go to the app's Claude**, which is an Opus-class model and adds them ad hoc in the app when an app needs them. What stays in the library is what an app cannot do safely itself: E2EE and key handling, the vault/membership/revocation/rekey protocol, escrow recovery, conflict detection (version checks), and the security-relevant dialogs (create vault, unlock, access sheet, share/revoke, recovery acknowledgement). Everything else was removed, shrunk, merged or moved into a docs recipe of a few lines. `wds-core.js` is untouched.
+
+The round had two parts: the cut (advisors with a fresh, a minimal and a lay view proposed, a plan merged them) and a review of the result, whose findings were fixed in the same round.
+
+### Public API, before and after
+
+- **Before (round H, 26 names on the store plus 13 on a collection):** `connect({ scope, baseUrl, locale, label })`, `unlock`, `onLock`, `onUnlock`, `get(name, { fresh })`, `getMany`, `set`, `getRecord`, `getBlob`, `list`, `remove`, `autosave` (`onStatus, onError, onSaved, onResolved`; `status`, `error`), `collection` (`load, refresh, items, has, get, getAll, add, set, remove, autosave, flush, rebuild, onChange`), `onConflict` (global, prefix, name; `keepMine/keepTheirs/merge/ask`), `history`, `restore`, `showHistory`, `onStale`, `share`, `exportAll`, `lock`, `setLocale`, `status`, `isUnlocked`, `usage`, `migrateLocal` (with `h.id/ref/blob/created/skip`, `from`, copy names, result `{ status, deleted, copies, why }`).
+- **After (14 names plus 8 on a collection):** `connect({ scope, baseUrl? })`, `unlock`, `status` (`{ unlocked, role, sandbox }`, and `<html data-wds-role>` while unlocked), `get` (a JSON value or a Blob), `set`, `remove`, `autosave(name, getState, { delayMs, onStatus })` -> `{ changed, flush, stop }`, `collection(prefix, { meta })` -> `{ load, items, get, getAll, add, set, remove, autosave }`, `onChange(({ names, remote }) => …)`, `onConflict(c => 'mine' | 'theirs' | { merged } | undefined)`, `showHistory`, `openVault`, `lock`, `migrateLocal({ id, indexedDB, localStorage, map })` -> `{ status: nothing | declined | migrated | failed, why? }`.
+
+### What was cut, merged or moved, and why
+
+- **Lock = reload.** `store.lock()`, a revoked access and a cancelled or foreign re-unlock flush pending writes (up to 8 s), empty the page body and reload, so no vault data stays in the page. Offline, a dialog offers the backup and "Lock anyway". Gone: `onLock`/`onUnlock`, snapshots and their replay, the "same collection object" rule. Why: an app had to clear its own screen correctly, and the lay developer could not see whether it did; a reload is visibly complete.
+- **One conflict handler, one change event.** `onConflict(fn)` with a plain return value instead of a global, prefix and name router with four methods (routing is an `if` on `c.name`); `onChange({ names, remote })` after own writes and after the focus check instead of `collection.onChange`, `refresh` and `onStale`. The default "newer versions elsewhere" notice is gone: the app cannot act on it, and the version check already prevents every overwrite.
+- **One vault dialog for every role.** `store.openVault()` (members and invites for owners, own access, change passphrase, the access sheet again, "Export everything (ZIP, unencrypted)", "Lock now") replaces `share()`, `exportAll()` and the separate app buttons for them. Export stays as the way out, in that dialog and at `/export/`.
+- **Fewer read methods.** `get` returns a JSON value or a Blob and always asks the server; `getMany`, `getRecord`, `getBlob`, `list`, `usage`, `isUnlocked`, `history`/`restore` (the dialog `showHistory` stays) are gone. Sorting, files next to items, drafts and reloading lists are recipes of a few lines in integration.md.
+- **Collections** write the item first and queue the list entry; `created`, `rebuild`, `flush`, `has`, `refresh`, `collection.onChange`, `prefix`, `indexName` and `err.stored` are gone. A failed list write stays queued (next write, focus, online, before lock or unload) and is part of the backup; the export repairs orphans.
+- **Notices are status lines** (6 s, `pointer-events: none`, no buttons); whatever needs an answer is a dialog. The toast re-parenting into the top layer, the 400 ms interval, sticky toasts and the full-width sandbox bar with its page shift are gone; the sandbox has a corner badge.
+- **Language from `<html lang>`** instead of `connect({ locale })`, `setLocale` and `label`; dialogs name a record by the `title` of its list entry or "this entry".
+- **migrateLocal, what end users see:** one question dialog with a "Download a copy of the old data first" link, an outcome line, or a failure dialog. Gone: the `h` helpers, `from`, the double map run, the marker record, copy names for differing targets (the normal conflict path decides), `migrate-large`, the skip-ack checkbox, the copies toast, the members' notice at every start, the data: URL conversion, the test global; 56 text keys became 15. `map(old, ref)` runs once per row with `old = { source, key, value, id }`. After the review (below) the take-over has two steps: the first start copies (create-only) and deletes nothing; the next start asks once "Is everything in the app?" and deletes only rows whose hash still matches. Unclaimed rows are never deleted; the sandbox never asks the second question.
+- **Guides.** integration.md 760 to 346 lines, porting.md 353 to 106, llms.txt 75 to 41 (the only copy of the rules; the line-range index and the code in `docs.py` that built it are gone). prompt.py and the CLAUDE.md snippet say "read llms.txt and follow its rules".
+- **Tools.** One documented use: `node tools/wds-verify.mjs app.html [--config wds-verify.json]` against the sandbox (the default target); everything else is internal (tools/README.md). Three check families (static, canary leak, data after reload with the seed migration step). `lock()` is checked as "the page reloads and shows no vault data before the unlock". `drive-library.mjs` is merged into `dialog-internals.mjs` (internal); `--migration-delete`, the test global, `migration-large` and about 15 migration finding ids are gone. The new `tools/lib/report.mjs` holds the report writer.
+- **Real-scope test path** (an owner decision, taken in the review on the recommendation of two reviewers): `~/.wds/join-code`, `readJoinCode`, `joinCodeFile`, `deleteVault` and their tests, the test-vault paragraphs of prompt.py (both languages, every enrollment mode), `test_vault_hint`, the paragraphs in porting.md and tools/README.md. App developers test only in the sandbox. The closing step replaced the last remnant, the dashboard's `join_code_test_hint` ("Claude may ask you for help with an optional test"), by `join_code_claude_hint` ("Claude does not need the code: Claude tests in the sandbox. Never write the code into the conversation with Claude."). The CLAUDE.md snippet keeps one sentence: the join code is a secret of the staff, never in the app, the files or the chat; `createVault` of the internal drive code takes `joinCode` as an option.
+
+### Fixed in the review of the round
+
+- **Critical: a re-read moved the base of the next save.** The base of a save is now the version this page last read or wrote (a map `seen` in the UI layer). A read of a record whose autosave handle holds unsaved text does not move it, so a `getAll` in an `onChange` handler no longer turns the next autosave into a silent overwrite (reproduced in `ui-store.spec.mjs`; the guide's example has a two-device test in `docs-recipes.spec.mjs`). Button saves keep the documented rule: the library cannot tell a `getAll` for totals from a `get` that feeds a form; the rule is in the `get` row of integration.md and in porting.md section 2.
+- **Autosave after "theirs"/"merged"** arrives only through `onChange({ names, remote: true })`; `info.value` and `info.resolution` are gone from `onStatus`. `set`/`remove` keep `resolution` and `value` in their results.
+- **Lock = reload, Firefox:** the body is emptied before `location.reload()` (Firefox restored typed text into static fields; an integration case fails in Firefox without the line).
+- **A cancelled re-unlock, or another vault,** ends like the lock button, with the backup offer when something is unsaved.
+- **Notices that must not be missed:** an `IntegrityError`/rollback and a redeemed invitation are dialogs with one OK button (`data-wds-view="notice"`). Side effect: an owner sees one OK dialog per redeemed invitation after unlock; the zeit-notizen test helper dismisses it.
+- **migrateLocal in two steps** (above). Reason: the likely loss is a `map` that forgets a field, and no read-back finds that; the person who has seen the app with the copy is the only check that does. Gone with it: the read-back compare, the `deleted` field, the sandbox hook and the shared done-marker (the marker is per scope and vault). Writes are create-only even after a `get`.
+- **Minor:** a second `onChange`/`onConflict` handler is a `UsageError` (`null` removes the first); the test hooks are only in the test bundles (`build.mjs` option `testHooks`); wds-verify's default target is the sandbox; docs gaps and stale statements fixed; the import recipe adds only what is missing; two tests are back (two tabs run `migrateLocal` at once; the session ends during the copy) plus one for create-only after a `get`.
+- **Found while closing:** `client/test/protocol-members.test.mjs` failed about one run in ten (3 of 30): it altered the last symbol of an invite code to `0`/`1`, which changes a data bit and the four check bits, so about 1 in 16 altered codes still passed the check and reached the server (`not_found` instead of `UsageError`). The test now flips only the lowest bit of the last symbol, a check bit (0 failures in 40 runs). `wds-core.js` is unchanged.
+
+### Owner decisions still open, with recommendations
+
+Not applied. The two that the library plan assumed (the migration's end-user view, the vault button) are applied and listed for the record.
+
+1. **Key file** (a user-visible concept): remove the key-file download from the access sheet and the share/vault dialog, the drop zone and file chooser in unlock, `err.keyfile.*`, and the key file on the `/export/` page. **Recommendation: remove.** It contains no secret, duplicates the access ID, and is a sixth thing users have to tell apart. The condition is met: the unlock dialog already remembers the last access ID per scope on the device (`wds:<scope>:access_id` in `wds-core.js`, prefilled by the unlock view; a sandbox wipe forgets it).
+2. **Breach check (HIBP):** (a) route it through the datastore server (`/api/.../pwned-range/<5 hex>`, cached and rate-limited, falling back to the strict local estimator when unavailable): one fixed CSP, no second privacy sentence, no scope-dependent branches; (b) remove HIBP and the toggle and always use the strict estimator; (c) keep it. **Recommendation: (a); (b) if outbound access from the server is unwanted.** Either removes the scope check "breach check on but host missing from connect-src", the dashboard toggle text and every conditional privacy paragraph.
+3. **Real-scope test path:** applied in the review (above). Round H's reason for keeping it (prompt.py demands `deleteVault`) was circular.
+4. **Prompt form:** make the dashboard's "Text für Claude" one nearly constant English text that is also the CLAUDE.md/AGENTS.md snippet (scope ID, "read <base>/llms.txt first and follow its rules", the privacy sentence, "run wds-verify"), and drop the German prompt variant (the dashboard explains its purpose in German). **Recommendation: yes.**
+5. **Enrollment modes:** remove the choice join code / open / nobody and keep the join code only; to stop new vaults the admin rotates the code or the operator pauses the app. **Recommendation: yes.** An app meant for anyone publishes its code (the code protects storage, not data). The sandbox stays open.
+6. **Recovery contact e-mail:** remove the optional field and the code-less 7-day recovery path; the recovery code with the 72 h wait is the only path. **Recommendation: remove** (fewer choices while creating a vault, no plaintext personal data on the server).
+7. **Manual key renewal** ("Meine Schlüssel erneuern" in the vault dialog): remove; automatic renewal at redemption stays. **Recommendation: remove;** the understandable remedy is that the owner revokes and invites again.
+8. **Conflict dialog "Download both":** remove the button, leaving "keep mine" / "keep theirs" plus the line "the other version stays in the history". **Recommendation: remove** (it produces an unencrypted file the user did not ask for; the history holds both versions). Also drop the users.md clause "Apps may show their own dialog".
+9. **Wording:** rename the user's "Wiederherstellungscode" (for example "Notfallcode") so that it is clearly distinct from the faculty's "Wiederherstellungsschlüssel", which then appears only in the official privacy sentence, and use one identical escrow sentence in create, sheet and vault dialog. **Recommendation: yes,** as part of a test and doc sweep; the official privacy sentence stays unchanged.
+10. **Dashboard expert knobs:** remove the editable limits table (the operator raises limits on request), the admin's self-pause (only the operator pauses, so "pausiert" means one thing), the slug field (always derived from the name), the "expert settings always open" cookie, and the vault-table columns "Neu verschlüsseln läuft noch" and "Personen mit Zugang". **Recommendation: yes to all except the limits table;** keep that read-only (values shown, no editing), since the prompt and wds-verify print the limits anyway.
+11. **Migration, what end users see:** one question dialog (with the "download a copy first" link) and an outcome line, or a failure dialog; no migrate-large view, skip-ack checkbox, copies toast or members' notice at every start. **Recommendation: yes; applied** (the library plan assumed it; the review added the second start's deletion question).
+12. **Vault button:** one `store.openVault()` dialog for every role instead of separate share and export entry points in each app. **Recommendation: yes; applied** (it changes where end users find export and lock).
+
+Size effect of the open library items (estimate of the round): key file about 50 lines of wds-ui.js, breach check about 45, recovery contact about 25, manual key renewal about 14, "Download both" about 15.
+
+### Rejected proposals, with reasons
+
+- **A collection item as one row inside the index** (no per-item record): it would move item conflicts from per-record version checks into index merges, which needs a new per-row conflict rule; it uploads the whole index on every edit and pushes long bodies into a two-step recipe anyway. The current model stays, without its extras.
+- **`set` on an unread existing record as a plain write:** breaks "never silently overwrite", which is on the must-stay list. The rule is in the `set` row of the API table; the remedy (get first) is one line.
+- **A thin `importLocal({ copy })` without verification and a backup ZIP on every migration:** without a map the library cannot tell what was claimed, and an unencrypted ZIP would land in Downloads every time. The milder variant (delete the old keys that copy read) fails too: "read" does not mean "copied correctly". (The review then replaced the read-back by the person's confirmation at the second start, for the reason given above.)
+- **"Skip means the row stays, nothing is deleted unless everything copied" over all rows:** adopted with a change: deletion is all-or-nothing over the rows the map claimed, unclaimed rows are never deleted; otherwise a single preference row would block every migration.
+- **Round H's `~tag-hash` copy names for differing targets:** removed; the normal conflict path decides, so there is no second mechanism.
+- **`store.privacyText()`:** an API for a fixed sentence. With HIBP proxied or removed there is one sentence per language, kept once in the docs.
+- **`createInvite` in the drive code and a generic "invite a read member and click everything" scenario in wds-verify:** pre-builds tests for an edge case; the server already rejects writes by read members, and `data-wds-role` plus one CSS line hides the controls.
+- **`col.remove` deleting files named in `meta.files`:** a new feature that encodes one app's data shape; the recipe "delete the file, then the item" is two lines.
+- **`onConflict(prefix|name, fn)` without the global form:** the single global handler was chosen; routing is an `if` on `c.name`.
+- **Language via `connect({ locale })` plus `setLocale`:** `<html lang>` removes the duty entirely.
+- **Keeping the default "newer versions elsewhere" notice:** with `store.onChange` the app renders the change and the version check prevents overwrites; a notice the app cannot act on adds clutter and needs top-layer re-parenting.
+- **Removing `col.autosave`:** editing an item would no longer keep its list meta (title) current, and every app would rebuild that; it keeps the signature of `store.autosave`.
+- **`autosave(name, getState)` without the second-live-handle check:** with lock = reload, start runs once, so a second handle is a bug and is a visible `UsageError`.
+- **Removing `exportAll` and the export page, or keeping them as separate app buttons:** neither; export stays as the way out, in one place (the vault dialog and `/export/`).
+- **Merging integration.md and porting.md:** only ports need the migration part, and two pages of at most 350 and 150 lines each fit one Read.
+- **Dropping `showHistory` and keeping only the history API:** the opposite was chosen; the dialog stays, `history()`/`restore()` go.
+- **Any change to `wds-core.js`, invite labels, the passphrase estimator or the top-layer handling of dialogs:** these carry the security properties (round H's reasoning holds).
+
+### Review items rejected or not done
+
+- Dialogs for `note.suspended`, `note.readOnly`, `note.newDevice`, `note.rekey.failed`: nothing to decide, and a write that fails says so itself (`forbidden`, `quota`).
+- A pinned base for button saves: needs the app's knowledge (see the critical fix).
+- `onChange` for the `theirs` result of `set`/`remove`: the app is inside the call and holds the value.
+- The collection test "merge with a clock a day ahead": the merge no longer compares clocks.
+- A table-driven rewrite of the form driving and the findings of `dynamic-checks.mjs` (984 lines): a large change with a wide net of tests; not attempted.
+
+**Unmet and stated plainly:** the two binding size targets of the round are missed. wds-ui.js is 3245 lines against 3000 (3222 after the cut; the review's base map, integrity dialog and second migration step added what the read-back and the hook removed). tools/lib is 2379 against 1700. What would move them: the open owner decisions on dialogs (about 150 lines of wds-ui.js together, still not quite 3000), and a rewrite of `dynamic-checks.mjs` and its tests.
+
+### Size (wc -l, HEAD = commit e2664dd against now)
+
+| File | Before (HEAD, round H) | After |
+|---|---|---|
+| client/src/wds-core.js | 2038 | 2038 |
+| client/src/wds-ui.js | 4231 | 3245 |
+| docs/site/llms.txt | 75 | 41 |
+| docs/site/integration.md | 760 | 346 |
+| docs/site/porting.md | 353 | 106 |
+| docs/site/users.de.md | 100 | 94 |
+| docs/site/users.en.md | 96 | 90 |
+| tools/wds-verify.mjs | 291 | 210 |
+| tools/README.md | 268 | 99 |
+| client/README.md | 247 | 195 |
+| server/wds_server/docs.py | 573 | 498 |
+| server/wds_server/prompt.py | 170 | 128 |
+| server/wds_server/dashboard.py | 1214 | 1212 |
+| server/wds_server/texts.py | 286 | 285 |
+| PLAN.md | 1154 | 1130 |
+| tools/lib/*.mjs | 2575 (11 files) | 2379 (11 files) |
+| tests (client/test, tools/test, server/tests, examples; .mjs and .py) | 20410 | 19242 |
+
+The tracked diff against HEAD at the close: 62 files changed, 4751 insertions(+), 9490 deletions(-) (tests and docs included; untracked files not counted).
+
+### PLAN.md
+
+Describes the system as it now is: the status list at the top has one round I entry with the review's fixes, §8.1 the 14-name API, §8.5 the vault dialog, notices, `migrateLocal` in two steps and no real-scope test path, §9 wds-verify with the sandbox as default target and `dialog-internals.mjs`, §10 the join-code hint without a test, §16 the open owner decisions of this round and the listing cost without `list()`. Features that are open owner decisions (key file, breach check, recovery contact, enrollment modes, manual key renewal, "Download both", dashboard knobs) are still described, because they still exist.
+
+### Test counts (final sequential run)
+
+| Suite | Result |
+|---|---|
+| `scripts/test-server.sh` | 500 tests OK |
+| `scripts/test-client.sh` | 131 node tests OK, 81 Playwright cases passed (Chromium) |
+| `scripts/test-tools.sh` | 107 passed |
+| `scripts/test-integration.sh` | 158 passed, 4 skipped (Chromium, Firefox, WebKit) |
+| `scripts/test-examples.sh` | 29 passed (Chromium) |
+| `scripts/check-public.sh` | clean (166 files) |
+| `wds-verify examples/zeit-notizen/index.html --target mock --hashes client/dist/hashes.json` | 32 passed, 0 failed, 0 warnings |
+
+The first pass of the client suite stopped at the flaky invite-code test (fixed above); server and client were run again after the fix and after the dashboard text change, the others were not affected by either. A rebuild left `client/dist/hashes.json` unchanged.
+
+Library SRI: see `client/dist/hashes.json` (`tools/test-apps/{good,bad}` and `examples/zeit-notizen/index.html` carry it).
+
+Nothing committed. Untracked: `tools/lib/report.mjs`, `tools/test/dialog-internals.test.mjs`.

@@ -5,9 +5,9 @@
 //  1. Records every network call made through fetch, XMLHttpRequest, WebSocket, sendBeacon, EventSource and form submission, with
 //     the caller classified as "library" (a frame of wds-<version>.js is on the stack) or "app". Calls reach the Node side at once
 //     through window.__wdsLog (a Playwright binding), so they survive a navigation.
-//  2. Wraps WDS.connect so that set/autosave/exportAll of the store, and add/set/autosave of its collections, are logged (record name, time, JSON text of the value). The
+//  2. Wraps WDS.connect so that set/autosave of the store, and add/set/autosave of its collections, are logged (record name, time, JSON text of the value). The
 //     wrapper is a plain object that forwards every call to the real store (whatever methods the store has). The wrapped stores are kept
-//     in window.__wdsStores, so the sandbox run can call the owner API that deletes its vault at the end, if the library has one.
+//     in window.__wdsStores, so the run can call store.lock().
 export function instrument() {
   if (window.__wdsVerifyInstalled) return;
   window.__wdsVerifyInstalled = true;
@@ -99,8 +99,7 @@ export function instrument() {
   // The collections of the store: what the app hands to add/set/autosave is what it writes, so it is logged like store.set (op "cwrite";
   // the collections call the real store inside, not this wrapper). One wrapper per collection object.
   var colWraps = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
-  var colOrigs = typeof WeakMap !== 'undefined' ? new WeakMap() : null;   // wrapper -> the library's collection (store.migrateLocal checks the identity of "col")
-  function wrapCollection(orig) {
+  function wrapCollection(orig, prefix) {
     if (!orig || typeof orig !== 'object') return orig;
     if (colWraps && colWraps.has(orig)) return colWraps.get(orig);
     var w = {};
@@ -109,8 +108,7 @@ export function instrument() {
       if (d && typeof d.value === 'function') {
         w[k] = function () {
           var a = Array.prototype.slice.call(arguments);
-          var prefix = typeof orig.prefix === 'string' ? orig.prefix : '';
-          if (k === 'add') log({ kind: 'store', op: 'cwrite', name: prefix + ((a[1] && a[1].id) || '(new)'), value: json(a[0]) });
+          if (k === 'add') log({ kind: 'store', op: 'cwrite', name: prefix + '(new)', value: json(a[0]) });
           if (k === 'set' && typeof a[0] === 'string') log({ kind: 'store', op: 'cwrite', name: prefix + a[0], value: json(a[1]) });
           if (k === 'autosave' && typeof a[0] === 'string' && typeof a[1] === 'function') {
             var name = prefix + a[0], getter = a[1];
@@ -122,13 +120,8 @@ export function instrument() {
         Object.defineProperty(w, k, { enumerable: true, configurable: true, get: function () { return orig[k]; } });
       }
     });
-    if (colWraps) { colWraps.set(orig, w); colOrigs.set(w, orig); }
+    if (colWraps) colWraps.set(orig, w);
     return w;
-  }
-  // store.migrateLocal({ map }) returns items whose "col" is a collection the app got from the wrapped store: hand the library its own object.
-  function unwrapItems(r) {
-    if (!r || typeof r !== 'object' || !Array.isArray(r.items) || !colOrigs) return r;
-    return Object.assign({}, r, { items: r.items.map(function (it) { return it && typeof it === 'object' && colOrigs.has(it.col) ? Object.assign({}, it, { col: colOrigs.get(it.col) }) : it; }) });
   }
   function wrapStore(orig) {
     if (!orig || typeof orig !== 'object') return orig;
@@ -143,17 +136,7 @@ export function instrument() {
             var name = a[0], getter = a[1];
             a[1] = function () { var v = getter.apply(this, arguments); log({ kind: 'store', op: 'autosave', name: name, value: json(v) }); return v; };
           }
-          if (k === 'collection') return wrapCollection(d.value.apply(orig, a));
-          if (k === 'migrateLocal' && a[0] && typeof a[0] === 'object' && typeof a[0].map === 'function') {
-            var mopts = a[0], mmap = mopts.map;
-            a[0] = Object.assign({}, mopts, { map: function () { var r = mmap.apply(this, arguments); return r && typeof r.then === 'function' ? r.then(unwrapItems) : unwrapItems(r); } });
-          }
-          if (k === 'exportAll') {
-            var s0 = Date.now(), done = function () { log({ kind: 'export', start: s0, end: Date.now() }); };
-            var r = d.value.apply(orig, a);
-            Promise.resolve(r).then(done, done);
-            return r;
-          }
+          if (k === 'collection') return wrapCollection(d.value.apply(orig, a), String(a[0]));
           var res = d.value.apply(orig, a);
           // errors of the store's promises are noted (a quota error in the sandbox is not a finding); the app still gets the same rejection
           if (res && typeof res.then === 'function') {

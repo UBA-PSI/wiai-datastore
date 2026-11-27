@@ -1,4 +1,4 @@
-// Pure parts of the round-D library changes: collection op replay, remembered access ID, fresh reads, checkRemote with watched names.
+// Pure parts: collection op replay, remembered access ID, fresh reads in the core, checkRemote with watched names.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
@@ -8,20 +8,21 @@ const require = createRequire(import.meta.url);
 const WDS = require('../src/wds-ui.js');
 const apply = WDS.internals.applyCollectionOps;
 
-test('collection apply(): upsert keeps the creation time, remove deletes, operations run in order, the input is not changed', () => {
-  const base = { a: { c: 10, m: { t: 'a' } }, b: { c: 20, m: {} } };
+test('collection apply(): upsert keeps the place of an existing entry, remove deletes, operations run in order, the input is not changed', () => {
+  const base = { a: { m: { t: 'a' } }, b: { m: {} } };
   const copy = JSON.stringify(base);
   const cases = [
     ['no ops', [], base],
-    ['upsert new', [{ t: 'upsert', id: 'n', c: 30, m: { t: 'n' } }], { ...base, n: { c: 30, m: { t: 'n' } } }],
-    ['upsert existing keeps c, replaces meta', [{ t: 'upsert', id: 'a', c: 99, m: { t: 'a2' } }], { a: { c: 10, m: { t: 'a2' } }, b: base.b }],
+    ['upsert new goes to the end', [{ t: 'upsert', id: 'n', m: { t: 'n' } }], { ...base, n: { m: { t: 'n' } } }],
+    ['upsert existing replaces meta', [{ t: 'upsert', id: 'a', m: { t: 'a2' } }], { a: { m: { t: 'a2' } }, b: base.b }],
     ['remove', [{ t: 'remove', id: 'a' }], { b: base.b }],
     ['remove unknown id', [{ t: 'remove', id: 'zz' }], base],
-    ['remove then upsert: comes back with the new c', [{ t: 'remove', id: 'a' }, { t: 'upsert', id: 'a', c: 50, m: { t: 'x' } }], { a: { c: 50, m: { t: 'x' } }, b: base.b }],
-    ['upsert then remove', [{ t: 'upsert', id: 'q', c: 1, m: {} }, { t: 'remove', id: 'q' }], base],
-    ['upsert without meta', [{ t: 'upsert', id: 'e', c: 5 }], { ...base, e: { c: 5, m: {} } }],
+    ['remove then upsert: comes back at the end', [{ t: 'remove', id: 'a' }, { t: 'upsert', id: 'a', m: { t: 'x' } }], { b: base.b, a: { m: { t: 'x' } } }],
+    ['upsert then remove', [{ t: 'upsert', id: 'q', m: {} }, { t: 'remove', id: 'q' }], base],
+    ['upsert without meta', [{ t: 'upsert', id: 'e' }], { ...base, e: { m: {} } }],
   ];
   for (const [name, ops, want] of cases) assert.deepEqual(apply(base, ops), want, name);
+  assert.deepEqual(Object.keys(apply(base, [{ t: 'upsert', id: 'n', m: {} }, { t: 'upsert', id: 'a', m: { t: 'a2' } }])), ['a', 'b', 'n'], 'the order of the keys is the order of the list');
   assert.equal(JSON.stringify(base), copy);
 });
 
@@ -73,12 +74,12 @@ test('checkRemote({names}) reports a record that this session never saw, once it
 });
 
 test('collection apply(): an upsert with an older record version never replaces a newer entry; versions are kept', () => {
-  const base = { a: { c: 10, v: 3, m: { t: 'A2' } } };
-  assert.deepEqual(apply(base, [{ t: 'upsert', id: 'a', c: 99, v: 2, m: { t: 'B1' } }]), base, 'older version ignored');
-  assert.deepEqual(apply(base, [{ t: 'upsert', id: 'a', c: 99, v: 4, m: { t: 'B2' } }]), { a: { c: 10, v: 4, m: { t: 'B2' } } });
-  assert.deepEqual(apply(base, [{ t: 'upsert', id: 'a', c: 99, v: 3, m: { t: 'same version' } }]), { a: { c: 10, v: 3, m: { t: 'same version' } } });
-  assert.deepEqual(apply(base, [{ t: 'upsert', id: 'a', c: 99, m: { t: 'unknown version' } }]), { a: { c: 10, v: 3, m: { t: 'unknown version' } } }, 'no version: applies, keeps the known one');
-  assert.deepEqual(apply({}, [{ t: 'upsert', id: 'n', c: 1, v: 1, m: {} }, { t: 'remove', id: 'n' }, { t: 'upsert', id: 'n', c: 2, v: 1, m: { t: 'again' } }]), { n: { c: 2, v: 1, m: { t: 'again' } } });
+  const base = { a: { v: 3, m: { t: 'A2' } } };
+  assert.deepEqual(apply(base, [{ t: 'upsert', id: 'a', v: 2, m: { t: 'B1' } }]), base, 'older version ignored');
+  assert.deepEqual(apply(base, [{ t: 'upsert', id: 'a', v: 4, m: { t: 'B2' } }]), { a: { v: 4, m: { t: 'B2' } } });
+  assert.deepEqual(apply(base, [{ t: 'upsert', id: 'a', v: 3, m: { t: 'same version' } }]), { a: { v: 3, m: { t: 'same version' } } });
+  assert.deepEqual(apply(base, [{ t: 'upsert', id: 'a', m: { t: 'unknown version' } }]), { a: { v: 3, m: { t: 'unknown version' } } }, 'no version: applies, keeps the known one');
+  assert.deepEqual(apply({}, [{ t: 'upsert', id: 'n', v: 1, m: {} }, { t: 'remove', id: 'n' }, { t: 'upsert', id: 'n', v: 1, m: { t: 'again' } }]), { n: { v: 1, m: { t: 'again' } } });
 });
 
 test('rememberAccessId keeps the first time for the same ID; another ID starts over', async () => {

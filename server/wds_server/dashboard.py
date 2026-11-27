@@ -637,7 +637,7 @@ class Dashboard:
         if mode == "join_code":
             if can_edit:
                 steps.append(f'<li><p class="step-title">{t("step_code")}</p><p><code id="jc" class="big">{esc(row["join_code"])}</code> {copy("jc")}</p>'
-                             f'<p class="hint">{t("join_code_hint")}</p><p class="hint">{t("join_code_test_hint")}</p>'
+                             f'<p class="hint">{t("join_code_hint")}</p><p class="hint">{t("join_code_claude_hint")}</p>'
                              + ctx.form(f"/scopes/{sid}/join-code", f'<button type="submit" class="secondary small">{t("rotate_code")}</button>',
                                         confirm=t("rotate_confirm")) + "</li>")
         elif mode == "open":
@@ -657,8 +657,6 @@ class Dashboard:
         out = (f'<h2 id="usage">{t("usage_title")}</h2><p><strong>{t("usage_text", n=len(active), max=limits["max_vaults"], size=ctx.bytes(used), quota=ctx.bytes(limits["scope_bytes"]))}</strong></p>'
                + (f'<div class="box" role="status">{t("usage_near")}</div>' if near else "")
                + f'<p>{t("vault_explain")}</p><p>{t("who_reads", official=official, privacy_url=ctx.href("/privacy"))}</p>')
-        if can_edit:
-            out += f'<p class="hint">{t("test_vault_hint")}</p>'
         return out
 
     def help_section(self, ctx: Ctx, row) -> str:

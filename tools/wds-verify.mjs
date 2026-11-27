@@ -1,58 +1,42 @@
 #!/usr/bin/env node
-// wds-verify: smoke test for apps that use the WIAI Datastore (PLAN 9.6). Not a proof: it looks for the usual mistakes.
+// wds-verify: smoke test for apps that use the WIAI Datastore. Not a proof: it looks for the usual mistakes.
 //
-//   node tools/wds-verify.mjs <app.html | app-directory> [options]
+//   node tools/wds-verify.mjs <app.html | app-directory> [--config wds-verify.json]
 //
-// Static checks: the script tag (published version, integrity hash from the service's hashes.json, or the local clone), the CSP (not
-// broader than the recommended one), no other scripts, no direct access to the datastore host, no sandbox scope ID or label-hiding CSS
-// in the app, old browser data (store.migrateLocal recognised; a hand-made migration and a deletion without a sandbox guard are warnings), modal
-// dialogs of the app (information), and the real scope's settings (breach check against the CSP, the sentence about it for the privacy text). Dynamic checks: the app runs in Chromium from a file://
-// URL against a local copy of the real server (target mock) or the public sandbox (target sandbox); every field is filled with
-// canary strings, save buttons are pressed (plus the steps in wds-verify.json next to the app), the page is reloaded and unlocked
-// again, and the canaries are searched for in every request, in the browser storage, the console, downloads and (mock) the database.
-// Prints a Markdown report and exits 1 if a check failed.
+// Static checks: script tag and integrity hash, CSP, forbidden patterns, <html lang>, the real scope's settings. Dynamic checks (Chromium,
+// file:// page, the public sandbox): the library's dialogs are driven, every field gets a canary string, save buttons are pressed (plus the steps
+// of wds-verify.json), lock must reload the page, the page is reloaded and unlocked again, and the canaries are searched for in every request and
+// every storage. An optional "seed" in wds-verify.json checks that the data of an older, local-only version arrives. Prints a Markdown report.
+// Exit codes: 0 all checks passed, 1 a check failed, 2 the tool could not run, 3 the sandbox is unavailable (not an app finding: try again later).
 //
-// Setup: a clone of the public repository (https://github.com/UBA-PSI/wiai-datastore); see tools/README.md. Without Python and without a clone's client
-// build the sandbox target and the static checks still work.
-//
-// Options:
-//   --target <t>        auto (default), mock or sandbox. auto: mock when Python 3.13 with the server packages is found, else the
-//                       public sandbox if it is reachable, else static checks only. mock needs Python and the clone; sandbox needs
-//                       neither (it opens the app against the real service, in the sandbox scope; data is deleted every night)
-//   --locale <tag>      language of the browser, e.g. de-DE (default: "locale" of wds-verify.json, else en-US)
-//   --sandbox-copy <f>  write a copy of the app that stores into the sandbox scope (for a person to open in a browser) and exit;
-//                       the file name must contain "sandbox"
-//   --static-only       skip the dynamic checks (no Python, no browser needed)
-//   --hashes <file>     published library hashes (default: <service>/client/hashes.json, then client/dist/hashes.json of the clone)
-//   --out <file>        also write the report to a file
-//   --heading-level <n> 1 to 5 (default 1): the report's title gets n "#" and its sections n+1, so that it can be pasted under a heading of the README
-//                       (under "## Verification": --heading-level 3)
-//   --migration-delete  with a "seed" in wds-verify.json (a test of the migration of old local data), sandbox target: set window.__WDS_MIGRATION_TEST__ = true
-//                       (and navigator.webdriver) in the app's page, so that store.migrateLocal, which keeps the old data in the sandbox, deletes it (as in production) and
-//                       the tool checks that the old storage is empty afterwards. Without the flag the sandbox run checks that it was kept. No effect on the mock
-//                       target (it deletes anyway); the report names the flag.
-//   --strict            warnings fail too
-//   --headed            show the browser
+// Internal options (repository tests and CI; not part of the documented use, see tools/README.md):
+//   --target sandbox|mock|auto  sandbox (default): the public sandbox. mock: a local server (Python 3.13 with the server packages), skips the scope check.
+//                       auto: mock when Python is found, else the sandbox
+//   --config <file>     the wds-verify.json to use (default: next to the app)
+//   --sandbox-copy <f>  write a copy of the app that stores into the sandbox scope (the file name must contain "sandbox") and exit
+//   --static-only       skip the dynamic checks (no Python, no browser)
+//   --out <file>        also write the report to a file          --json   print the findings as JSON
+//   --strict            warnings fail too                         --headed show the browser
+//   --locale <tag>      language of the browser (default: "locale" of wds-verify.json, else en-US)
 //   --wait-ms <n>       time to wait for debounced saves at the end (default 2800)
-//   --script-tag [ver]  print the complete script tag (with the onerror handler) and the CSP meta tag for a version (default: newest) and exit. For an unreleased
-//                       library build: --script-tag --hashes client/dist/hashes.json (the integrity of your own build; the service publishes another one)
-//   --scope-check off   do not ask the service for the scope's settings (an app whose scope is not registered yet, a mock run of an unreleased library)
-//   --json              print the findings as JSON instead of Markdown
-// Exit codes: 0 all checks passed, 1 a check failed, 2 the tool could not run (usage, missing Python or browser),
-// 3 the sandbox is unavailable (full, rate limited, switched off): not an app finding, try again later.
+//   --hashes <file>     published library hashes (default: <service>/client/hashes.json, then client/dist/hashes.json of the clone)
+//   --heading-level <n> 1 to 5: the report's title gets n "#" and its sections n+1 (for pasting under a heading of the README)
+//   --script-tag [ver]  print the complete script tag and the CSP meta tag for a version (default: newest) and exit
+//   --scope-check off   do not ask the service for the scope's settings (a scope that is not registered yet)
 import { readFileSync, writeFileSync, existsSync, statSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { staticChecks, scanHtml, CSP_TEMPLATE, ONERROR } from './lib/static-checks.mjs';
-import { parseConfig, MIGRATION_TEST_GLOBAL } from './lib/config.mjs';
+import { parseConfig } from './lib/config.mjs';
 import { scopeCheck } from './lib/scope-check.mjs';
+import { renderReport, notTested, headingLevel } from './lib/report.mjs';
 import { UsageError, TargetUnavailable, REPO_URL, loadKnownHashes, sandboxInfo, serviceBase, offline, rewriteScopes } from './lib/targets.mjs';
 
 export { UsageError };
 
 export function parseArgs(argv) {
   const o = { positional: [], flags: {} };
-  const withValue = new Set(['hashes', 'out', 'wait-ms', 'target', 'locale', 'sandbox-copy', 'scope-check', 'heading-level']);
+  const withValue = new Set(['hashes', 'out', 'wait-ms', 'target', 'locale', 'sandbox-copy', 'scope-check', 'heading-level', 'config']);
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a.startsWith('--')) {
@@ -88,7 +72,7 @@ function findApp(p) {
 // ---- the target ----
 // Returns {name: 'mock' | 'sandbox' | 'static', reason, ...}; throws UsageError (mock impossible) or TargetUnavailable (sandbox asked for, not usable).
 async function resolveTarget(flags) {
-  const want = flags.target === undefined || flags.target === true ? 'auto' : String(flags.target);
+  const want = flags.target === undefined || flags.target === true ? 'sandbox' : String(flags.target);
   if (!['auto', 'mock', 'sandbox'].includes(want)) throw new UsageError('--target must be auto, mock or sandbox, not "' + want + '"');
   if (flags['static-only']) return { name: 'static', reason: 'chosen with --static-only', chosen: true };
   const mockTarget = async () => {
@@ -111,7 +95,7 @@ async function resolveTarget(flags) {
   }
   if (want === 'sandbox') {
     const s = await sandboxTarget();
-    if (s.error) throw new TargetUnavailable('sandbox unavailable, not an app finding: ' + s.error + '. Try again later, or use --target mock (needs Python 3.13, see tools/README.md).');
+    if (s.error) throw new TargetUnavailable('sandbox unavailable, not an app finding: ' + s.error + '. Try again later.');
     return { ...s, reason: 'chosen with --target sandbox; ' + s.reason };
   }
   const m = await mockTarget();
@@ -123,72 +107,7 @@ async function resolveTarget(flags) {
 }
 const firstLine = (s) => String(s).split('\n')[0].replace(/^cannot start the local mock server: /, '');
 
-// ---- the report ----
-const ICON = { pass: 'pass', fail: '**FAIL**', warn: 'warn', info: 'info' };
-
-// What this run cannot know: one line each, phrased as what the developer's Claude has to try by hand.
-export function notTested({ info = {}, config = {}, html = '', target = {} }) {
-  const out = [];
-  if (target.name === 'static') out.push('Everything the dynamic part checks was not run (no browser): the canary search in requests, storage and console, saving, and the reload. Run wds-verify without --static-only (or with --target sandbox) before you finish.');
-  out.push('A second device and conflicts: open the app in two browsers with the same vault, change the same record in both, and look at what a person sees (the conflict dialog or your onConflict handler; no entry may get lost).');
-  out.push('A read-only member: invite a member with the role "read", and check that every control that writes is disabled or hidden for them and that no error shows.');
-  out.push('Lock and unlock again in one page: lock the vault (store.lock(), or wait for the timeout) and unlock without reloading; the screen must be empty on lock and filled again on unlock, and nothing may be registered twice (register onLock and onUnlock once, outside start). Close your own modal dialogs in onLock: the library locks with its dialogs above yours, and the unlock dialog that comes next must not find one of yours open.');
-  const unpressed = info.unpressed && info.unpressed.length ? ' This run saw: ' + info.unpressed.map((t) => '"' + t + '"').join(', ') + '.' : '';
-  out.push('Buttons the tool does not press: delete, export, download, import, lock, and everything that the save word list, data-wds-verify="save" or a click step does not match. Press each by hand.' + unpressed);
-  if (info.fileInputs && !(info.stepCount && info.stepCount.upload)) out.push('File inputs (' + info.fileInputs + ') without an upload step were not used: add {"upload": [selector]} steps, or try the upload by hand.');
-  if (!info.stepCount || info.hiddenFields) out.push('Fields in views no step opens (tabs, panels, dialogs of the app)' + (info.hiddenFields ? ': ' + info.hiddenFields + ' hidden field(s) were seen but not filled' : '') + '. Fill them by hand, or add steps (click the tab, fill the field, click save) and afterReload steps.');
-  if (config.seed) {
-    if (target.name === 'sandbox' && !info.migrationDelete) out.push('The deletion of the old data was not exercised: the sandbox keeps it by design. Run again with --migration-delete (store.migrateLocal then deletes in the sandbox too, porting.md), and test the deletion with real-size data against a test vault in the app\'s own scope (optional: the sandbox run with --migration-delete covers the deletion path).');
-    else out.push('The migration with real-size old data (attachments, many items) and the "old app was used meanwhile" case (nothing is deleted, the result is "changed"): try both by hand against a test vault in the app\'s own scope, in a fresh browser profile (the migration moves the data of your everyday browser, and deletes it there).');
-    out.push('The old data is found only when the new app is opened from the same origin as the old one (Chromium: any file:// page shares storage with any other; Firefox and Safari: only the same file, so the new file needs the same name in the same folder; a web server: the same scheme, host and port). The tool opens both in one Chromium and cannot show this: replace the old file in place and tell the users to open the new one the same way.');
-  } else if (/migrat|oldData|old data/i.test(html)) out.push('The migration of old local data was not tested: the page mentions a migration, but wds-verify.json has no "seed". Add {"seed": {"page": "old-app.html", "steps": [...]}} (the old local-only app and the steps that fill it), see tools/README.md.');
-  if ((info.appDialogs || /<dialog\b|role\s*=\s*["']dialog|aria-modal/i.test(html)) && !(config.steps && config.steps.length)) out.push('The app has dialogs of its own and wds-verify.json has no steps for them: the tool finds no stable selectors in them. Add steps that open them and fill their fields, or test them by hand.');
-  return out;
-}
-
-// With --strict a warning counts as a failure and is shown as one (under "Failures", marked "(warn, fails with --strict)").
-export function headingLevel(flag) {
-  if (flag === undefined) return 1;
-  const n = typeof flag === 'string' && /^\d+$/.test(flag) ? Number(flag) : NaN;
-  if (!(n >= 1 && n <= 5)) throw new UsageError('--heading-level needs a number from 1 to 5 (the title gets that many #, its sections one more), not "' + flag + '"');
-  return n;
-}
-
-export function renderReport({ appPath, findings, info, strict, target, notTestedLines, headingLevel: level = 1 }) {
-  const h = (depth) => '#'.repeat(level + depth) + ' ';   // depth 0: the title, 1: its sections
-  const failed = findings.filter((f) => f.level === 'fail' || (strict && f.level === 'warn'));
-  const warned = strict ? [] : findings.filter((f) => f.level === 'warn');
-  const mark = (f) => (strict && f.level === 'warn' ? '**FAIL** (warn, fails with --strict)' : ICON[f.level]);
-  const out = [];
-  out.push(h(0) + 'wds-verify report: ' + basename(appPath), '');
-  if (target) out.push('Target: **' + target.name + '** (' + target.reason + ')', '');
-  const unavailable = info && info.unavailable;
-  out.push('**Result: ' + (unavailable ? 'NOT RUN, sandbox unavailable' : failed.length ? 'FAILED' : 'passed') + '** (' + findings.filter((f) => f.level === 'pass').length + ' checks passed, ' + failed.length + ' failed, '
-    + warned.length + ' warning' + (warned.length === 1 ? '' : 's') + ')', '');
-  if (info && info.migrationDelete) out.push('Run with --migration-delete: ' + (target && target.name === 'sandbox' ? 'the run set window.' + MIGRATION_TEST_GLOBAL + ' in a throw-away browser, so the migration deleted the old data in the sandbox as it does in production. The data is not in your everyday browser.' : 'no effect on this target (the mock is no sandbox: the migration deletes the old data anyway).'), '');
-  out.push('This is a smoke test, not a proof. It catches the usual mistakes (plaintext in storage or requests, wrong script tag, wide CSP); it cannot see what it did not trigger.', '');
-  const section = (title, items) => {
-    if (!items.length) return;
-    out.push(h(1) + title, '');
-    for (const f of items) {
-      out.push('- **' + f.title + '** (' + mark(f) + ')' + (f.detail ? ': ' + f.detail.split('\n')[0] : ''));
-      f.detail.split('\n').slice(1).forEach((l) => out.push('  ' + l));
-    }
-    out.push('');
-  };
-  section('Failures', failed);
-  section('Warnings', warned);
-  out.push(h(1) + 'All checks', '', '| Check | Result | Details |', '|---|---|---|');
-  for (const f of findings) out.push('| ' + f.title + ' | ' + mark(f) + ' | ' + f.detail.replace(/\|/g, '\\|').replace(/\n/g, '<br>').slice(0, 300) + ' |');
-  out.push('');
-  if (info && info.durationMs) out.push('Dynamic run: ' + (info.durationMs / 1000).toFixed(1) + ' s, ' + (info.fields || 0) + ' canary field(s), ' + (info.recordWrites || 0) + ' record write(s).', '');
-  if (notTestedLines) {
-    out.push(h(1) + 'Not tested', '', 'This run cannot see the following. Test each by hand before you hand the app over:', '');
-    for (const l of notTestedLines) out.push('- ' + l);
-    out.push('');
-  }
-  return out.join('\n');
-}
+export { renderReport, notTested, headingLevel } from './lib/report.mjs';
 
 export async function verify(target, flags = {}) {
   const level = headingLevel(flags['heading-level']);   // checked before anything runs
@@ -196,13 +115,13 @@ export async function verify(target, flags = {}) {
   const appPath = findApp(target);
   const html = readFileSync(appPath, 'utf8');
   let config = { locale: null, steps: [], afterReload: [], seed: null };
-  const cfgFile = join(dirname(appPath), 'wds-verify.json');
+  const cfgFile = flags.config === undefined ? join(dirname(appPath), 'wds-verify.json') : resolve(String(flags.config));
+  if (flags.config !== undefined && !existsSync(cfgFile)) throw new UsageError('--config names ' + flags.config + ', which does not exist');
   if (existsSync(cfgFile)) { try { config = parseConfig(readFileSync(cfgFile, 'utf8')); } catch (e) { throw new UsageError(e.message); } }
   if (config.seed) {
     const old = resolve(dirname(appPath), config.seed.page);
     if (!existsSync(old) || !statSync(old).isFile()) throw new UsageError('wds-verify.json "seed.page" names ' + config.seed.page + ', which is not a file (the path is relative to wds-verify.json: ' + old + ')');
   }
-  if (flags['migration-delete'] && !config.seed) throw new UsageError('--migration-delete needs a "seed" in wds-verify.json (the old app whose data the migration copies and then deletes)');
   if (flags.locale !== undefined) {
     let ok = null;
     try { ok = typeof flags.locale === 'string' ? Intl.getCanonicalLocales(flags.locale)[0] : null; } catch (e) { ok = null; }
@@ -215,7 +134,7 @@ export async function verify(target, flags = {}) {
   const tg = await resolveTarget(flags);
   const add = (id, level, title, detail) => ({ id, level, title, detail: detail || '' });
   let findings = [add('hashes', hashes.differs ? 'warn' : 'info', 'Library hashes', 'Published hashes from ' + hashes.source + '.' + (hashes.note ? ' ' + hashes.note : ''))].concat(st.findings);
-  if (flags['scope-check'] === 'off') findings.push(add('scope-settings', 'info', 'Current scope settings', 'Scope settings not checked (--scope-check off): neither whether the scope exists nor its breach check, enrollment and limits.'));
+  if (flags['scope-check'] === 'off' || tg.name === 'mock') findings.push(add('scope-settings', 'info', 'Current scope settings', tg.name === 'mock' ? 'Scope settings not checked: the mock creates the scope it needs; the production service knows nothing of this run.' : 'Scope settings not checked (--scope-check off): neither whether the scope exists nor its breach check, enrollment and limits.'));
   else findings = findings.concat(await scopeCheck(st.scope, st.csp, st.baseUrl, { html, readme }));
   if (tg.degraded) findings.push(add('dynamic-skipped', 'warn', 'Dynamic checks did not run', 'Only the static checks ran: ' + tg.reason + '. Install Python 3.13 with the server packages (tools/README.md) to run the app against a local mock, or try again when the sandbox is reachable.'));
   let info = {};
@@ -223,7 +142,7 @@ export async function verify(target, flags = {}) {
     const { dynamicChecks, PlaywrightMissing } = await import('./lib/dynamic-checks.mjs');
     const { MockUnavailable } = await import('./lib/python.mjs');
     try {
-      const dyn = await dynamicChecks({ appPath, html, config, library: st.library, target: tg, opts: { headed: !!flags.headed, migrationDelete: !!flags['migration-delete'], waitMs: flags['wait-ms'] !== undefined ? Number(flags['wait-ms']) : undefined, locale: flags.locale } });
+      const dyn = await dynamicChecks({ appPath, html, config, library: st.library, target: tg, opts: { headed: !!flags.headed, waitMs: flags['wait-ms'] !== undefined ? Number(flags['wait-ms']) : undefined, locale: flags.locale } });
       findings = findings.concat(dyn.findings); info = dyn.info;
     } catch (e) {
       if (e instanceof MockUnavailable || e instanceof PlaywrightMissing) throw new UsageError(e.message);

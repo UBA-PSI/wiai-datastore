@@ -1,7 +1,7 @@
 // wds-verify: static checks, CSP comparison, canary encodings, step parsing, command line. No browser needed.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { staticChecks, cspBroaderThan, parseCsp, CSP_TEMPLATE, scanHtml, stripJsComments, setsTestGlobal } from '../lib/static-checks.mjs';
+import { staticChecks, cspBroaderThan, parseCsp, CSP_TEMPLATE, scanHtml, stripJsComments } from '../lib/static-checks.mjs';
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -285,7 +285,7 @@ test('--strict: a promoted warning is listed under Failures and counted as faile
 
 // ---- round D: sandbox checks, local deletion, scope check, hashes, targets, report ----
 import { rewriteScopes } from '../lib/targets.mjs';
-import { hidingRules, localDeletes, connectAllows } from '../lib/static-checks.mjs';
+import { hidingRules, handStorage, connectAllows } from '../lib/static-checks.mjs';
 import { notTested } from '../wds-verify.mjs';
 import { startStub, sandboxDoc, scopeDoc, verify } from './helpers.mjs';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -313,38 +313,28 @@ test('static: CSS that hides the library (display, visibility, opacity on .wds- 
     assert.equal(level(css(rule), 'sandbox-label-css'), undefined, rule);
   }
   assert.deepEqual(hidingRules(['.wds-root{display:none}.b{color:red}']), ['.wds-root']);
+  assert.deepEqual(hidingRules(['[data-wds-role="read"] .edit { display: none }']), []);   // the documented way to hide edit controls for read members
+  assert.deepEqual(hidingRules(['[data-wds-role="read"] .wds-dialog { display: none }']), ['[data-wds-role="read"] .wds-dialog']);
 });
 
-test('static: deleting local data (one-time migration) warns unless the same function mentions the sandbox; localStorage.clear always warns', () => {
-  const warn = (code) => { const r = check(withScript(code)); return { del: level(r, 'local-delete'), clear: level(r, 'local-clear') }; };
-  assert.deepEqual(warn("function m() { indexedDB.deleteDatabase('old'); }"), { del: 'warn', clear: undefined });
-  assert.deepEqual(warn("function m() { localStorage.removeItem('old'); }"), { del: 'warn', clear: undefined });
-  assert.deepEqual(warn("var m = async () => { await x(); if (ok) { window.indexedDB.deleteDatabase('old'); } };"), { del: 'warn', clear: undefined });
-  assert.deepEqual(warn("function m() { localStorage.clear(); }"), { del: undefined, clear: 'warn' });
-  // a guard in the same function: fine
-  assert.deepEqual(warn("function m() { if (!store.status().sandbox) { indexedDB.deleteDatabase('old'); } }"), { del: undefined, clear: undefined });
-  assert.deepEqual(warn("function m() { var isSandbox = store.status().sandbox; if (!isSandbox) localStorage.removeItem('old'); }"), { del: undefined, clear: undefined });
-  assert.deepEqual(warn("const m = () => { if (store.status().sandbox) return; localStorage.removeItem('old'); };"), { del: undefined, clear: undefined });
-  // the word in another function does not count; clear is reported even with a guard
-  assert.equal(warn("function other() { return 'sandbox'; }\nfunction m() { localStorage.removeItem('old'); }").del, 'warn');
-  assert.equal(warn("function m() { if (!sandbox) localStorage.clear(); }").clear, 'warn');
-  // strings and comments with the call do not count
-  assert.deepEqual(warn("var s = \"localStorage.clear()\"; // localStorage.removeItem('x')"), { del: undefined, clear: undefined });
-  const found = localDeletes("function a() { localStorage.removeItem('k'); }\nfunction b() { indexedDB.deleteDatabase('d'); localStorage.clear(); }");
-  assert.deepEqual(found.unguarded.sort(), ['indexedDB.deleteDatabase', 'localStorage.removeItem']);
-  assert.equal(found.clears, 1);
-  assert.equal(level(check(good()), 'local-delete'), undefined);
+test('static: indexedDB and deleting from localStorage in the app warn; a preference in localStorage and the options of migrateLocal do not', () => {
+  const warn = (code) => level(check(withScript(code)), 'hand-storage');
+  assert.equal(warn("function m() { indexedDB.deleteDatabase('old'); }"), 'warn');
+  assert.equal(warn("function m() { return window.indexedDB.open('old'); }"), 'warn');
+  assert.equal(warn("function m() { localStorage.removeItem('old'); }"), 'warn');
+  assert.equal(warn("function m() { localStorage.clear(); }"), 'warn');
+  assert.match(check(withScript("function m() { localStorage.clear(); }")).findings.find((f) => f.id === 'hand-storage').detail, /localStorage\.clear/);
+  // a personal preference under the app's own key, the options of store.migrateLocal, strings and comments: no finding
+  assert.equal(warn("var t = localStorage.getItem('theme'); localStorage.setItem('theme', 'dark');"), undefined);
+  assert.equal(warn("store.migrateLocal({ id: 'a', indexedDB: { old: ['rows'] }, localStorage: ['k'], map() {} });"), undefined);
+  assert.equal(warn("var s = \"localStorage.clear()\"; // localStorage.removeItem('x') and indexedDB"), undefined);
+  assert.deepEqual(handStorage("function f() { indexedDB.open('d'); localStorage.removeItem('k'); localStorage.clear(); }"), ['indexedDB', 'localStorage.removeItem', 'localStorage.clear']);
+  assert.equal(level(check(good()), 'hand-storage'), undefined);
 });
 
-test('static: the migration test global is only read, never written; the official privacy sentence is looked for (information)', () => {
-  const reads = ['if (st.sandbox && !(window.__WDS_MIGRATION_TEST__ === true && navigator.webdriver)) return "kept";', 'var on = window.__WDS_MIGRATION_TEST__ == true;', 'x.__WDS_MIGRATION_TEST__ !== undefined'];
-  for (const code of reads) assert.equal(setsTestGlobal(code), false, code);
-  const writes = ['window.__WDS_MIGRATION_TEST__ = true;', 'window["__WDS_MIGRATION_TEST__"]=1', "globalThis['__WDS_MIGRATION_TEST__'] = true", 'Object.defineProperty(window, "__WDS_MIGRATION_TEST__", { value: true })',
-    'Object.assign(window, { __WDS_MIGRATION_TEST__: true })', 'window.__WDS_MIGRATION_TEST__ ||= true'];
-  for (const code of writes) assert.equal(setsTestGlobal(code), true, code);
-  assert.equal(level(check(withScript('window.__WDS_MIGRATION_TEST__ = true;')), 'migration-test-global'), 'fail');
-  assert.equal(level(check(withScript('var k = window.__WDS_MIGRATION_TEST__ === true;')), 'migration-test-global'), undefined);
-  assert.equal(level(check(good()), 'migration-test-global'), undefined);
+test('static: the official privacy sentence is looked for (information); a missing <html lang> warns', () => {
+  assert.equal(level(check(good()), 'html-lang'), undefined);
+  assert.equal(level(check(variant(good(), /<html[^>]*>/.exec(good())[0], '<html>')), 'html-lang'), 'warn');
   // the privacy sentence: information only; found in the page (entities and line breaks allowed) or in the README
   const en = 'Data is end-to-end encrypted; the faculty holds a recovery key for emergencies.';
   const de = 'Die Daten sind Ende-zu-Ende-verschlüsselt; die Fakultät verwahrt für Notfälle einen Wiederherstellungsschlüssel.';
@@ -414,7 +404,7 @@ test('report: target line, and a "Not tested" section after "All checks" (also w
   const all = r.stdout.indexOf('## All checks'), nt = r.stdout.indexOf('## Not tested');
   assert.ok(all > 0 && nt > all);
   const section = r.stdout.slice(nt);
-  for (const re of [/Everything the dynamic part checks was not run/, /second device and conflicts/i, /read-only member/, /Lock and unlock again in one page/, /Buttons the tool does not press/, /Fields in views no step opens/]) assert.match(section, re);
+  for (const re of [/Everything the dynamic part checks was not run/, /second device and conflicts/i, /read-only member/, /Buttons the tool does not press/, /Fields in views no step opens/]) assert.match(section, re);
   const j = JSON.parse((await run('wds-verify.mjs', [writeApp(good()), '--static-only', '--json'])).stdout);
   assert.ok(j.notTested.length >= 5);
   assert.equal(j.target.name, 'static');
@@ -494,10 +484,10 @@ test('scope check: the real scope document against the CSP, enrollment and limit
   assert.equal(bad.code, 1);
   assert.equal(bad.by('scope-hibp').level, 'fail');
   assert.match(bad.by('scope-hibp').detail, /api\.pwnedpasswords\.com/);
-  // hibp off, CSP still has the host: WARN
+  // hibp off, CSP still has the host: fine (one fixed policy)
   const warn = await run1(scopeDoc({ hibp: false, enrollment: 'open' }));
   assert.equal(warn.code, 0);
-  assert.equal(warn.by('scope-hibp').level, 'warn');
+  assert.equal(warn.by('scope-hibp').level, 'pass');
   assert.match(warn.by('scope-settings').detail, /anybody with the app can create a vault.*off/);
   // hibp off and no host: fine
   assert.equal((await run1(scopeDoc({ hibp: false }), noHost)).by('scope-hibp').level, 'pass');
@@ -518,7 +508,7 @@ test('scope check: the real scope document against the CSP, enrollment and limit
 test('targets: --target auto without Python falls back to static checks with a warning; sandbox asked for but unavailable is exit 3', async () => {
   const dir = writeApp(good());
   const noPy = { WDS_PYTHON: '/nonexistent/python' };
-  const auto = JSON.parse((await run('wds-verify.mjs', [dir, '--json'], { env: noPy })).stdout);
+  const auto = JSON.parse((await run('wds-verify.mjs', [dir, '--json', '--target', 'auto'], { env: noPy })).stdout);
   assert.equal(auto.target.name, 'static');
   assert.match(auto.target.reason, /^auto: no mock/);
   assert.equal(auto.findings.find((x) => x.id === 'dynamic-skipped').level, 'warn');
@@ -527,10 +517,11 @@ test('targets: --target auto without Python falls back to static checks with a w
   const sb = await run('wds-verify.mjs', [dir, '--target', 'sandbox'], { env: down });
   assert.equal(sb.code, 3);
   assert.match(sb.stderr, /sandbox unavailable, not an app finding.*not reachable/);
+  assert.equal((await run('wds-verify.mjs', [dir], { env: down })).code, 3);   // no --target: the sandbox is the default
   // auto with a reachable service but sandbox switched off: static, and the reason says why
   const off = await startStub({ '/api/v1/scopes/sandbox-000000': sandboxDoc({ sandbox: { enabled: false } }) });
   try {
-    const r = JSON.parse((await run('wds-verify.mjs', [dir, '--json'], { env: { ...noPy, WDS_VERIFY_OFFLINE: '', WDS_VERIFY_SERVICE: off.url, WDS_VERIFY_HASHES_URL: 'off' } })).stdout);
+    const r = JSON.parse((await run('wds-verify.mjs', [dir, '--json', '--target', 'auto'], { env: { ...noPy, WDS_VERIFY_OFFLINE: '', WDS_VERIFY_SERVICE: off.url, WDS_VERIFY_HASHES_URL: 'off' } })).stdout);
     assert.equal(r.target.name, 'static');
     assert.match(r.target.reason, /switched off/);
     const e = await run('wds-verify.mjs', [dir, '--target', 'sandbox'], { env: { WDS_VERIFY_SERVICE: off.url } });
@@ -593,94 +584,31 @@ test('static-only runs from a copy of tools/ alone (no client directory, no node
 });
 
 // ---- round F: named functions, store.migrateLocal, hand-made migrations, app modals, the breach-check sentence ----
-import { usesMigrateLocal, handMigration, usesShowModal, hasBreachNote, mentionsBreachService, BREACH_NOTE } from '../lib/static-checks.mjs';
+import { usesMigrateLocal, usesShowModal, hasBreachNote, mentionsBreachService, BREACH_NOTE } from '../lib/static-checks.mjs';
 
-test('static: the guard of a deletion is looked for in the nearest enclosing NAMED function, not in an anonymous callback', () => {
-  const del = (code) => level(check(withScript(code)), 'local-delete');
-  // the deletion sits in a forEach callback, the guard in the function around it (the Literaturliste case): no warning
-  assert.equal(del("function removeOldData(st) { if (store.status().sandbox) return; rows.forEach(function (r) { localStorage.removeItem(r); }); }"), undefined);
-  assert.equal(del("function removeOldData(st) { if (keepInSandbox(st)) return; rows.forEach((r) => { localStorage.removeItem(r); }); }"), undefined);
-  assert.equal(del("var removeOld = function () { var sandbox = store.status().sandbox; if (sandbox) return; [1].forEach(k => { localStorage.removeItem(k); }); };"), undefined);
-  assert.equal(del("const removeOld = async () => { if (store.status().sandbox) return; await Promise.all(keys.map(async (k) => { localStorage.removeItem(k); })); };"), undefined);
-  assert.equal(del("const o = { removeOld(st) { if (st.sandbox) return; rows.map((r) => { localStorage.removeItem(r); }); } };"), undefined);
-  // no guard in the named function (a guard in another function does not count): warn
-  assert.equal(del("function removeOldData() { rows.forEach(function (r) { localStorage.removeItem(r); }); }"), 'warn');
-  assert.equal(del("function other() { return 'sandbox'; }\nfunction removeOldData() { rows.forEach((r) => { localStorage.removeItem(r); }); }"), 'warn');
-  assert.equal(del("const o = { a() { return sandbox; }, removeOld() { rows.map((r) => { localStorage.removeItem(r); }); } };"), 'warn');
-  assert.equal(del("o.removeOld = function () { items.forEach(function (r) { localStorage.removeItem(r); }); };"), 'warn');
-  // only anonymous functions around the call (an IIFE with a callback): the outermost one is the unit, as the whole script would be
-  assert.equal(del("(function () { [1].forEach(function (k) { localStorage.removeItem(k); }); })();"), 'warn');
-  assert.equal(del("(function () { var sandbox = store.status().sandbox; [1].forEach(function (k) { if (!sandbox) localStorage.removeItem(k); }); })();"), undefined);
-});
-
-test('static: store.migrateLocal is recognised; code that reads or deletes browser storage by hand and never calls it is a hand-made migration', () => {
-  const MIG = "store.migrateLocal({ id: 'literatur', indexedDB: { name: 'literatur', stores: ['refs'] }, map: function (old, h) { return { items: [] }; } });";
+test('static: store.migrateLocal is recognised; strings and comments do not count', () => {
+  const MIG = "store.migrateLocal({ id: 'literatur', indexedDB: { literatur: ['refs'] }, map: function (old, ref) { return []; } });";
   const r = check(withScript(MIG));
   assert.equal(level(r, 'migrate-local'), 'info');
-  assert.equal(level(r, 'local-delete'), undefined);
-  assert.equal(level(r, 'hand-migration'), undefined);
+  assert.equal(level(r, 'hand-storage'), undefined);
   assert.deepEqual(r.findings.filter((f) => f.level === 'fail' || f.level === 'warn'), []);
   assert.ok(usesMigrateLocal(MIG));
-  assert.ok(!usesMigrateLocal("var s = 'store.migrateLocal(x)'; // store.migrateLocal(y)".replace('// store.migrateLocal(y)', '')));
-  // by hand: opening a database or removing a key is enough
-  for (const [code, name] of [["function readOld() { return indexedDB.open('old'); }", 'indexedDB.open'],
-    ["function drop() { if (!store.status().sandbox) localStorage.removeItem('old'); }", 'localStorage.removeItem']]) {
-    const x = check(withScript(code));
-    assert.equal(level(x, 'hand-migration'), 'warn', code);
-    assert.match(x.findings.find((f) => f.id === 'hand-migration').detail, new RegExp(name.replace('.', '\\.')));
-    assert.match(x.findings.find((f) => f.id === 'hand-migration').detail, /store\.migrateLocal \(porting\.md\)/);
-    assert.deepEqual(handMigration(code), [name]);
-  }
-  // a personal preference may stay in localStorage under the app's own key: reading and writing keys is no finding
-  assert.equal(level(check(withScript("var t = localStorage.getItem('theme'); localStorage.setItem('theme', 'dark');")), 'hand-migration'), undefined);
-  assert.deepEqual(handMigration("var t = localStorage.getItem('theme'); localStorage.setItem('theme', 'dark');"), []);
-  // data is not a preference: a value built with JSON.stringify or a template is a finding, with or without migrateLocal, and a key under a named prefix counts as named
-  assert.deepEqual(handMigration("localStorage.setItem('inv.notes', JSON.stringify(allNotes));"), ['localStorage.setItem']);
-  assert.deepEqual(handMigration("localStorage.setItem('k' + n, `${a}:${b}`);"), ['localStorage.setItem']);
-  assert.deepEqual(handMigration("localStorage.setItem('theme', dark ? 'dark' : 'light'); render(JSON.stringify(x));"), []);
-  assert.deepEqual(handMigration("localStorage.setItem('inv.theme', 'dark');", new Set(['inv.'])), ['localStorage.setItem']);
-  assert.equal(level(check(withScript("localStorage.setItem('notes', JSON.stringify(all));")), 'hand-migration'), 'warn');
-  // with migrateLocal in the code: reading a key or opening a database that its options name is not reported; writing or removing it, and any other database, is
-  assert.equal(level(check(withScript(MIG + "\nvar s = localStorage.getItem('literatur');")), 'hand-storage'), undefined);
-  assert.equal(level(check(withScript(MIG + "\nvar s = localStorage.getItem('old'); localStorage.setItem('theme', 'dark');")), 'hand-storage'), undefined);
-  const named = check(withScript("const M = { id: 'a', localStorage: { keys: ['zn.data'] }, map() {} };\nstore.migrateLocal(M);\nlocalStorage.setItem('zn.data', '[]');"));
-  assert.equal(level(named, 'hand-storage'), 'warn');
-  assert.match(named.findings.find((f) => f.id === 'hand-storage').detail, /localStorage\.setItem/);
-  const other = check(withScript(MIG + "\nvar s = indexedDB.open('old');"));
-  assert.equal(level(other, 'hand-storage'), 'warn');
-  assert.equal(level(other, 'hand-migration'), undefined);
-  assert.match(other.findings.find((f) => f.id === 'hand-storage').detail, /indexedDB\.open/);
-  // the options may be a variable
-  assert.equal(level(check(withScript("const M = { id: 'a', localStorage: { keys: ['zn.data'] }, map() {} };\nstore.migrateLocal(M);\nvar s = localStorage.getItem('zn.data');")), 'hand-storage'), undefined);
-  // comments do not count: a commented call does not hide the hand-made migration
-  const commented = check(withScript("// later: store.migrateLocal(opts)\nfunction readOld() { return indexedDB.open('old'); }\nfunction drop() { localStorage.removeItem('old'); }"));
-  assert.equal(level(commented, 'hand-migration'), 'warn');
-  assert.equal(level(commented, 'migrate-local'), undefined);
+  assert.ok(!usesMigrateLocal("var s = 'store.migrateLocal(x)';"));
   assert.ok(!usesMigrateLocal('/* store.migrateLocal(x) */ var a = 1;'));
-  // aliases are seen: a variable that holds localStorage, window["indexedDB"], objectStore().clear()
-  assert.deepEqual(handMigration("var ls = window.localStorage; ls.removeItem('k');"), ['localStorage']);
-  assert.deepEqual(handMigration("var idb = window['indexedDB']; idb.open('x');"), ['indexedDB']);
-  assert.deepEqual(handMigration("db.transaction('s','readwrite').objectStore('s').clear();"), ['objectStore()']);
-  assert.equal(level(check(withScript("function f(db) { db.transaction('s','readwrite').objectStore('s').clear(); }")), 'local-delete'), 'warn');
-  // the sandbox guard is a real expression: the word in a comment or a string is no guard
-  const guard = (code) => level(check(withScript(code)), 'local-delete');
-  assert.equal(guard("function drop() { // sandbox\n localStorage.removeItem('k'); }"), 'warn');
-  assert.equal(guard("function drop() { var s = 'sandbox'; localStorage.removeItem('k'); }"), 'warn');
-  assert.equal(guard("function drop() { if (store.status().sandbox) return; localStorage.removeItem('k'); }"), undefined);
-  // an unguarded deletion next to migrateLocal still warns, and says that the library deletes itself
+  // a hand-made migration next to it still warns, and says where the library does the job
   const both = check(withScript(MIG + "\nfunction drop() { localStorage.removeItem('old'); }"));
-  assert.equal(level(both, 'local-delete'), 'warn');
-  assert.match(both.findings.find((f) => f.id === 'local-delete').detail, /store\.migrateLocal, which deletes the old data itself/);
-  // strings and comments do not count; the good example has none of these
-  assert.deepEqual(handMigration("var s = 'indexedDB.open(x)'; var t = \"localStorage.getItem('k')\";"), []);
-  for (const id of ['hand-migration', 'migrate-local', 'app-modals']) assert.equal(level(check(good()), id), undefined, id);
-  assert.match(check(withScript("function drop() { localStorage.removeItem('old'); }")).findings.find((f) => f.id === 'local-delete').detail, /use store\.migrateLocal \(porting\.md\)/);
+  assert.equal(level(both, 'hand-storage'), 'warn');
+  assert.match(both.findings.find((f) => f.id === 'hand-storage').detail, /store\.migrateLocal \(porting\.md\)/);
+  const commented = check(withScript("// later: store.migrateLocal(opts)\nfunction readOld() { return indexedDB.open('old'); }"));
+  assert.equal(level(commented, 'hand-storage'), 'warn');
+  assert.equal(level(commented, 'migrate-local'), undefined);
+  for (const id of ['hand-storage', 'migrate-local', 'app-modals']) assert.equal(level(check(good()), id), undefined, id);
 });
 
 test('static: an app that opens modal dialogs with showModal() gets the information about library dialogs above them', () => {
   const r = check(withScript("document.getElementById('d').showModal();"));
   assert.equal(level(r, 'app-modals'), 'info');
-  assert.match(r.findings.find((f) => f.id === 'app-modals').detail, /Library dialogs open above your own modal dialogs.*onLock.*while a store call is pending/);
+  assert.match(r.findings.find((f) => f.id === 'app-modals').detail, /Library dialogs open above your own modal dialogs.*dialog:not\(\.wds-dialog\)/);
   assert.equal(level(check(withScript("var s = 'x.showModal()'; // d.showModal()")), 'app-modals'), undefined);
   assert.ok(usesShowModal('dlg . showModal ( )'));
 });

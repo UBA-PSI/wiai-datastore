@@ -1,15 +1,15 @@
-// tools/lib/drive-library.mjs: the dialogs of the library driven from a Playwright page by their stable attributes, as a developer's own test would.
+// tools/lib/dialog-internals.mjs: the dialogs of the library driven from a Playwright page by their stable attributes.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, chmodSync, mkdirSync, symlinkSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { spawnSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { tmpDir } from './helpers.mjs';
 import { startMock } from '../lib/wds-mock.mjs';
-import { createVault, redeemInvite, deleteVault, answerMigration, unlock, confirmSheet, readJoinCode, DriveError } from '../lib/drive-library.mjs';
-import { viewOf, waitForView, dialog, dialogState, formError, describeDialog, fillWhenReady, briefError, joinCodeFile } from '../lib/dialog-internals.mjs';
+import {
+  createVault, redeemInvite, answerMigration, unlock, confirmSheet, DriveError,
+  viewOf, waitForView, dialog, dialogState, formError, describeDialog, fillWhenReady, briefError,
+} from '../lib/dialog-internals.mjs';
 
 let mock, browser, scope, appUrl;
 before(async () => {
@@ -43,7 +43,7 @@ test('createVault, unlock and confirmSheet drive the library dialogs', { timeout
   assert.ok(passphrase.length >= 20);
   await page.evaluate(() => window.p);
   assert.equal(await page.evaluate(() => store.status().unlocked), true);
-  assert.equal(await page.evaluate(() => store.status().accessId.replace(/-/g, '')), accessId.replace(/-/g, ''));
+  assert.equal(await page.evaluate(() => store.status().role), 'owner');
   await page.evaluate(() => store.set('note', { t: 'kept' }));
   // a new page of another browser context knows nothing: the access ID is typed, a wrong passphrase is an error of the dialog
   const other = await open(await browser.newContext());
@@ -68,7 +68,7 @@ test('confirm: false leaves the access sheet open for confirmSheet(); waitForVie
   await assert.rejects(waitForView(page, 'unlock', { timeout: 300 }), /timed out after 0 s; it shows nothing/);
 });
 
-test('a scope with a join code: the code comes from the join code file (WDS_JOIN_CODE_FILE), never from the environment; a missing file is a DriveError that says how the person creates it; nothing prints the code', { timeout: 120000 }, async () => {
+test('a scope with a join code: createVault needs the code as an option; a missing code is a DriveError, a wrong one is the error of the dialog', { timeout: 120000 }, async () => {
   const code = 'K7M2QX9A-secret';
   const created = await mock.createScope('joinscope', { enrollment: 'join_code', joinCode: code });
   const open2 = async () => {
@@ -78,94 +78,14 @@ test('a scope with a join code: the code comes from the join code file (WDS_JOIN
     await page.evaluate(() => { window.p = store.unlock(); });
     return page;
   };
-  const dir = tmpDir('wds-joincode-');
-  const file = join(dir, 'join-code');
-  const saved = { file: process.env.WDS_JOIN_CODE_FILE, env: process.env.WDS_JOIN_CODE };
-  const printed = [];
-  const out = process.stdout.write.bind(process.stdout), err = process.stderr.write.bind(process.stderr);
-  process.stdout.write = (c, ...a) => { printed.push(String(c)); return out(c, ...a); };
-  process.stderr.write = (c, ...a) => { printed.push(String(c)); return err(c, ...a); };
-  try {
-    process.env.WDS_JOIN_CODE_FILE = file;
-    process.env.WDS_JOIN_CODE = code;   // the old way: it is not read any more
-    const page = await open2();
-    // no file: a DriveError with the commands for the person, no code
-    await assert.rejects(createVault(page), (e) => e instanceof DriveError && e.message.includes(file) && /mkdir -p/.test(e.message) && /umask 077; cat >/.test(e.message) && /Never read, print or copy that file/.test(e.message) && !e.message.includes(code));
-    // a file that others can read
-    writeFileSync(file, code + '\n', { mode: 0o644 });
-    chmodSync(file, 0o644);
-    if (process.platform !== 'win32') await assert.rejects(createVault(page), (e) => e instanceof DriveError && /chmod 600/.test(e.message) && !e.message.includes(code));
-    // the create dialog is still open: with the file in order the code of the file is used (trimmed)
-    chmodSync(file, 0o600);
-    const { accessId } = await createVault(page);
-    assert.match(accessId, /^[0-9A-Z-]{20,}$/);
-    await page.evaluate(() => window.p);
-    assert.equal(await page.evaluate(() => store.status().unlocked), true);
-    // a wrong code is the error of the dialog
-    writeFileSync(file, 'not-the-code\n', { mode: 0o600 });
-    const other = await open2();
-    await assert.rejects(createVault(other, { timeout: 20000 }), (e) => e instanceof DriveError && /creating the vault failed/.test(e.message) && !e.message.includes('not-the-code') && !e.message.includes(code));
-  } finally {
-    process.stdout.write = out; process.stderr.write = err;
-    for (const [k, v] of [['WDS_JOIN_CODE_FILE', saved.file], ['WDS_JOIN_CODE', saved.env]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
-  }
-  assert.ok(!printed.join('').includes(code) && !printed.join('').includes('not-the-code'), 'the join code was printed');
-});
-
-test('readJoinCode: the file must exist, be a regular file, be private and lie outside every repository; the content is trimmed and in no error', () => {
-  const code = 'Z9Y8X7W6-private';
-  const dir = tmpDir('wds-joincode-unit-');
-  const f = join(dir, 'join-code');
-  const fails = (arg, re) => assert.throws(() => readJoinCode(arg), (e) => e instanceof DriveError && re.test(e.message) && !e.message.includes(code), String(re));
-  // missing: names the path and the commands
-  fails({ file: f }, /does not exist[\s\S]*mkdir -p[\s\S]*umask 077; cat >/);
-  const savedFile = process.env.WDS_JOIN_CODE_FILE, savedHome = process.env.HOME;
-  try {
-    delete process.env.WDS_JOIN_CODE_FILE;
-    assert.equal(joinCodeFile(), join(homedir(), '.wds', 'join-code'));
-    process.env.WDS_JOIN_CODE_FILE = f;
-    assert.equal(joinCodeFile(), f);
-    if (process.platform !== 'win32') {
-      // the default file lives in ~/.wds (HOME is honoured by os.homedir on Unix)
-      process.env.HOME = dir;
-      delete process.env.WDS_JOIN_CODE_FILE;
-      assert.equal(joinCodeFile(), join(dir, '.wds', 'join-code'));
-      fails({}, /does not exist[\s\S]*mkdir -p ~\/\.wds && chmod 700 ~\/\.wds[\s\S]*\(umask 077; cat > ~\/\.wds\/join-code\)/);
-    }
-  } finally { if (savedFile === undefined) delete process.env.WDS_JOIN_CODE_FILE; else process.env.WDS_JOIN_CODE_FILE = savedFile; if (savedHome === undefined) delete process.env.HOME; else process.env.HOME = savedHome; }
-  // a directory, an empty file
-  mkdirSync(join(dir, 'd'));
-  fails({ file: join(dir, 'd') }, /not a regular file/);
-  writeFileSync(f, '  \n', { mode: 0o600 });
-  fails({ file: f }, /is empty/);
-  // too open (not checked on Windows)
-  writeFileSync(f, '  ' + code + '  \n', { mode: 0o600 });
-  if (process.platform !== 'win32') {
-    chmodSync(f, 0o640);
-    fails({ file: f }, /can be read by other users; run: chmod 600 /);
-    chmodSync(f, 0o604);
-    fails({ file: f }, /chmod 600/);
-    chmodSync(f, 0o600);
-  }
-  assert.equal(readJoinCode({ file: f }), code);   // trimmed
-  assert.equal(readJoinCode({ file: f }), code);   // and it can be read again: nothing is consumed
-  // inside a git repository: not accepted; ignored by a repository other than the one of the working directory and untracked: accepted
-  if (spawnSync('git', ['--version']).status === 0) {
-    const repo = tmpDir('wds-joincode-repo-');
-    assert.equal(spawnSync('git', ['init', '-q', repo]).status, 0);
-    const inRepo = join(repo, 'sub', 'join-code');
-    mkdirSync(join(repo, 'sub'));
-    writeFileSync(inRepo, code + '\n', { mode: 0o600 });
-    fails({ file: inRepo }, /lies in the git repository .*outside every repository/);
-    writeFileSync(join(repo, '.gitignore'), 'sub/\n');
-    assert.equal(readJoinCode({ file: inRepo }), code);
-    assert.equal(spawnSync('git', ['-C', repo, 'add', '-f', 'sub/join-code']).status, 0);
-    fails({ file: inRepo }, /lies in the git repository/);
-    // a symlink into a repository is the file it points to
-    const link = join(dir, 'link');
-    symlinkSync(inRepo, link);
-    fails({ file: link }, /lies in the git repository/);
-  }
+  const page = await open2();
+  await assert.rejects(createVault(page), (e) => e instanceof DriveError && /pass \{ joinCode \}/.test(e.message) && !e.message.includes(code));
+  const { accessId } = await createVault(page, { joinCode: code });
+  assert.match(accessId, /^[0-9A-Z-]{20,}$/);
+  await page.evaluate(() => window.p);
+  assert.equal(await page.evaluate(() => store.status().unlocked), true);
+  const other = await open2();
+  await assert.rejects(createVault(other, { joinCode: 'not-the-code', timeout: 20000 }), (e) => e instanceof DriveError && /creating the vault failed/.test(e.message) && !e.message.includes('not-the-code') && !e.message.includes(code));
 });
 
 test('fillWhenReady waits for a field that appears late and is disabled for a while, and tries again when the page replaces the field', { timeout: 60000 }, async () => {
@@ -255,12 +175,12 @@ test('formError of a dialog that closed a moment ago returns "" at once (a locat
   assert.ok(Date.now() - t1 < 5000, 'took ' + (Date.now() - t1) + ' ms');
 });
 
-test('redeemInvite: an invite code of the owner opens a vault for a member in another browser; a wrong code is a DriveError; deleteVault removes the test vault', { timeout: 180000 }, async () => {
+test('redeemInvite: an invite code of the owner opens a vault for a member in another browser; a wrong code is a DriveError', { timeout: 180000 }, async () => {
   const owner = await open(await browser.newContext());
   await owner.evaluate(() => { window.p = store.unlock(); });
-  const ownerAccess = await createVault(owner);
+  await createVault(owner);
   await owner.evaluate(() => window.p);
-  await owner.evaluate(() => { window.sp = store.share(); });
+  await owner.evaluate(() => { window.sp = store.openVault(); });
   await waitForView(owner, 'share');
   await owner.locator('[data-wds="invite-create"]').click();
   await owner.locator('[data-wds="invite-code"]').waitFor({ timeout: 20000 });
@@ -276,10 +196,6 @@ test('redeemInvite: an invite code of the owner opens a vault for a member in an
   await member.evaluate(() => window.p);
   assert.equal(await member.evaluate(() => store.status().unlocked), true);
   assert.deepEqual(await member.evaluate(() => store.get('shared-note')), { t: 'for the member' });
-  // the test vault deletes itself
-  assert.equal(await deleteVault(owner, { ...ownerAccess, baseUrl: mock.service }), 'deleted');
-  await assert.rejects(deleteVault(owner, { ...ownerAccess, baseUrl: mock.service }), (e) => e instanceof DriveError && /deleting the test vault: failed/.test(e.message));
-  await assert.rejects(deleteVault(owner, {}), /needs the accessId and the passphrase/);
 });
 
 test('confirmSheet: a sheet that cannot be confirmed is a DriveError with the text of the dialog, not a timeout of the disabled button', { timeout: 120000 }, async () => {
@@ -292,25 +208,25 @@ test('confirmSheet: a sheet that cannot be confirmed is a DriveError with the te
 });
 
 // An app that calls migrateLocal after the unlock: unlock() and createVault() end on the question (next: 'migrate') instead of waiting for a dialog that is gone.
-const MIG = { id: 'drive', localStorage: { keys: ['old.key'] } };
+const startMigration = (page, n) => page.evaluate((n) => { localStorage.setItem('old.key', '{"a":1}'); window.p = store.unlock().then(() => store.migrateLocal({ id: 'drive', localStorage: ['old.key'], map: () => ({ name: 'moved-' + n, value: { t: n } }) })); }, n);
 test('createVault and unlock resolve with next "migrate" when the app calls migrateLocal after the unlock; answerMigration then answers the question', { timeout: 180000 }, async () => {
   const context = await browser.newContext({ acceptDownloads: true });
   const page = await open(context);
-  await page.evaluate((m) => { localStorage.setItem('old.key', '{"a":1}'); window.p = store.unlock().then(() => store.migrateLocal({ id: m.id, localStorage: m.localStorage, map: (old) => ({ records: [{ name: 'moved-1', value: { t: 1 }, from: 'old.key' }] }) })); }, MIG);
+  await startMigration(page, 1);
   const made = await createVault(page);
   assert.equal(made.next, 'migrate');
   assert.equal((await answerMigration(page)).backup !== null, true);
-  assert.equal((await page.evaluate(() => window.p)).status, 'migrated');
+  assert.deepEqual(await page.evaluate(() => window.p), { status: 'migrated' });
   assert.deepEqual(await page.evaluate(() => store.get('moved-1')), { t: 1 });
   const other = await open(await browser.newContext({ acceptDownloads: true }));
-  await other.evaluate((m) => { localStorage.setItem('old.key', '{"a":1}'); window.p = store.unlock().then(() => store.migrateLocal({ id: m.id, localStorage: m.localStorage, map: (old) => ({ records: [{ name: 'moved-2', value: { t: 2 }, from: 'old.key' }] }) })); }, MIG);
+  await startMigration(other, 2);
   assert.deepEqual(await unlock(other, { accessId: made.accessId, passphrase: made.passphrase }), { next: 'migrate' });
   await answerMigration(other, { backup: false });
   assert.equal((await other.evaluate(() => window.p)).status, 'migrated');
   await context.close();
 });
 
-test('answerMigration: the backup is downloaded, "Take over" pressed; migrate-large: the files are downloaded (one ZIP), then "delete anyway"', { timeout: 60000 }, async () => {
+test('answerMigration: the backup is downloaded, "Take over" pressed; the failure dialog is a DriveError', { timeout: 60000 }, async () => {
   const context = await browser.newContext({ acceptDownloads: true });
   const page = await context.newPage();
   await page.goto(appUrl);
@@ -319,27 +235,23 @@ test('answerMigration: the backup is downloaded, "Take over" pressed; migrate-la
     const dialog = (view, html) => { const d = document.createElement('div'); d.className = 'wds-root'; d.setAttribute('data-wds-view', view); d.innerHTML = html; document.body.appendChild(d); return d; };
     window.log = [];
     const q = dialog('migrate', '<button data-wds="migrate-backup">b</button><button data-wds="migrate-yes">y</button>');
-    q.querySelector('[data-wds=migrate-backup]').onclick = () => { window.log.push('backup'); dl('old-data.json'); };
-    q.querySelector('[data-wds=migrate-yes]').onclick = () => {
-      window.log.push('yes'); q.remove();
-      const big = dialog('migrate-large', '<button data-wds="migrate-large-download">z</button><button data-wds="migrate-delete" disabled>d</button>');
-      const del = big.querySelector('[data-wds=migrate-delete]');
-      big.querySelector('[data-wds=migrate-large-download]').onclick = () => { window.log.push('files'); dl('too-large.zip'); del.disabled = false; };
-      del.onclick = () => { window.log.push('delete'); big.remove(); };
-    };
+    q.querySelector('[data-wds=migrate-backup]').onclick = () => { window.log.push('backup'); dl('old-data.zip'); };
+    q.querySelector('[data-wds=migrate-yes]').onclick = () => { window.log.push('yes'); q.remove(); };
   });
   const files = [];
-  const res = await answerMigration(page, { downloads: files });
-  assert.deepEqual(res, { backup: 'old-data.json', large: 'too-large.zip' });
-  assert.deepEqual(files, ['old-data.json', 'too-large.zip']);
-  assert.deepEqual(await page.evaluate(() => window.log), ['backup', 'yes', 'files', 'delete']);
+  assert.deepEqual(await answerMigration(page, { downloads: files }), { backup: 'old-data.zip' });
+  assert.deepEqual(files, ['old-data.zip']);
+  assert.deepEqual(await page.evaluate(() => window.log), ['backup', 'yes']);
   // without the backup
   await page.evaluate(() => {
     const d = document.createElement('div'); d.className = 'wds-root'; d.setAttribute('data-wds-view', 'migrate');
     d.innerHTML = '<button data-wds="migrate-backup">b</button><button data-wds="migrate-yes">y</button>'; document.body.appendChild(d);
     d.querySelector('[data-wds=migrate-yes]').onclick = () => { window.log.push('yes2'); d.remove(); };
   });
-  assert.deepEqual(await answerMigration(page, { backup: false }), { backup: null, large: null });
+  assert.deepEqual(await answerMigration(page, { backup: false }), { backup: null });
   assert.equal((await page.evaluate(() => window.log)).slice(-1)[0], 'yes2');
+  // the library's failure dialog
+  await page.evaluate(() => { const d = document.createElement('div'); d.className = 'wds-root'; d.setAttribute('data-wds-view', 'migrate-failed'); d.textContent = 'Taking over the old data failed.'; document.body.appendChild(d); });
+  await assert.rejects(answerMigration(page, { backup: false, timeout: 5000 }), (e) => e instanceof DriveError && /the migration failed: Taking over the old data failed/.test(e.message));
   await context.close();
 });

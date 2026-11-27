@@ -1,6 +1,6 @@
-// Library dialogs, toasts and the sandbox bar in the top layer: they work above a modal <dialog> of the app (design A of round F).
+// Library dialogs, notices and the sandbox badge in the top layer: they work above a modal <dialog> of the app (design A of round F).
 import { test, expect } from '@playwright/test';
-import { startTestWorld, openApp, dialog, createVaultViaUi, nodeClient, pixelAt, writePage } from './ui-helpers.mjs';
+import { startTestWorld, openApp, dialog, createVaultViaUi, unlockViaUi, lockPage, nodeClient, pixelAt, writePage } from './ui-helpers.mjs';
 
 let w;
 test.beforeEach(async () => { w = await startTestWorld(); });
@@ -48,8 +48,8 @@ test('a conflict dialog above an app modal is clickable and decides; the app mod
 test('an app dialog that opens after a library dialog does not cover it: the library dialog goes on top again', async ({ context }) => {
   const page = await openApp(context, w);
   await createVaultViaUi(page);
-  await page.evaluate(() => { window.shareP = store.share(); });
-  await expect(dialog(page).getByRole('heading', { name: 'Sharing and access' })).toBeVisible();
+  await page.evaluate(() => { window.shareP = store.openVault(); });
+  await expect(dialog(page).getByRole('heading', { name: 'Vault' })).toBeVisible();
   await openAppModal(page, 'late');   // opened after ours, e.g. an error dialog in a catch
   await page.locator('dialog.wds-dialog [data-wds=close]').click({ timeout: 5000 });   // clickable without force
   await page.evaluate(() => window.shareP);
@@ -62,8 +62,8 @@ test('an app dialog element that was open before, closed and opened again while 
   await createVaultViaUi(page);
   await openAppModal(page, 'reused');     // an error box that the app reuses: open once ...
   await page.locator('#reused-close').click();
-  await page.evaluate(() => { window.shareP = store.share(); });
-  await expect(dialog(page).getByRole('heading', { name: 'Sharing and access' })).toBeVisible();
+  await page.evaluate(() => { window.shareP = store.openVault(); });
+  await expect(dialog(page).getByRole('heading', { name: 'Vault' })).toBeVisible();
   await page.evaluate(() => document.getElementById('reused').showModal());   // ... and shown again above the library dialog
   await page.locator('dialog.wds-dialog [data-wds=close]').click({ timeout: 5000 });   // clickable without force
   await page.evaluate(() => window.shareP);
@@ -71,71 +71,72 @@ test('an app dialog element that was open before, closed and opened again while 
   await page.locator('#reused-ok').click();
 });
 
-test('unlock dialog after an expired session, above an app modal that is still open; onLock ran; the session toast is usable', async ({ context }) => {
+test('an expired session: the unlock dialog opens above the page and an app modal without clearing them, with the same access ID; pending writes go on after it', async ({ context }) => {
   const page = await openApp(context, w);
   const vault = await createVaultViaUi(page);
-  await page.evaluate(() => { window.locks = []; store.onLock((r) => { window.locks.push(r); window.relock = store.unlock().then(() => 'unlocked', (e) => e.code); }); });
-  await page.evaluate(() => { window.shareP = store.share(); });
-  await expect(dialog(page).getByRole('heading', { name: 'Sharing and access' })).toBeVisible();
-  await page.evaluate(() => document.querySelector('dialog.wds-dialog [data-wds=close]').click());
-  await page.evaluate(() => { window.shareP = store.share(); });
+  await page.evaluate(() => {
+    window.state = { text: 'pending words' };
+    window.h = store.autosave('draft', () => window.state, { delayMs: 60000 });
+    h.changed();
+    document.getElementById('out').textContent = 'the page stays as it is';
+  });
   await openAppModal(page);
   await unauthorized(page);
   const err = await page.evaluate(() => store.get('x').then(() => null, (e) => e.name));
   expect(err).toBe('AuthError');
-  expect(await page.evaluate(() => window.locks)).toEqual(['expired']);
-  await page.evaluate(() => window.shareP);                       // the share dialog was closed by the lock: its promise settled
-  expect(await page.locator('dialog.wds-dialog').count()).toBe(1); // only the unlock dialog
   const d = dialog(page);
   await expect(d.getByRole('heading', { name: 'Unlock your data' })).toBeVisible();
-  await expect(page.locator('[data-wds-toast=session]')).toBeVisible();      // the session notice is hosted in the dialog on top
+  await expect(d.getByLabel('Access ID')).toHaveValue(vault.accessId);
+  expect(await page.locator('dialog.wds-dialog').count()).toBe(1);
+  expect(await page.evaluate(() => document.getElementById('out').textContent)).toBe('the page stays as it is');
   await page.unroute(/\/records\//);
   await d.getByLabel('Passphrase', { exact: true }).fill(vault.passphrase);
   await d.getByRole('button', { name: 'Unlock' }).click();          // no force
-  expect(await page.evaluate(() => window.relock)).toBe('unlocked');
+  await expect(page.locator('dialog.wds-dialog')).toHaveCount(0);
   expect(await appModalOpen(page)).toBe(true);
+  expect(await page.evaluate(() => store.status().unlocked)).toBe(true);
+  await expect.poll(() => page.evaluate(() => store.get('draft'))).toEqual({ text: 'pending words' });   // the pending save went on from memory
 });
 
-test('a toast with an action is clickable above an app modal, and a click on it does not reach the modal', async ({ context }) => {
+test('the offline dialog above an app modal is clickable, and a click on it does not reach the modal', async ({ context }) => {
   const page = await openApp(context, w);
   await createVaultViaUi(page);
   await openAppModal(page);
   await page.route(/\/records\//, (route) => route.abort('connectionrefused'));
   const err = await page.evaluate(() => store.set('draft', { text: 'unsaved' }).then(() => null, (e) => e.name));
   expect(err).toBe('OfflineError');
-  const action = page.locator('[data-wds-toast=offline] [data-wds=toast-action]');
+  const action = wds(page, 'backup');
   await expect(action).toBeVisible();
   const download = page.waitForEvent('download');
   await action.click();                                            // no force
   await download;
   expect(await appModalOpen(page)).toBe(true);
-  expect(await page.evaluate(() => window.appDialogClosedByOutsideClick)).toBeUndefined();   // the region stops the click
-  await page.locator('[data-wds-toast=offline] [data-wds=toast-dismiss]').click();
-  await expect(page.locator('[data-wds-toast=offline]')).toHaveCount(0);
+  expect(await page.evaluate(() => window.appDialogClosedByOutsideClick)).toBeUndefined();
+  await wds(page, 'close').click();
+  await expect(page.locator('dialog.wds-dialog')).toHaveCount(0);
+  expect(await appModalOpen(page)).toBe(true);
 });
 
-test('an app modal that closes while a toast is shown inside it: the toast is back in the page and visible; a removed host is repaired', async ({ context }) => {
-  const page = await openApp(context, w);
-  await createVaultViaUi(page);
-  await openAppModal(page);
-  await page.route(/\/records\//, (route) => route.abort('connectionrefused'));
-  await page.evaluate(() => store.set('draft', { text: 'unsaved' }).then(() => null, (e) => e.name));
-  const toast = page.locator('[data-wds-toast=offline]');
-  await expect(toast).toBeVisible();
-  expect(await page.evaluate(() => document.querySelector('.wds-toasts').parentElement.id)).toBe('appdlg');
-  await page.locator('#appdlg-close').click();
-  await expect(toast).toBeVisible();
-  expect(await page.evaluate(() => document.querySelector('.wds-toasts').parentElement === document.body)).toBe(true);
-  // the host dialog is destroyed without a close event
-  await openAppModal(page, 'second');
-  await expect(toast).toBeVisible();
-  expect(await page.evaluate(() => document.querySelector('.wds-toasts').parentElement.id)).toBe('second');
-  await page.evaluate(() => { const d = document.getElementById('second'); d.innerHTML = 'rebuilt'; d.remove(); });
-  await expect(toast).toBeVisible();
-  expect(await page.evaluate(() => document.querySelector('.wds-toasts').isConnected)).toBe(true);
+test('a notice takes no click, shows above an app modal, and goes away by itself', async ({ browser }) => {
+  const page = await openApp(await browser.newContext(), w);
+  const vault = await createVaultViaUi(page);
+  const device = await openApp(await browser.newContext(), w);
+  await unlockViaUi(device, vault.accessId, vault.passphrase);   // a new device: the library says so in a notice
+  const notice = device.locator('[data-wds-notice=newdevice]');
+  await expect(notice).toBeVisible();
+  const box = await notice.boundingBox();
+  const x = box.x + box.width / 2, y = box.y + box.height / 2;
+  expect(await device.evaluate(([px, py]) => !document.elementFromPoint(px, py).closest('.wds-notices'), [x, y])).toBe(true);   // pointer-events: none
+  expect(await notice.evaluate((e) => getComputedStyle(e).pointerEvents)).toBe('none');
+  // above an app modal that opens while the notice is showing
+  await openAppModal(device);
+  const png = await device.screenshot();
+  expect(pixelAt(png, Math.round(box.x + 2), Math.round(y)).join(',')).toBe('28,88,181');   // the accent border of the notice, not darkened by a backdrop
+  await expect(notice).toHaveCount(0, { timeout: 12000 });
+  expect(await appModalOpen(device)).toBe(true);
 });
 
-test('Escape: a mandatory dialog stays (also with the focus on the page body), a cancelable one closes and rejects with "cancelled"', async ({ context }) => {
+test('Escape: a mandatory dialog stays (also with the focus on the page body), a cancelable one closes (here: the unlock after an expired session, which reloads the page)', async ({ context }) => {
   const page = await openApp(context, w);
   await page.evaluate(() => { window.unlockP = store.unlock().then(() => 'unlocked', (e) => e.code); });
   const d = dialog(page);
@@ -148,25 +149,28 @@ test('Escape: a mandatory dialog stays (also with the focus on the page body), a
   await expect(d).toBeVisible();
   await expect(d).toHaveAttribute('data-wds-view', 'unlock');
   expect(await page.evaluate(() => document.querySelectorAll('dialog.wds-dialog').length)).toBe(1);
-  // finish the unlock, then a cancelable one
+  // finish the unlock; then an expired session: its unlock dialog is cancelable, and cancelling reloads the page
   const vault = await createVaultViaUi(page);
   expect(vault.accessId).toBeTruthy();
-  await page.evaluate(() => store.lock());
-  await page.evaluate(() => { window.cancelP = store.unlock({ cancelable: true }).then(() => 'unlocked', (e) => e.code); });
-  await expect(dialog(page)).toBeVisible();
+  await unauthorized(page);
+  await page.evaluate(() => store.get('x').catch(() => {}));
+  await expect(dialog(page).getByRole('heading', { name: 'Unlock your data' })).toBeVisible();
   await page.evaluate(() => { document.activeElement.blur(); });
+  const reloaded = page.waitForEvent('load');
   await page.keyboard.press('Escape');
-  expect(await page.evaluate(() => window.cancelP)).toBe('cancelled');
+  await reloaded;
+  await page.unroute(/\/records\//);
+  expect(await page.evaluate(() => store.status().unlocked)).toBe(false);
   await expect(page.locator('dialog.wds-dialog')).toHaveCount(0);
 });
 
-test('focus returns to the button that opened share(); nested library dialogs: only the top one is usable, closing it focuses the one below', async ({ context }) => {
+test('focus returns to the button that opened the vault dialog; nested library dialogs: only the top one is usable, closing it focuses the one below', async ({ context }) => {
   const page = await openApp(context, w);
   const vault = await createVaultViaUi(page);
   await page.locator('#app-button').focus();
-  await page.evaluate(() => { window.shareP = store.share(); });
+  await page.evaluate(() => { window.shareP = store.openVault(); });
   const share = dialog(page);
-  await expect(share.getByRole('heading', { name: 'Sharing and access' })).toBeVisible();
+  await expect(share.getByRole('heading', { name: 'Vault' })).toBeVisible();
   // a conflict opens above the share dialog
   await page.evaluate(() => store.set('note', { text: 'v1' }));
   const other = nodeClient(w);
@@ -233,7 +237,7 @@ test('a closed library dialog is re-opened when the browser or the app closes it
   expect(await page.evaluate(() => document.querySelector('dialog.wds-dialog').matches(':modal'))).toBe(true);
 });
 
-test('sandbox: the bar stays above an app modal and above library dialogs, and dialogs start below it', async ({ browser }) => {
+test('sandbox: the corner badge stays above an app modal and above library dialogs, and takes no click', async ({ browser }) => {
   await w.close();
   w = await startTestWorld({ scope: { hibp: false, sandbox: { next_wipe: Math.floor(Date.now() / 1000) + 6 * 3600, last_wipe: null } } });
   const page = await openApp(await browser.newContext(), w);
@@ -243,33 +247,45 @@ test('sandbox: the bar stays above an app modal and above library dialogs, and d
   await wds(page, 'create-submit').click();
   await wds(page, 'sheet-confirm').check(); await wds(page, 'sheet-continue').click();
   await page.evaluate(() => window.unlockP);
-  const bar = page.locator('[data-wds=sandbox-bar]');
-  await expect(bar).toBeVisible();
+  const badge = page.locator('[data-wds=sandbox-badge]');
+  await expect(badge).toBeVisible();
   await openAppModal(page);
-  // the colour of the bar (#fff4cc) is on the screen untouched: no backdrop lies over it ("elementFromPoint" cannot tell, the bar is inert)
-  const onTop = async () => { const png = await page.screenshot(); const px = pixelAt(png, 40, 8); return px.join(',') === '255,244,204'; };
+  // the colour of the badge (#fff4cc) is on the screen untouched: no backdrop lies over it
+  const onTop = async () => { const png = await page.screenshot(); const px = pixelAt(png, 3, 800 - 3); return px.join(',') === '255,244,204'; };
   expect(await onTop()).toBe(true);
-  await page.evaluate(() => { window.shareP = store.share(); });
+  await page.evaluate(() => { window.shareP = store.openVault(); });
   await expect(page.locator('dialog.wds-dialog')).toBeVisible();
   expect(await onTop()).toBe(true);
-  const r = await page.evaluate(() => ({ bar: document.querySelector('[data-wds=sandbox-bar]').getBoundingClientRect().bottom, dlg: document.querySelector('dialog.wds-dialog').getBoundingClientRect().top }));
-  expect(r.dlg).toBeGreaterThanOrEqual(r.bar);
+  expect(await page.evaluate(() => !document.elementFromPoint(3, 797).closest('[data-wds=sandbox-badge]'))).toBe(true);   // a click goes through
 });
 
-test('a user lock after an expired session still locks (a lock that finished synchronously is not remembered as running)', async ({ context }) => {
+test('a user lock after an expired session still locks (and reloads)', async ({ context }) => {
   const page = await openApp(context, w);
   const vault = await createVaultViaUi(page);
-  await page.evaluate(() => { window.locks = []; store.onLock((r) => { window.locks.push(r); }); });
   await unauthorized(page);
   expect(await page.evaluate(() => store.get('x').then(() => null, (e) => e.name))).toBe('AuthError');
   await page.unroute(/\/records\//);
-  expect(await page.evaluate(() => store.status().unlocked)).toBe(false);
-  await page.evaluate(() => { window.unlockP = store.unlock(); });
-  const d = dialog(page);
+  const d = dialog(page);   // the expired session asks for the passphrase again, on the same page
   await d.getByLabel('Passphrase', { exact: true }).fill(vault.passphrase);
   await d.getByRole('button', { name: 'Unlock' }).click();
-  await page.evaluate(() => window.unlockP);
-  await page.evaluate(() => store.lock());
-  expect(await page.evaluate(() => window.locks)).toEqual(['expired', 'user']);
+  await expect(page.locator('dialog.wds-dialog')).toHaveCount(0);
+  expect(await page.evaluate(() => store.status().unlocked)).toBe(true);
+  await lockPage(page);
   expect(await page.evaluate(() => store.status().unlocked)).toBe(false);
+});
+
+test('cancelling the unlock after an expired session with unsaved text offers the backup before the page reloads', async ({ context }) => {
+  const page = await openApp(context, w);
+  await createVaultViaUi(page);
+  await unauthorized(page);
+  await page.evaluate(() => { window.h = store.autosave('draft', () => ({ t: 'typed' }), { delayMs: 60000 }); h.changed(); store.get('x').catch(() => {}); });
+  await expect(dialog(page).getByRole('heading', { name: 'Unlock your data' })).toBeVisible();
+  await page.evaluate(() => { document.activeElement.blur(); });
+  await page.keyboard.press('Escape');
+  const d = dialog(page);
+  await expect(d).toHaveAttribute('data-wds-view', 'lock-unsaved');
+  await expect(d.locator('[data-wds=backup]')).toBeVisible();
+  const reloaded = page.waitForEvent('load');
+  await d.locator('[data-wds=end-ok]').click();
+  await reloaded;
 });

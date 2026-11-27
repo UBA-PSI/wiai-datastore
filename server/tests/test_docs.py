@@ -58,21 +58,6 @@ class Routes(DocsTestCase):
         self.assertEqual(r.headers["cache-control"], "no-cache")
         self.assertNotIn(digest, r.text)
 
-    def test_llms_txt_index_placeholders_come_from_the_served_guides(self):
-        self.lib()
-        guide = ("# Guide {{version}}\n\nintro\n\n## One\n\ntext\n\n```sh\n## not a heading\n# nor this\n```\n\n## Two\n\n### Short\n\nx\n\n### Long\n"
-                 + "line\n" * 20 + "\n## Three\n")
-        write(os.path.join(self.docs_dir, "integration.md"), guide)
-        write(os.path.join(self.docs_dir, "llms.txt"), "# T\n{{index_integration}}\n--\n{{index_porting}}\n")
-        text = self.c.get("/datastore/llms.txt").text
-        served = self.c.get("/datastore/docs/integration.md").text
-        self.assertEqual(len(served.rstrip("\n").split("\n")), 42)       # the lines of the served text count, not those of the source
-        head, _, rest = text.partition("--")
-        self.assertTrue(head.startswith("# T\nintegration.md, 42 lines:\n"), head)
-        rows = [re.sub(r" +", " ", line.strip()) for line in head.splitlines()[2:]]
-        self.assertEqual(rows, ["1-4 Introduction: Guide 1.2.3", "5-13 One", "14-41 Two", "20-41 Long", "42-42 Three"])   # "Short" is under 20 lines
-        self.assertIn("porting.md: (not available on this server)", rest)
-
     def test_raw_markdown_and_html(self):
         digest = self.lib()
         write(os.path.join(self.docs_dir, "integration.md"),
@@ -258,35 +243,6 @@ class RepositoryDocuments(unittest.TestCase):
         self.assertEqual(llms.status, 200)
         self.assertNotRegex(llms.text, r"\{\{[a-z_]+\}\}")
 
-    def test_llms_txt_reading_advice_names_sections_that_exist(self):
-        import re
-        llms = self.c.get("/datastore/llms.txt").text
-        guide = self.c.get("/datastore/docs/integration.md").text
-        porting = self.c.get("/datastore/docs/porting.md").text
-
-        def titles(text):
-            return {int(m.group(1)): m.group(2) for m in re.finditer(r"^## (\d+)\. (.+)$", text, re.M)}
-
-        gi, gp = titles(guide), titles(porting)
-        advice = re.search(r"A new app needs the checklist and sections 2 to 8 and 14 of integration\.md; an existing app also porting\.md, sections 1 to 4 and 7; "
-                           r"before you hand an app over, sections 12 and 13 of integration\.md\.", llms)
-        self.assertTrue(advice, "the reading advice of llms.txt changed: update this test with it")
-        # the sections the advice names are the ones it means
-        self.assertIn("script tag", gi[2].lower())
-        self.assertIn("api", gi[4].lower())
-        self.assertIn("conflicts", gi[7].lower())
-        self.assertIn("members", gi[8].lower())
-        self.assertIn("example", gi[14].lower())
-        self.assertIn("wds-verify", gi[12])
-        self.assertIn("tell users", gi[13].lower())
-        self.assertIn("inventory", gp[1].lower())
-        self.assertIn("still in the browsers", gp[4].lower())
-        self.assertIn("modal dialogs", gp[7].lower())
-        for n in (2, 3, 4, 5, 6, 7, 8, 12, 13, 14):
-            self.assertIn(n, gi)
-        for n in (1, 2, 3, 4, 7):
-            self.assertIn(n, gp)
-
     def test_every_document_renders_without_leftovers_with_a_sandbox(self):
         from wds_server.config import SandboxConfig
         self.env.config.sandbox = SandboxConfig(scope_id="sandbox-000000")
@@ -325,12 +281,14 @@ class RepositoryDocuments(unittest.TestCase):
         self.assertIn("Content-Security-Policy", text)
         self.assertIn("'wasm-unsafe-eval'", text)
         self.assertIn("onerror=", text)
-        for api in ("WDS.connect", "store.unlock", "store.get", "store.set", "store.list", "store.remove", "store.autosave",
-                    "store.onConflict", "store.share", "store.exportAll", "store.history", "store.restore", "store.lock",
-                    "wds-verify", "wds-verify.json"):
+        for api in ("WDS.connect", "store.unlock", "store.status", "store.get", "store.set", "store.remove", "store.collection", "store.autosave",
+                    "store.onChange", "store.onConflict", "store.showHistory", "store.openVault", "store.lock", "store.migrateLocal",
+                    "data-wds-role", "wds-verify", "wds-verify.json", "dialog:not(.wds-dialog)"):
             self.assertIn(api, text, api)
-        for error in ("OfflineError", "ConflictError", "QuotaError", "AuthError", "IntegrityError", "VersionError"):
+        for error in ("OfflineError", "ConflictError", "QuotaError", "AuthError", "IntegrityError", "VersionError", "UsageError"):
             self.assertIn(error, text, error)
+        # the one statement about set on an existing record the page has not read, in the table of the API
+        self.assertIn("`set` on an existing record this page has not read is a conflict (dialog or `onConflict`): read the record, show it, then save; replacing blind is the exception.", text)
 
     def test_the_official_privacy_sentence_is_the_same_everywhere(self):
         from wds_server.prompt import PRIVACY_DE, PRIVACY_EN
@@ -339,7 +297,7 @@ class RepositoryDocuments(unittest.TestCase):
         guide = self.c.get("/datastore/docs/integration.md").text
         self.assertIn(PRIVACY_EN, guide)
         self.assertIn(PRIVACY_DE, guide)
-        self.assertEqual(guide.count(PRIVACY_EN), 1)  # stated once in full: the template of section 13 (the top of the guide points there)
+        self.assertEqual(guide.count(PRIVACY_EN), 1)  # stated once in full: the template of section 11
         self.assertEqual(guide.count(PRIVACY_DE), 1)
         llms = self.c.get("/datastore/llms.txt").text
         self.assertIn(PRIVACY_EN, llms)
@@ -349,7 +307,7 @@ class RepositoryDocuments(unittest.TestCase):
         porting = self.c.get("/datastore/docs/porting.md").text  # a ported app replaces "your data stays on this device": porting.md only points to section 13
         self.assertNotIn(PRIVACY_EN, porting)
         self.assertNotIn(PRIVACY_DE, porting)
-        self.assertIn("integration.md, section 13", porting)
+        self.assertIn("integration.md, section 11", porting)
 
     def test_the_breach_check_sentence_is_the_same_everywhere(self):
         from wds_server.prompt import HIBP_DE, HIBP_EN
@@ -359,7 +317,7 @@ class RepositoryDocuments(unittest.TestCase):
         self.assertIn("Prüfsumme", HIBP_DE)
         self.assertNotIn("Hash", HIBP_DE)
         guide = self.c.get("/datastore/docs/integration.md").text
-        self.assertEqual(guide.count(HIBP_EN), 1)  # stated once in full: the template of section 13
+        self.assertEqual(guide.count(HIBP_EN), 1)  # stated once in full: the template of section 11
         self.assertEqual(guide.count(HIBP_DE), 1)
         self.assertIn(HIBP_EN, self.c.get("/datastore/llms.txt").text)
         self.assertIn(HIBP_DE, self.c.get("/datastore/llms.txt").text)
@@ -373,34 +331,43 @@ class RepositoryDocuments(unittest.TestCase):
         self.assertIn(HIBP_EN, app)
         self.assertIn(HIBP_DE, app)
 
-    def test_integration_guide_documents_set_created_dialogs_and_the_new_views(self):
-        text = self.c.get("/datastore/docs/integration.md").text
-        for part in ("**`set` and `created`.**", "upsert", "### Driving the library's dialogs in your own end-to-end tests", "tools/lib/drive-library.mjs",
-                     "| `migrate` |", "| `migrate-large` |", "migrate-large-download", "until the roster is refreshed",
-                     "### The library's dialogs and your own modal dialogs", "dialog:not(.wds-dialog)", "store.setLocale(\"de\")", "get(id, { fresh })", "window.open(\"\", \"_blank\")",
-                     "redeemInvite", "1 MB = 1,048,576 bytes"):
-            self.assertIn(part, text, part)
-        # `set` takes the option created (for a new entry; an existing entry keeps its date), in the method list and in the paragraph
-        self.assertIn("`set(id, value, { meta, mime, created })`", text)
-        self.assertIn("`col.set(id, value, { meta, mime, created })` is an **upsert**", text)
-        self.assertIn("**for an entry that exists it is ignored**", text)
-        self.assertNotIn("`set` has no `created` option", text)
-        self.assertNotIn("`set(id, value, { meta, mime })`", text)
+    def test_the_guides_fit_one_read_and_llms_txt_has_no_index(self):
+        for name, limit in (("integration.md", 350), ("porting.md", 150), ("llms.txt", 45)):
+            self.assertLessEqual(len((REPO_DOCS / name).read_text(encoding="utf-8").splitlines()), limit, name)
+        llms = (REPO_DOCS / "llms.txt").read_text(encoding="utf-8")
+        self.assertNotIn("index_", llms)
+        self.assertNotIn("Reading the guides in parts", llms)
 
-    def test_integration_section_16_is_a_pointer_and_the_hand_recipe_is_gone_from_every_document(self):
-        text = self.c.get("/datastore/docs/integration.md").text
-        start = text.index("## 16. Porting an existing app")
-        section = text[start:text.index("## 17. The sandbox")]
-        self.assertLess(len(section.splitlines()), 14)  # a pointer, not a guide
-        self.assertIn("/docs/porting.md", section)
-        self.assertIn("/docs/porting.md", self.c.get("/datastore/llms.txt").text)
-        self.assertRegex(self.c.get("/datastore/docs/").text, r"/docs/porting")
+    def test_the_rules_live_in_llms_txt_only(self):
+        llms = (REPO_DOCS / "llms.txt").read_text(encoding="utf-8")
+        rules = llms[llms.index("## The rules that matter"):llms.index("## Sandbox")]
+        numbered = [line for line in rules.splitlines() if re.match(r"\d+\. ", line)]
+        self.assertTrue(0 < len(numbered) <= 8, numbered)
+        self.assertEqual(len([line for line in rules.splitlines() if line.strip()]), len(numbered) + 1)   # one line each: the heading and the rules
+        guide = (REPO_DOCS / "integration.md").read_text(encoding="utf-8")
+        self.assertNotIn("## The rules that matter", guide)
+        self.assertNotIn("Forbidden patterns", guide)
+        checklist = guide[guide.index("## Checklist for Claude"):guide.index("## 1. ")]
+        self.assertIn("llms.txt", checklist)
+        # the dashboard text and the CLAUDE.md section point to the rules and do not restate them
+        from wds_server import prompt
+        snippet = prompt.claude_md(sid="a-123456", base="https://x/datastore", repo_url="r", sandbox_id=None, enrollment="open")
+        self.assertIn("read https://x/datastore/llms.txt and follow its rules", snippet)
+        for restated in ("localStorage", "cryptography", "script-src", "setLocale", "onLock"):
+            self.assertNotIn(restated, snippet)
+
+    def test_what_the_library_change_removed_is_gone_from_every_document(self):
+        gone = ("setLocale", "onLock", "onUnlock", "onStale", "exportAll", "getBlob", "getRecord", "getMany", "store.list(", "store.history", "store.restore",
+                "store.usage", "usage()", "isUnlocked", "wds-sandbox-bar", "err.stored", "__WDS_MIGRATION_TEST__", "--migration-delete", "h.skip", "h.blob",
+                "h.created", "migrate-large", "{ fresh", "rebuild()", "keepMine", "keepTheirs", "c.ask", "fillGaps", "migrate-differs",
+                "WDS_JOIN_CODE=", "export WDS_JOIN_CODE", "MiB", "GiB", "onReplaced", "notify: false", "downloadBackup", "store.share(", "--heading-level",
+                "Reading the guides in parts", "What things cost", "migration-large")
         for path in sorted(REPO_DOCS.iterdir()):
             if path.suffix not in (".md", ".txt", ".html"):
                 continue
             body = path.read_text(encoding="utf-8")
-            for gone in ("openOldDb", "keepInSandbox", "migratedSettings", "settingsDone", "toNewRecords", "migrateOldData", "WDS_JOIN_CODE=", "export WDS_JOIN_CODE", "MiB", "GiB", "Hashwert", "fillGaps", "migrate-differs", "migrate-discard", "tagged: false", "invite-expiry", "onReplaced", "notify: false", "downloadBackup"):
-                self.assertNotIn(gone, body, path.name + " still has " + gone)
+            for word in gone:
+                self.assertNotIn(word, body, path.name + " still has " + word)
 
     def test_porting_guide_has_the_load_bearing_parts(self):
         raw = self.c.get("/datastore/docs/porting.md")
@@ -411,104 +378,28 @@ class RepositoryDocuments(unittest.TestCase):
         self.assertEqual(page.status, 200)
         self.assertIn("<title>Porting an existing app to WIAI Datastore - WIAI Datastore</title>", page.text)
         self.assertIn("/docs/porting.md", page.text)  # the Markdown link in the header
-        for part in ("store.migrateLocal", "from", "h.skip", "h.ref", "h.id", "h.blob", "h.created", "<id>~<tag>", "**The new ids contain `-` and `%`**",
-                     "### Example 1:", "### Example 2:", "### What your app does with the result",
-                     "migrate-large", "The join code for tests", "(umask 077; cat > ~/.wds/join-code)", "mkdir -p ~/.wds && chmod 700 ~/.wds",
-                     "WDS_JOIN_CODE_FILE", "never read, print, copy or list that file", "redeemInvite", "deleteVault", "--migration-delete", "context.addInitScript", "__WDS_MIGRATION_TEST__",
-                     "## 7. Checklist for apps with forms and modal dialogs", "dialog:not(.wds-dialog)", "CSS.escape", "setLocale(\"de\")",
-                     "same folder, same file name", "sessionStorage", "fresh browser profile", "nothing", "busy", "skipped", "declined", "partial", "failed", "migrated"):
+        for part in ("## 1. Inventory", "## 2. Replacing the storage calls", "## 3. Importing an old export file", "store.migrateLocal", "old.id", "ref(key, source)",
+                     "{ collection: prefix, id, value, meta }", "nothing", "declined", "migrated", "failed", "create-only", "never in the sandbox", "deleted whole",
+                     "Download a copy of the old data first", "same file name in the same folder", "## 5. Testing", "\"seed\"",
+                     ):
             self.assertIn(part, text, part)
-        # the seed run is described in its order: old app, new app, dialogs, steps, filling, reload
-        order = [text.index(x) for x in ("1. **The old app.**", "2. **The new app**", "3. **The library's dialogs.**", "4. **The steps**", "5. **Automatic filling", "6. **The reload**")]
-        self.assertEqual(order, sorted(order))
-        # the units are defined once, in integration.md (section 4); this guide points there
-        self.assertIn("Sizes in MB are defined in integration.md, section 4", text)
+        for gone in ("~/.wds", "deleteVault", "drive-library"):
+            self.assertNotIn(gone, text, gone)
+        self.assertEqual(len(re.findall(r"^## ", text, re.M)), 5)
         self.assertNotIn("{{", text)
 
-    def test_llms_txt_indexes_the_two_guides_with_the_line_ranges_of_the_served_text(self):
-        """The index of llms.txt is computed from the served guides; this test reads the guides independently and compares."""
-        llms = self.c.get("/datastore/llms.txt").text
-        self.assertNotRegex(llms, r"\{\{[a-z_]+\}\}")
-        for stem in ("integration", "porting"):
-            served = self.c.get(f"/datastore/docs/{stem}.md").text
-            lines = served.split("\n")
-            if lines[-1] == "":
-                lines.pop()
-            heads, fence = {}, False        # line number -> (level, title) of the headings outside fenced blocks
-            for n, line in enumerate(lines, 1):
-                if line.strip().startswith("```"):
-                    fence = not fence
-                m = re.fullmatch(r"(##|###) (.+?)", line)
-                if m and not fence:
-                    heads[n] = (len(m.group(1)), m.group(2).replace("`", "").replace("**", ""))
-            start = llms.index(f"{stem}.md, {len(lines)} lines:\n")
-            block = llms[start:].split("\n\n")[0].splitlines()[1:]
-            rows = [re.fullmatch(r" +(\d+)-(\d+) +(.+)", b) for b in block]
-            self.assertTrue(all(rows), block)
-            listed = [(int(m.group(1)), int(m.group(2)), m.group(3)) for m in rows]
-            self.assertEqual(listed[0][:2], (1, min(heads) - 1), stem)                 # the introduction
-            self.assertTrue(listed[0][2].startswith("Introduction"))
-            for first, last, name in listed[1:]:
-                self.assertIn(first, heads, f"{stem}: line {first} is no heading ({name})")
-                level, title = heads[first]
-                self.assertEqual(name, title, stem)
-                after = [n for n, (lv, _) in heads.items() if n > first and lv <= level]
-                self.assertEqual(last, (min(after) - 1) if after else len(lines), f"{stem}: end of {name}")
-                if level == 3:
-                    self.assertGreaterEqual(last - first + 1, 20, f"{stem}: short subsection {name} listed")
-            self.assertEqual([f for f, _, _ in listed[1:] if heads[f][0] == 2], [n for n, (lv, _) in sorted(heads.items()) if lv == 2], f"{stem}: every ## section is listed")
-            for n, (lv, title) in heads.items():
-                if lv == 3 and (min([m for m, (lv2, _) in heads.items() if m > n and lv2 <= 3] or [len(lines) + 1]) - n) >= 20:
-                    self.assertIn(n, [f for f, _, _ in listed], f"{stem}: subsection {title} is missing")
-
-    def test_integration_and_porting_answer_the_porting_trial(self):
-        """Decisions of the second clean-room trial that the guides must keep saying."""
+    def test_integration_guide_answers_the_decisions_of_the_trials(self):
         guide = self.c.get("/datastore/docs/integration.md").text
-        porting = self.c.get("/datastore/docs/porting.md").text
-        # 1: the onerror message may be translated, nothing else of the tag
-        self.assertIn("The message may be in the app's language, nothing else of the tag may change", guide)
+        self.assertIn("**Only the message may be in the app's language**", guide)
         self.assertIn("document.body.textContent='Der Speicherdienst ist nicht erreichbar.", guide)
-        # 5: the Share button for every role
-        self.assertIn("**and it shows it for every role**", guide)
-        self.assertIn("for a member it is their own access dialog", guide)
-        # 7: the heading level of the report, and how to paste it
-        self.assertIn("--heading-level 3 --out report.md", guide)
-        # 8: the notice sits at the bottom right (the box itself is measured in a browser by examples/docs-recipes.spec.mjs); no rem numbers in the text
-        ui = (REPO_DOCS.parents[1] / "client" / "src" / "wds-ui.js").read_text(encoding="utf-8")
-        self.assertIn("at the bottom right of the window", guide)
-        self.assertIn("on the **left** or in the middle", guide)
-        self.assertNotIn("26rem", guide)
-        # 9, 10: what the mock checks that the sandbox cannot; --wds-sandbox-bar in the checklist and in section 4
-        self.assertIn("**Mock or sandbox.**", guide)
-        self.assertIn("takes the \"too large\" path of a migration there", guide)
-        checklist = guide[guide.index("## Checklist for Claude"):guide.index("## 1. Register a scope")]
-        self.assertIn("top: var(--wds-sandbox-bar, 0px)", checklist)
-        section4 = guide[guide.index("### The library's dialogs and your own modal dialogs"):guide.index("## 5. Where data lives")]
-        self.assertIn("top: var(--wds-sandbox-bar, 0px)", section4)
-        self.assertIn("--wds-sandbox-bar", ui)
-        # 6: headless Chromium has no PDF viewer
-        self.assertIn("Headless Chromium has no PDF viewer", guide)
-        # 4: the write order of a save that creates or replaces a file and an entry
-        self.assertIn("Save a note that gets a new or replaced attachment", guide)
-        self.assertIn("async function saveNoteWithFile(", guide)
-        # 3: the type of a Blob in migrateLocal items
-        self.assertIn("Without `mime`, the `type` of the Blob or File is stored", porting)
-        # the examples are not the Literaturliste any more (the first trial's app)
-        for word in ("literatur", "Literatur", "pdfId", "pdfName"):
-            self.assertNotIn(word, porting)
-            self.assertNotIn(word, (REPO_DOCS.parents[1] / "client" / "README.md").read_text(encoding="utf-8"))
-        # the recipe leaves the new file in place when the note may be stored, and no clean-up of "unreferenced" files is advised
-        self.assertIn("!err.stored && !(err instanceof WDS.errors.OfflineError)", guide)
-        self.assertIn("Never write a clean-up of files that no note names", guide)
-        self.assertIn("**Never reload an item that is open in a form**", guide)
-        self.assertNotIn("can be removed at a quiet moment", guide)
-        # one rule for settings: a personal preference stays in localStorage, a shared value is a record
-        self.assertIn("never names it in `migrateLocal`", guide)
-        self.assertIn("do not name it in `migrateLocal`", porting)
-        self.assertIn("A unique index", porting)
-        self.assertIn("**The ZIP is a way out, not an import format:**", guide)
-        self.assertIn("An import that replaces everything writes the new items first", porting)
+        self.assertIn("`store.openVault()`", guide)
+        self.assertIn("**for every role**", guide)
+        self.assertIn("Never write a clean-up of files that no item names", guide)
+        self.assertIn("the ZIP is not an import format", guide)
+        self.assertIn("The library has no user identity", guide)
+        self.assertIn("There is no unique index", guide)
         self.assertIn("{{sandbox_creation}}", (REPO_DOCS / "integration.md").read_text(encoding="utf-8"))
+        self.assertNotIn("remove `https://api.pwnedpasswords.com`", guide)   # one fixed policy: no branch on the scope's breach-check setting
 
     def test_users_documents_explain_the_old_data_question(self):
         en = self.c.get("/datastore/docs/users.en.md").text

@@ -40,14 +40,14 @@ async function fetchText(url) {
   if (r.status !== 200) throw new Error(url + ' answered ' + r.status);
   return { text: await r.text(), headers: r.headers };
 }
-// The example app: the html block after the heading "## 14." of the rendered integration.md, with the scope ID replaced.
+// The example app: the html block after the heading "## 12." of the rendered integration.md, with the scope ID replaced.
 async function exampleRaw(stack) {
   const { text } = await fetchText(stack.docs.origin + '/datastore/docs/integration.md');
-  const part = text.slice(text.indexOf('## 14.'));
+  const part = text.slice(text.indexOf('## 12.'));
   const m = part.match(/```html\n([\s\S]*?)\n```/);
   if (!m) throw new Error('no example app in integration.md');
   expect(m[1]).toContain('myapp-k7m2a9');
-  const steps = text.slice(text.indexOf('## 12.')).match(/```json\n([\s\S]*?)\n```/);
+  const steps = text.slice(text.indexOf('## 10.')).match(/```json\n([\s\S]*?)\n```/);
   if (!steps) throw new Error('no wds-verify.json example in integration.md');
   return { html: m[1], steps: steps[1] };
 }
@@ -160,30 +160,35 @@ test('the example app of integration.md runs from file:// under the documented p
   await expect(page.locator('#status')).toHaveText('saved', { timeout: 20000 });
   await expect(page.locator('#list')).toContainText(NOTE_CANARY);
 
-  // the members dialog and the export button work under the policy, too
-  await page.getByRole('button', { name: 'Share' }).click();
+  // the vault dialog and its export work under the policy, too
+  await page.getByRole('button', { name: 'Vault' }).click();
   await expect(dialogOf(page)).toBeVisible();
-  await page.keyboard.press('Escape');
-  await expect(page.getByRole('dialog')).toHaveCount(0);
   const dl = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Export' }).click();
+  await dialogOf(page).getByRole('button', { name: 'Export everything (ZIP, unencrypted)' }).click();
   const zip = readZip(readFileSync(await (await dl).path()));
   expect(Object.keys(zip)).toContain('wds-export.json');
   expect(Buffer.concat(Object.values(zip)).toString('utf8')).toContain(NOTE_CANARY);
+  // locking saves what is pending (the list title is written a few seconds after the text) and reloads the page
+  const locked = page.waitForEvent('load');
+  await dialogOf(page).getByRole('button', { name: 'Lock now' }).click();
+  await locked;
+  await expect(page.getByRole('dialog')).toHaveCount(1);   // the unlock dialog of the reloaded page
 
   // a new page load: unlock with access ID and passphrase, the note is there
   const page2 = await newPage(ctx);
   await page2.goto(url);
   await unlockThroughDialog(page2, created.accessId);
   await expect(page2.locator('#list')).toContainText(NOTE_CANARY, { timeout: 30000 });
-  await page2.locator('#list .open').first().click();
+  await page2.locator('#list li button').first().click();
   await expect(page2.getByLabel('Note text')).toHaveValue(NOTE_CANARY + '\nsecond line');
-  // typing right after "New note" must not lose characters or land in the note that was open (trial finding)
+  // the new note takes what is typed, and the note that was open keeps its text (trial finding)
   await page2.getByRole('button', { name: 'New note' }).click();
+  await expect(page2.getByLabel('Note text')).toBeFocused();   // the new note is open (the old one was closed first)
+  await expect(page2.getByLabel('Note text')).toHaveValue('');
   await page2.keyboard.type('Second note');
   await expect(page2.getByLabel('Note text')).toHaveValue('Second note');
   await expect(page2.locator('#status')).toHaveText('saved', { timeout: 20000 });
-  await page2.locator('#list .open').filter({ hasText: NOTE_CANARY }).click();
+  await page2.locator('#list li').filter({ hasText: NOTE_CANARY }).locator('button').first().click();
   await expect(page2.getByLabel('Note text')).toHaveValue(NOTE_CANARY + '\nsecond line');
 
   for (const p of [page, page2]) {
@@ -285,12 +290,17 @@ async function makeVault(browser, stack) {
   return made;
 }
 
-async function checkExport(page, download) {
-  const zip = readZip(readFileSync(await download.path()));
+// The export page unlocks, then opens the library's vault dialog: its "Export everything" button downloads the ZIP.
+async function exportViaVaultDialog(page, button = 'Export everything (ZIP, unencrypted)') {
+  const dlg = dialogOf(page);
+  await expect(dlg).toHaveAttribute('data-wds-view', 'share');
+  const dl = page.waitForEvent('download');
+  await dlg.getByRole('button', { name: button }).click();
+  const zip = readZip(readFileSync(await (await dl).path()));
   expect(Object.keys(zip).sort()).toEqual(['README.txt', 'files/data.bin', 'notes/' + NOTE_CANARY + '.json', 'wds-export.json']);
   expect([...zip['files/data.bin']]).toEqual([1, 2, 3, 250, 251, 252]);
   expect(JSON.parse(zip['notes/' + NOTE_CANARY + '.json'].toString('utf8'))).toEqual({ text: NOTE_CANARY, n: 1 });
-  await expect(page.locator('#msg')).toContainText('Done: 2 items', { timeout: 20000 });
+  return zip;
 }
 
 test('export page, served by the server: typed app ID and access ID, passphrase in the library dialog, ZIP download', async ({ browser, stack }) => {
@@ -317,17 +327,12 @@ test('export page, served by the server: typed app ID and access ID, passphrase 
   await dlg.getByLabel('Passphrase', { exact: true }).fill('wrong passphrase that is long enough');
   await dlg.getByRole('button', { name: 'Unlock' }).click();
   await expect(dlg.getByRole('alert').filter({ hasText: 'does not match this access ID' })).toBeVisible();
-  const dl = page.waitForEvent('download');
   await dlg.getByLabel('Passphrase', { exact: true }).fill(PASS);
   await dlg.getByRole('button', { name: 'Unlock' }).click();
-  await checkExport(page, await dl);
+  await expect(page.locator('#msg')).toContainText('Export everything');
+  await exportViaVaultDialog(page);
   expect(await page.evaluate(() => window.__violations)).toEqual([]);
   expect(page.problems).toEqual([]);
-
-  // cancelling the dialog exports nothing and says so
-  await page.getByRole('button', { name: 'Unlock and export' }).click();
-  await dialogOf(page).getByRole('button', { name: 'Close' }).click();
-  await expect(page.locator('#msg')).toContainText('Cancelled');
   await ctx.close();
 });
 
@@ -346,11 +351,9 @@ test('export page with a key file, in German', async ({ browser, stack }) => {
   await page.getByRole('button', { name: 'Entsperren und exportieren' }).click();
   const dlg = dialogOf(page);
   await dlg.getByLabel('Passphrase', { exact: true }).fill(PASS);
-  const dl = page.waitForEvent('download');
   await dlg.getByRole('button', { name: 'Entsperren' }).click();
-  const zip = readZip(readFileSync(await (await dl).path()));
-  expect(Object.keys(zip)).toContain('wds-export.json');
-  await expect(page.locator('#msg')).toContainText('Fertig: 2 Datensätze');
+  await expect(page.locator('#msg')).toContainText('Alles exportieren');
+  await exportViaVaultDialog(page, 'Alles exportieren (ZIP, unverschlüsselt)');
   // a key file of another service is refused
   const other = writeTemp(stack, 'other.wds.json', vault.keyFile.replace(stack.docs.service, 'https://elsewhere.example/datastore/'));
   await page.locator('#keyfile').setInputFiles(other);
@@ -374,9 +377,8 @@ test('the export page saved to disk and opened from file:// still works (absolut
   await page.getByRole('button', { name: 'Unlock and export' }).click();
   const dlg = dialogOf(page);
   await dlg.getByLabel('Passphrase', { exact: true }).fill(PASS);
-  const dl = page.waitForEvent('download');
   await dlg.getByRole('button', { name: 'Unlock' }).click();
-  await checkExport(page, await dl);
+  await exportViaVaultDialog(page);
   expect(await page.evaluate(() => window.__violations)).toEqual([]);
   expect(page.problems).toEqual([]);
   await ctx.close();

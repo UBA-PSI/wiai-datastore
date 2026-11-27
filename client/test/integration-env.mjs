@@ -92,7 +92,7 @@ export async function startStack() {
   const escrow = { current: await gen(), spare: await gen() };
   const pins = [escrow.current.id, escrow.spare.id];
   const bundleDir = join(tmp, 'bundle');
-  const built = build({ escrowPins: pins, retiredEscrow: [], dist: bundleDir });
+  const built = build({ escrowPins: pins, retiredEscrow: [], dist: bundleDir, testHooks: true });
   const operatorToken = 'wdsop.' + b64u(randomBytes(32));
   const operatorHash = b64u(createHash('sha256').update(operatorToken).digest());
   const configText = (readOnlyThreshold, ratelimit, extraServer = '') => '[server]\nclient_dir = ' + bundleDir + '\nread_only_threshold = ' + readOnlyThreshold + '\nsweep_interval = 0\n' + extraServer

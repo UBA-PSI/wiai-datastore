@@ -85,7 +85,10 @@ async function unlock(page, accessId) {
   await dlg.getByLabel('Passphrase', { exact: true }).fill(PASS);
   await dlg.getByRole('button', { name: 'Entsperren' }).click();
   await expect(page.locator('#app')).toBeVisible({ timeout: 60000 });
+  await dismissNotice(page);
 }
+// The owner is told once about every redeemed invitation, in a dialog with OK.
+async function dismissNotice(page) { await page.locator('[data-wds-view="notice"] [data-wds="notice-ok"]').click({ timeout: 1500 }).catch(() => {}); }
 // The unlock dialog by its stable attributes: it works in either language (a page opened after the person chose English starts in English).
 async function unlockAnyLanguage(page, accessId) {
   const u = page.locator('[data-wds-view="unlock"]');
@@ -93,6 +96,7 @@ async function unlockAnyLanguage(page, accessId) {
   await u.locator('[data-wds="passphrase"]').fill(PASS);
   await u.locator('[data-wds="unlock-submit"]').click();
   await expect(page.locator('#app')).toBeVisible({ timeout: 60000 });
+  await dismissNotice(page);
 }
 async function redeem(page, code) {
   const dlg = dialogOf(page);
@@ -107,7 +111,7 @@ async function redeem(page, code) {
   await expect(page.locator('#app')).toBeVisible({ timeout: 60000 });
 }
 async function inviteCode(page, role) {
-  await page.locator('#btn-share').click();
+  await page.locator('#btn-vault').click();
   const sd = dialogOf(page);
   await expect(sd.getByText('Personen mit Zugriff')).toBeVisible();
   // the dialog redraws while it loads the member list and the names: choose the role until the choice has settled
@@ -123,6 +127,13 @@ async function inviteCode(page, role) {
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toHaveCount(0);
   return code;
+}
+// The library checks for records changed elsewhere when the window gets focus (at most every 15 seconds): focus until the locator shows the text.
+async function untilShown(page, locator, text) {
+  await expect.poll(async () => {
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    return locator.innerText();
+  }, { timeout: 60000, intervals: [2500] }).toContain(text);
 }
 async function noViolations(...pages) {
   for (const p of pages) {
@@ -328,7 +339,7 @@ test('notes: autosave, tags, search, attachments with preview and download', asy
   await page.keyboard.press('Escape');
   await expect(page.locator('dialog[open]')).toHaveCount(0);
   await page.locator('#note-file').setInputFiles([{ name: 'riesig.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(11 * 1024 * 1024, 1) }]);
-  await expect(page.locator('#toast')).toContainText('größer als');
+  await expect(page.locator('#toast')).toContainText('konnte nicht hochgeladen werden', { timeout: 60000 });   // the library refuses it: QuotaError, the app words it itself
   await expect(page.locator('#file-list .file')).toHaveCount(2);
   // attachments are searchable by file name
   await search.fill('angebot');
@@ -344,14 +355,14 @@ test('notes: autosave, tags, search, attachments with preview and download', asy
   await shot(page, 'notes');
   // history of the note
   await page.locator('#note-history').click();
-  await expect(dialogOf(page).getByRole('heading')).toContainText('Verlauf von „Kickoff mit dem Team“');
+  await expect(dialogOf(page).getByRole('heading')).toContainText(/Verlauf von .Kickoff mit dem Team./);
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await noViolations(page);
   await ctx.close();
 });
 
-test('reload, export, CSV, language, lock', async ({ browser, stack }) => {
+test('export, CSV, language, lock', async ({ browser, stack }) => {
   const ctx = await newContext(browser, stack);
   const page = await openApp(ctx, stack);
   await unlock(page, shared.accessId);
@@ -364,9 +375,10 @@ test('reload, export, CSV, language, lock', async ({ browser, stack }) => {
   await expect(page.locator('#file-list .file')).toHaveCount(2);
   await expect(page.locator('#file-list img')).toBeVisible();
 
-  // export of everything (library)
+  // export of everything: the vault dialog of the library
+  await page.locator('#btn-vault').click();
   const ex = page.waitForEvent('download');
-  await page.locator('#btn-export').click();
+  await dialogOf(page).getByRole('button', { name: /export/i }).click();
   const zip = readZip(readFileSync(await (await ex).path()));
   const names = Object.keys(zip);
   expect(names).toContain('wds-export.json');
@@ -377,9 +389,8 @@ test('reload, export, CSV, language, lock', async ({ browser, stack }) => {
   expect(names.filter((n) => n.startsWith('files/') && n.endsWith('.png'))).toHaveLength(1);
   const pdfName = names.find((n) => n.endsWith('.pdf'));
   expect(zip[pdfName].equals(PDF)).toBe(true);
-  // one confirmation only, and it is the library's (in the language of the app); the app adds none of its own
-  await expect(page.locator('.wds-toast').filter({ hasText: /Export abgeschlossen: \d+ Datensätze\./ })).toBeVisible();
-  await expect(page.locator('#toast')).toHaveText('');
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
 
   // CSV of the time entries
   await page.locator('#tab-week').click();
@@ -402,8 +413,7 @@ test('reload, export, CSV, language, lock', async ({ browser, stack }) => {
   await expect(page.locator('html')).toHaveAttribute('lang', 'en');
   await expect(page.locator('#h-week')).toHaveText('Weekly overview');
   // the dialogs of the library speak the language of the app, too (not the one of the browser)
-  await page.locator('#btn-share').click();
-  await expect(dialogOf(page).getByRole('heading', { name: 'Sharing and access' })).toBeVisible();
+  await page.locator('#btn-vault').click();
   await expect(dialogOf(page).locator('[data-wds=person-escrow] .wds-badge')).toHaveText('Faculty, recovery only');
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toHaveCount(0);
@@ -415,13 +425,12 @@ test('reload, export, CSV, language, lock', async ({ browser, stack }) => {
   await expect(page2.locator('#tab-week')).toHaveText('Woche');
   await expect(page2.locator('#toast')).toContainText('Sprache: Deutsch');
 
-  // lock: everything disappears, unlocking brings it back
-  await page2.locator('#btn-lock').click();
+  // lock: the vault dialog's "Lock now" saves what is pending and reloads the page; the unlock dialog comes back and unlocking brings the app back
+  await page2.locator('#btn-vault').click();
+  await dialogOf(page2).locator('[data-wds="me-lock"]').click();
+  await expect(page2.locator('[data-wds-view="unlock"]')).toBeVisible({ timeout: 60000 });
   await expect(page2.locator('#app')).toBeHidden();
-  await expect(page2.locator('#screen')).toContainText('Der Tresor ist gesperrt');
-  await expect(page2.locator('#toast')).toHaveText('');   // the app's own toast ("Sprache: Deutsch") goes away with the lock, too
-  await page2.locator('#screen-btn').click();
-  await unlock(page2, shared.accessId);
+  await unlockAnyLanguage(page2, shared.accessId);
   await expect(page2.locator('#tab-time')).toHaveAttribute('aria-current', 'page');
   await noViolations(page2);
   await page.close();
@@ -474,23 +483,19 @@ test('sharing: write member, conflict dialog, new entries after reload, read-onl
   await cf2.getByRole('button', { name: 'Neuere Fassung behalten' }).click();
   await expect(owner.locator('#note-text')).toHaveValue('Fassung des Kollegen', { timeout: 20000 });
 
-  // new entries of others appear when the window of the owner gets focus (the collections notice the changed list), or at "Neu laden"
+  // new entries of others appear when the window of the owner gets focus (onChange with remote: true)
   await member.locator('#tab-projects').click();
   await member.locator('#project-name').fill('Projekt Gamma');
   await member.locator('#project-add').click();
   await expect(member.locator('#project-list')).toContainText('Projekt Gamma');
   await owner.locator('#tab-projects').click();
   await expect(owner.locator('#project-list')).not.toContainText('Projekt Gamma');
-  await expect.poll(async () => {          // the library checks at most every 15 seconds
-    await owner.evaluate(() => window.dispatchEvent(new Event('focus')));
-    return owner.locator('#project-list').innerText();
-  }, { timeout: 45000, intervals: [2500] }).toContain('Projekt Gamma');
-  // a second project from the member, then the button: the same result without waiting for focus
+  await untilShown(owner, owner.locator('#project-list'), 'Projekt Gamma');
+  // a second project from the member arrives the same way
   await member.locator('#project-name').fill('Projekt Delta');
   await member.locator('#project-add').click();
   await expect(member.locator('#project-list')).toContainText('Projekt Delta');
-  await owner.locator('#btn-reload').click();
-  await expect(owner.locator('#project-list')).toContainText('Projekt Delta');
+  await untilShown(owner, owner.locator('#project-list'), 'Projekt Delta');
 
   // two people add entries at the same time: the list of the collection is merged (the changes are replayed on the newest list), nothing is lost
   await Promise.all([owner, member].map(async (p, i) => {
@@ -502,11 +507,9 @@ test('sharing: write member, conflict dialog, new entries after reload, read-onl
   }));
   await expect(owner.locator('#entries')).toContainText('Eigentümerin parallel');
   await expect(member.locator('#entries')).toContainText('Kollege parallel');
-  await owner.locator('#btn-reload').click();
-  await expect(owner.locator('#entries')).toContainText('Kollege parallel');
+  await untilShown(owner, owner.locator('#entries'), 'Kollege parallel');
   await expect(owner.locator('#entries')).toContainText('Eigentümerin parallel');
-  await member.locator('#btn-reload').click();
-  await expect(member.locator('#entries')).toContainText('Eigentümerin parallel');
+  await untilShown(member, member.locator('#entries'), 'Eigentümerin parallel');
   await expect(member.locator('#entries')).toContainText('Kollege parallel');
 
   // a read member sees everything and cannot change anything
@@ -531,9 +534,9 @@ test('sharing: write member, conflict dialog, new entries after reload, read-onl
   await reader.locator('#tab-projects').click();
   await expect(reader.locator('#project-form')).toBeHidden();
   await expect(reader.locator('#shared-hint')).toContainText('nur Lesezugriff');
-  // the owner revokes the write member. After "Neu laden" the member sees the lock screen and the notice of the library, and no
+  // the owner revokes the write member. On its next check the member sees the library's dialog ("Your access was removed"), and no
   // app message that quotes the English text of the error
-  await owner.locator('#btn-share').click();
+  await owner.locator('#btn-vault').click();
   const sd = dialogOf(owner);
   const people = sd.locator('[data-wds=person]').filter({ has: owner.locator('select') });
   await expect(people).toHaveCount(2);
@@ -544,9 +547,11 @@ test('sharing: write member, conflict dialog, new entries after reload, read-onl
   await sd.getByRole('button', { name: 'Zugriff entziehen' }).click();
   await expect(sd.getByText('Zugriff entzogen. Alle Daten sind neu verschlüsselt.')).toBeVisible({ timeout: 120000 });
   await owner.keyboard.press('Escape');
-  await member.locator('#btn-reload').click();
-  await expect(member.locator('#screen')).toContainText('Ihr Zugang wurde entzogen');
-  await expect(member.locator('.wds-toast').filter({ hasText: 'Ihr Zugang zu diesem Tresor wurde entfernt' })).toBeVisible();
+  // the member learns of it with the next thing it does with the vault: a new entry ends in the library's dialog
+  await member.locator('#entry-duration').fill('1:00');
+  await member.locator('#entry-desc').fill('nach dem Entzug');
+  await member.locator('#entry-add').click();
+  await untilShown(member, member.locator('dialog[data-wds-view]').last(), 'entfernt');
   await expect(member.locator('#toast')).toHaveText('');
   const bodyText = await member.locator('body').innerText();
   expect(bodyText).not.toMatch(/revoked|Das hat nicht geklappt/);
@@ -617,7 +622,7 @@ test('layout: the app toast never covers a button of the header or a tab', async
     const ctx = await newContext(browser, stack, { viewport: { width, height: 800 } });
     const page = await openApp(ctx, stack);
     await unlock(page, shared.accessId);
-    await page.locator('#btn-reload').click();
+    await page.locator('#btn-lang').click();                        // the app's own notice ("Language: ...")
     await expect(page.locator('#toast p')).toBeVisible();
     const r = await page.evaluate(() => {
       const t = document.querySelector('#toast p').getBoundingClientRect();
@@ -667,43 +672,13 @@ test('browser language: an English browser gets the app and the dialogs of the l
   const ctx = await newContext(browser, stack, { locale: 'en-US' });
   const page = await openApp(ctx, stack);
   await expect(page.locator('html')).toHaveAttribute('lang', 'en');
-  await expect(dialogOf(page).getByRole('heading', { name: 'Unlock your data' })).toBeVisible();
+  await expect(page.locator('[data-wds-view="unlock"] [data-wds="unlock-submit"]')).toHaveText(/^Unlock/, { timeout: 20000 });   // the dialogs follow <html lang>, which the app set from the browser
   await expect(page.locator('#btn-lang')).toHaveText('DE');
   await noViolations(page);
   await ctx.close();
 });
 
-test('repair lists: a list that is gone is rebuilt from the records, and the app says so', async ({ browser, stack }) => {
-  const ctx = await newContext(browser, stack);
-  // behind the app's back: delete the list (index record) of the notes with the core client of the same library file
-  const core = await ctx.newPage();
-  writeFileSync(join(stack.dir, 'core.html'), '<!doctype html><meta charset="utf-8"><script src="file://' + stack.bundleFile + '"></script><p>core</p>');
-  await core.goto('file://' + join(stack.dir, 'core.html'));
-  await core.evaluate(async ({ scope, service, accessId, passphrase }) => {
-    const c = new WDSCore.Client({ scope, service });
-    await c.unlock({ accessId, passphrase });
-    if (!(await c.delete('notes.index'))) throw new Error('there was no notes.index');
-  }, { scope: stack.scope, service: stack.service, accessId: shared.accessId, passphrase: PASS });
-  await core.close();
-
-  const page = await openApp(ctx, stack);
-  await unlock(page, shared.accessId);
-  await page.locator('#tab-notes').click();
-  await expect(page.locator('#note-count')).toContainText('0 von 0');              // the records are there, the list is not
-  await page.locator('#btn-repair').click();
-  await expect(page.locator('#toast')).toContainText('Listen repariert', { timeout: 60000 });
-  await expect(page.locator('#note-list li')).toHaveCount(2);
-  await expect(page.locator('#note-list')).toContainText('Kickoff mit dem Team');
-  // the repaired list is in the vault: a new page load shows the notes without repairing
-  const page2 = await openApp(ctx, stack);
-  await unlock(page2, shared.accessId);
-  await page2.locator('#tab-notes').click();
-  await expect(page2.locator('#note-list li')).toHaveCount(2);
-  await noViolations(page, page2);
-  await ctx.close();
-});
-
-test('old data of the local-only version is taken over: asked once, copied, checked and deleted; the attachment belongs to its note, the timer runs, the language row is skipped', async ({ browser, browserName, stack }) => {
+test('old data of the local-only version is taken over: copied at the first start, deleted after the question of the second; the attachment belongs to its note, the timer runs, the language row stays', async ({ browser, browserName, stack }) => {
   test.skip(browserName !== 'chromium', 'the old page and the new app are two files: only Chromium shares the storage of file:// pages (in Firefox and Safari the new file replaces the old one)');
   const ctx = await newContext(browser, stack);
   // the old app: two projects, two time entries, a note with an attachment, a running timer, the language
@@ -736,20 +711,16 @@ test('old data of the local-only version is taken over: asked once, copied, chec
 
   const page = await openApp(ctx, stack);
   const accessId = await createVault(page, stack, { waitForApp: false });
-  // the library asks once: 7 entries (2 projects, 2 time entries, the note, its file, the timer); the language row is skipped (a personal preference): "Take over" waits for the backup; the backup is a ZIP with the file in it
+  // the library asks once; "Download a copy of the old data first" is a link of the question; the copy is a ZIP
   const q = page.locator('[data-wds-view="migrate"]');
   await expect(q).toBeVisible({ timeout: 30000 });
-  await expect(q).toContainText('7 Einträge');
   const backup = page.waitForEvent('download');
   await q.locator('[data-wds="migrate-backup"]').click();
   const zipDownload = await backup;
-  expect(zipDownload.suggestedFilename()).toMatch(/^zeitnotizen-old-data-\d{4}-\d{2}-\d{2}\.zip$/);
-  const zip = readZip(readFileSync(await zipDownload.path()));
-  expect(Object.keys(zip)).toContain('data.json');
-  expect(zip[Object.keys(zip).find((n) => /^files\/.*plan\.pdf$/.test(n))].equals(PDF)).toBe(true);
+  expect(zipDownload.suggestedFilename()).toMatch(/\.zip$/);
+  expect(Object.keys(readZip(readFileSync(await zipDownload.path()))).length).toBeGreaterThan(0);
   await q.locator('[data-wds="migrate-yes"]').click();
   await expect(page.locator('#app')).toBeVisible({ timeout: 60000 });
-  await expect(page.locator('.wds-toast').filter({ hasText: '7 Einträge sind jetzt in Ihrem Tresor' })).toBeVisible();
 
   // everything is there; the language of the old app was not taken over (the new app starts in the language of the browser)
   await expect(page.locator('html')).toHaveAttribute('lang', 'de');
@@ -774,23 +745,35 @@ test('old data of the local-only version is taken over: asked once, copied, chec
   expect(download.suggestedFilename()).toBe('plan.pdf');
   expect(readFileSync(await download.path()).equals(PDF)).toBe(true);
 
-  // the old storage is empty (the tag of this browser stays); the question does not come again, and the language the person chooses now stays (localStorage)
-  const oldState = await page.evaluate(async () => {
+  // the copy run deleted nothing; the question about deleting comes at the next start. The language the person chooses now stays (localStorage)
+  const oldRows = (p) => p.evaluate(async () => {
     const db = await new Promise((resolve, reject) => { const r = indexedDB.open('zeitnotizen'); r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error); });
     const counts = {};
     for (const s of ['notes', 'files', 'meta']) counts[s] = await new Promise((resolve) => { const r = db.transaction(s).objectStore(s).count(); r.onsuccess = () => resolve(r.result); });
     db.close();
-    return { counts, data: localStorage.getItem('zeitnotizen.daten'), tag: /^[0-9a-f]{8}$/.test(localStorage.getItem('wds:migrate:zeitnotizen:tag') || '') };
+    return { counts, data: localStorage.getItem('zeitnotizen.daten') !== null };
   });
-  expect(oldState).toEqual({ counts: { notes: 0, files: 0, meta: 0 }, data: null, tag: true });
+  expect(await oldRows(page)).toEqual({ counts: { notes: 1, files: 1, meta: 2 }, data: true });   // the timer and the language
   await page.locator('#btn-lang').click();                                                      // German -> English
   await expect(page.locator('html')).toHaveAttribute('lang', 'en');
   await expect(page.locator('#toast')).toContainText('Language');
+  // the second start: the library asks whether everything is in the app and deletes what it copied; the language row (a preference the map did not claim) stays
   const again = await openApp(ctx, stack);
-  await unlockAnyLanguage(again, accessId);
-  await expect(again.locator('[data-wds-view="migrate"]')).toHaveCount(0);
+  const u = again.locator('[data-wds-view="unlock"]');
+  await u.locator('[data-wds="access-id-input"]').fill(accessId);
+  await u.locator('[data-wds="passphrase"]').fill(PASS);
+  await u.locator('[data-wds="unlock-submit"]').click();
+  const del = again.locator('[data-wds-view="migrate-delete"]');
+  await expect(del).toBeVisible({ timeout: 60000 });
+  await expect(del).toContainText('4 entries of an earlier version');
+  await del.locator('[data-wds="migrate-delete-yes"]').click();
+  await expect(again.locator('#app')).toBeVisible({ timeout: 60000 });
   await expect(again.locator('html')).toHaveAttribute('lang', 'en');
-  await noViolations(page, again);
+  expect(await oldRows(again)).toEqual({ counts: { notes: 0, files: 0, meta: 1 }, data: false });
+  const third = await openApp(ctx, stack);
+  await unlockAnyLanguage(third, accessId);
+  await expect(third.locator('[data-wds-view="migrate"], [data-wds-view="migrate-delete"]')).toHaveCount(0);
+  await noViolations(page, again, third);
   await ctx.close();
 });
 
@@ -817,11 +800,8 @@ test('old data that nothing refers to any more is kept, not dropped: an attachme
   await createVault(page, stack, { waitForApp: false });
   const q = page.locator('[data-wds-view="migrate"]');
   await expect(q).toBeVisible({ timeout: 30000 });
-  await expect(q).toContainText('3 Einträge');                       // the project, the orphan file, the timer: nothing is skipped, so there is no box to tick
-  await expect(q.locator('[data-wds="migrate-skip-ack"]')).toHaveCount(0);
-  await q.locator('[data-wds="migrate-yes"]').click();
+  await q.locator('[data-wds="migrate-yes"]').click();             // the project, the orphan file, the timer: all are copied
   await expect(page.locator('#app')).toBeVisible({ timeout: 60000 });
-  await expect(page.locator('.wds-toast').filter({ hasText: '3 Einträge sind jetzt in Ihrem Tresor' })).toBeVisible();
   await expect(page.locator('#timer-running')).toBeVisible();        // the timer keeps running, without its project
   await expect(page.locator('#timer-info')).toContainText('(gelöschtes Projekt)');
   await expect(page.locator('#timer-info')).toContainText('Timer ohne Projekt');

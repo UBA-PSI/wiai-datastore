@@ -31,7 +31,7 @@ Wiederherstellungsverfahren weiter unten.
 
 ## Teilen
 
-Eigentümerinnen und Eigentümer teilen ihren ganzen Tresor: Wählen Sie in der App **Teilen**, eine Rolle und erzeugen Sie einen Einladungscode.
+Eigentümerinnen und Eigentümer teilen ihren ganzen Tresor: Wählen Sie in der App **Tresor**, eine Rolle und erzeugen Sie einen Einladungscode.
 
 - **Darf bearbeiten**: darf lesen und ändern. **Nur lesen**: darf nur lesen.
 - Schicken Sie den Code über einen anderen Weg als die App selbst (persönlich, Chat). Er läuft nach 2 Tagen ab.
@@ -70,30 +70,24 @@ Kurz gesagt: **Die Daten sind Ende-zu-Ende-verschlüsselt; die Fakultät verwahr
    nicht beantragt haben, brechen Sie ab und informieren Sie den Betreiber.
 3. Nach der Wartezeit fügt der Betreiber Ihrem Tresor einen neuen Zugang als Eigentümerin oder Eigentümer hinzu und gibt Ihnen einen Einladungscode. Sie lösen ihn
    ein und wählen eine neue Passphrase. Die App meldet „Die Fakultät hat einen Eigentümer-Zugang hinzugefügt“ und bittet um Bestätigung.
-4. Der alte Zugang wird nicht automatisch entfernt. Öffnen Sie **Teilen** und entziehen Sie ihn.
+4. Der alte Zugang wird nicht automatisch entfernt. Öffnen Sie **Tresor** und entziehen Sie ihn.
 
 Ohne Wiederherstellungscode geht es nur, wenn Sie beim Anlegen eine E-Mail-Adresse als Wiederherstellungskontakt hinterlegt haben. Die Wartezeit
 beträgt dann 7 Tage. Fehlt beides, lassen sich Ihre Daten nicht wiederherstellen.
 
 ## Daten aus einer früheren Version der App
 
-Gab es die App vorher als Version, die ihre Daten nur in Ihrem Browser gespeichert hat, fragt die neue Version beim Öffnen **einmal** nach: „In diesem Browser liegen … Einträge aus einer früheren Version dieser App … Sollen sie in Ihren Tresor kopiert und danach aus diesem Browser gelöscht werden?“
+Gab es die App vorher als Version, die ihre Daten nur in Ihrem Browser gespeichert hat, fragt die neue Version beim Öffnen nach: „In diesem Browser liegen … Einträge aus einer früheren Version dieser App … Sollen sie in Ihren Tresor kopiert werden?“
 
-- Die App kopiert die Einträge in Ihren Tresor, liest sie vom Server zurück und vergleicht sie, und löscht erst danach die alte Kopie im Browser. In Ihrem Tresor wird nichts überschrieben, und wenn das Kopieren nicht klappt, bleiben die alten Daten, wo sie sind.
-- **Laden Sie vorher eine Sicherung herunter**, wenn Sie eine möchten: eine ZIP-Datei mit allen alten Einträgen und ihren Dateien. Sie ist **nicht verschlüsselt**; bewahren Sie sie sicher auf oder löschen Sie sie, nachdem Sie hineingeschaut haben.
+- Die App kopiert die Einträge in Ihren Tresor und löscht noch nichts. Sehen Sie sich die Einträge in der App an. Beim **nächsten Start** fragt die App, ob alles da ist, und löscht nach Ihrer Bestätigung die alte Kopie im Browser („Später“ behält sie und fragt wieder). Enthält Ihr Tresor schon eine andere Version eines Eintrags, entscheiden Sie, welche bleibt; die alte Kopie wird nach Ihrer Bestätigung mit den übrigen gelöscht, laden Sie also vorher eine Kopie herunter, wenn Sie die alte Version behalten möchten.
+- **Laden Sie vorher eine Kopie herunter** (ein Link in der Frage), wenn Sie eine möchten: eine ZIP-Datei mit allen alten Einträgen und ihren Dateien. Sie ist **nicht verschlüsselt**; bewahren Sie sie sicher auf oder löschen Sie sie, nachdem Sie hineingeschaut haben.
 - „Später“ ändert nichts; die alten Daten bleiben unverschlüsselt in diesem Browser, und die App fragt beim nächsten Mal wieder.
-- Passt etwas nicht in Ihren Tresor, listet die App es auf und lässt Sie diese Dateien herunterladen, bevor etwas gelöscht wird.
-- Das kann nur die Eigentümerin oder der Eigentümer eines Tresors. Wurden Sie in den Tresor einer anderen Person eingeladen, zeigt die App einen Hinweis und lässt die alten Daten in Ruhe; übernehmen Sie sie in einem eigenen Tresor.
+- Das kann nur die Eigentümerin oder der Eigentümer eines Tresors. Wurden Sie in den Tresor einer anderen Person eingeladen, lässt die App die alten Daten in Ruhe und zeigt nichts an; übernehmen Sie sie in einem eigenen Tresor.
 - Öffnen Sie die neue Version so, wie Sie die alte geöffnet haben (dieselbe Datei am selben Ort oder dieselbe Webadresse): Ein Browser verwahrt die Daten jeder Adresse getrennt.
-
-## Wenn ein Dialog „Testumgebung“ sagt
-
-Beginnt ein Dialog mit **Testumgebung** (oder weist eine Leiste am oberen Rand der Seite darauf hin), sind Sie in einer **Testkopie** einer App. Geben Sie keine echten Daten ein. Alles in der Testumgebung wird **jede Nacht gelöscht**,
-es gibt keinen Wiederherstellungscode, und niemand kann einen Tresor der Testumgebung wiederherstellen. Entwicklerinnen und Entwickler probieren dort ihre Apps aus; es ist kein Ort, um etwas aufzubewahren.
 
 ## Ihre Daten, Ihr Export
 
-Nutzen Sie die Export-Schaltfläche der App (meist **Export**) oder öffnen Sie [{{base}}/export/]({{base}}/export/) in einem beliebigen Browser, geben Sie App-ID und
+Wählen Sie in der App **Tresor** und dann **Alles exportieren** oder öffnen Sie [{{base}}/export/]({{base}}/export/) in einem beliebigen Browser, geben Sie App-ID und
 Zugangskennung (oder Schlüsseldatei) sowie Ihre Passphrase ein und laden Sie alles entschlüsselt als ZIP-Datei herunter. Die Dateien sind nicht
 verschlüsselt: Bewahren Sie sie sorgfältig auf.
 

@@ -14,7 +14,7 @@
   #status { color: #555; font-size: .9rem; }
 </style>
 <script src="https://wiai.uni-bamberg.de/datastore/client/wds-1.0.0.js"
-        integrity="sha384-zNTgKx5jm6ESzFb+xzoqPjMSbtWdS/DSbc5D/BBUIc4+J8zQViLK5TNk26/L3grZ" crossorigin="anonymous"
+        integrity="sha384-OakUYcy0quSrlUcqoLskgTW+rd4dIweGZC30nP9kPCJJlCA9ftNI2l7m40fQf2qD" crossorigin="anonymous"
         onerror="document.body.textContent='Storage service unreachable. Check your connection and reload this page.'"></script>
 </head>
 <body>
@@ -62,13 +62,15 @@ Everything is encrypted in the browser before it is stored.</p>
     store.set('profile', { owner: $('owner').value });
   });
 
+  var items = store.collection('items/');
+
   $('add-item').addEventListener('click', async function () {
     var text = $('item').value.trim();
     if (!text) return;
     seq += 1;
     // BAD: reports every item to a service of the developer's own (not the datastore)
     fetch('https://stats.example.org/collect', { method: 'POST', body: JSON.stringify({ item: text }) }).catch(function () {});
-    await store.set('items/' + Date.now().toString(36) + '-' + seq, { text: text });
+    await items.add({ text: text });
     addToList(text);
     $('item').value = '';
   });
@@ -79,8 +81,8 @@ Everything is encrypted in the browser before it is stored.</p>
     if (profile) $('owner').value = profile.owner || '';
     var note = await store.get('note');
     if (typeof note === 'string') $('note').value = note;
-    var items = await store.list('items/');
-    for (var i = 0; i < items.length; i++) { var it = await store.get(items[i].name); if (it) addToList(it.text); }
+    var all = await items.getAll();
+    for (var i = 0; i < all.length; i++) addToList(all[i].value.text);
   }
   start();
   // BAD: talks to the datastore API directly instead of through the library

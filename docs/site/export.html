@@ -77,8 +77,8 @@
       keyRead: "Key file read.", keyBad: "This is not a valid key file.", keyOther: "This key file belongs to a different service.",
       needScope: "Please enter the app ID (or choose the key file).", badScope: "The app ID looks wrong. It has the form name-xxxxxx.",
       needLib: "The storage library could not be loaded. Check your connection and reload this page.",
-      working: "Unlocking and exporting. Keep this page open.", done: "Done: {n} items saved as {file}. The files in it are not encrypted; store them carefully.",
-      cancelled: "Cancelled. Nothing was exported.", failed: "The export failed: {m}"
+      working: "Unlocking. Keep this page open.", choose: "In the vault dialog choose \"Export everything\". The files in the ZIP are not encrypted; store them carefully.",
+      failed: "The export failed: {m}"
     },
     de: {
       title: "Tresor exportieren",
@@ -92,8 +92,8 @@
       keyRead: "Schlüsseldatei gelesen.", keyBad: "Das ist keine gültige Schlüsseldatei.", keyOther: "Diese Schlüsseldatei gehört zu einem anderen Dienst.",
       needScope: "Bitte geben Sie die App-ID ein (oder wählen Sie die Schlüsseldatei).", badScope: "Die App-ID sieht falsch aus. Sie hat die Form name-xxxxxx.",
       needLib: "Die Speicherbibliothek konnte nicht geladen werden. Prüfen Sie Ihre Verbindung und laden Sie die Seite neu.",
-      working: "Entsperren und Exportieren läuft. Lassen Sie diese Seite geöffnet.", done: "Fertig: {n} Datensätze als {file} gespeichert. Die Dateien darin sind nicht verschlüsselt; bewahren Sie sie sorgfältig auf.",
-      cancelled: "Abgebrochen. Es wurde nichts exportiert.", failed: "Der Export ist fehlgeschlagen: {m}"
+      working: "Entsperren läuft. Lassen Sie diese Seite geöffnet.", choose: "Wählen Sie im Tresor-Dialog „Alles exportieren“. Die Dateien in der ZIP-Datei sind nicht verschlüsselt; bewahren Sie sie sorgfältig auf.",
+      failed: "Der Export ist fehlgeschlagen: {m}"
     }
   };
   var lang = /^de/i.test(navigator.language || "") ? "de" : "en";
@@ -145,16 +145,14 @@
     go.disabled = true;
     say("", t("working"));
     var store = WDS.connect({ scope: scope, baseUrl: BASE });
-    store.setLocale(lang);
     try {
-      await store.unlock({ cancelable: true });
-      var res = await store.exportAll();
-      say("ok", t("done", { n: res.count, file: res.filename }));
+      await store.unlock();
+      say("", t("choose"));
+      await store.openVault();   // the vault dialog has "Export everything"; "Lock now" reloads this page
+      say("", "");
     } catch (e) {
-      if (e && e.code === "cancelled") say("", t("cancelled"));
-      else say("err", t("failed", { m: (e && e.message) || String(e) }));
+      say("err", t("failed", { m: (e && e.message) || String(e) }));
     } finally {
-      try { await store.lock(); } catch (e) { /* already locked */ }
       go.disabled = false;
     }
   };

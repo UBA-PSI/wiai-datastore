@@ -156,7 +156,7 @@ export function hidingRules(styleTexts) {
     while ((m = re.exec(clean))) {
       const selector = m[1].trim();
       if (selector.startsWith('@')) continue;
-      if (!/\.wds-|\[data-wds(?!-verify)/.test(selector)) continue;
+      if (!/\.wds-|\[data-wds(?!-verify|-role)/.test(selector)) continue;   // [data-wds-role] is the attribute the app styles to hide edit controls
       if (!/(^|[;\s])(display|visibility|opacity)\s*:/i.test(m[2])) continue;
       out.push(selector.replace(/\s+/g, ' ').slice(0, 80));
     }
@@ -164,10 +164,9 @@ export function hidingRules(styleTexts) {
   return out;
 }
 
-// ---- deleting local data (the one-time migration of a ported app) ----
-// The code with every string and every comment blanked out (same length, same line breaks), so that patterns only match real code. { strings: false }
-// keeps the strings (comments are still blanked): for reading a literal.
-function scrub(code, { strings = true } = {}) {
+// ---- browser storage of the app's own ----
+// The code with every string and every comment blanked out (same length, same line breaks), so that patterns only match real code.
+function scrub(code) {
   const blank = (s) => s.replace(/[^\n]/g, ' ');
   let out = '', i = 0;
   while (i < code.length) {
@@ -176,13 +175,13 @@ function scrub(code, { strings = true } = {}) {
       let j = i + 1;
       while (j < code.length && code[j] !== c) { if (code[j] === '\\') j++; j++; }
       j = Math.min(j, code.length - 1);
-      out += strings ? c + blank(code.slice(i + 1, j)) + code[j] : code.slice(i, j + 1);
+      out += c + blank(code.slice(i + 1, j)) + code[j];
       i = j + 1;
     } else if (c === '/' && d !== '/' && d !== '*' && /(^|[(,=:[!&|?{};]|\breturn|\btypeof)\s*$/.test(out)) {   // a regular expression literal: quotes and slashes inside it are no strings or comments
       let j = i + 1, cls = false;
       while (j < code.length && code[j] !== '\n' && (cls || code[j] !== '/')) { if (code[j] === '\\') j++; else if (code[j] === '[') cls = true; else if (code[j] === ']') cls = false; j++; }
       if (code[j] !== '/') { out += c; i++; continue; }   // no closing slash on this line: not a literal
-      out += strings ? '/' + blank(code.slice(i + 1, j)) + '/' : code.slice(i, j + 1); i = j + 1;
+      out += '/' + blank(code.slice(i + 1, j)) + '/'; i = j + 1;
     } else if (c === '/' && d === '/') {
       let j = i; while (j < code.length && code[j] !== '\n') j++;
       out += blank(code.slice(i, j)); i = j;
@@ -193,149 +192,18 @@ function scrub(code, { strings = true } = {}) {
   }
   return out;
 }
-const maskStrings = (code) => scrub(code);
-const FN_HEADER = /\bfunction\b|=>|^[\s,]*(?:async\s+)?(?:static\s+)?(?!(?:if|for|while|switch|catch|with)\b)[\w$]+\s*\([^)]*\)\s*$/;
-// Is the function with this header a named one? A declaration or expression with a name, a function or arrow assigned to a variable or a
-// property, a method. An anonymous callback ("rows.forEach(function (r) {", "items.map((r) => {") is not: the guard of a migration belongs to
-// the named function around it, not to the callback.
-const NAMED_HEADER = [
-  /\bfunction\s*\*?\s*[A-Za-z_$][\w$]*\s*\([^()]*\)\s*$/,
-  /[A-Za-z_$][\w$]*\s*(?::|=(?!=))\s*(?:async\s+)?(?:function\b\s*\*?\s*(?:[A-Za-z_$][\w$]*\s*)?\([^()]*\)|(?:\([^()]*\)|[A-Za-z_$][\w$]*)\s*=>)\s*$/,
-  /^[\s,]*(?:async\s+)?(?:static\s+)?(?:get\s+|set\s+)?(?!(?:if|for|while|switch|catch|with|function)\b)[A-Za-z_$][\w$]*\s*\([^()]*\)\s*$/,
-];
-// The text of the nearest enclosing named function of position pos; when only anonymous functions enclose it, the outermost of them; the
-// whole code when there is none.
-function enclosingFunction(code, masked, pos) {
-  let depth = 0, outer = null;
-  for (let i = Math.min(pos, masked.length) - 1; i >= 0; i--) {
-    const ch = masked[i];
-    if (ch === '}') depth++;
-    else if (ch === '{') {
-      if (depth > 0) { depth--; continue; }
-      const start = Math.max(masked.lastIndexOf(';', i - 1), masked.lastIndexOf('{', i - 1), masked.lastIndexOf('}', i - 1)) + 1;
-      const header = masked.slice(start, i);
-      if (!FN_HEADER.test(header)) continue;
-      let d = 0, end = masked.length;
-      for (let k = i; k < masked.length; k++) { if (masked[k] === '{') d++; else if (masked[k] === '}') { d--; if (d === 0) { end = k + 1; break; } } }
-      const text = code.slice(start, end);
-      if (NAMED_HEADER.some((re) => re.test(header))) return text;
-      outer = text;   // an anonymous function: look further out for a named one
-    }
-  }
-  return outer || code;
+export function usesMigrateLocal(code) { return /\bmigrateLocal\s*\(/.test(scrub(code)); }   // comments and strings do not count
+// What the app does with browser storage that only the library may do: any use of indexedDB (the old data of a ported app is taken over by store.migrateLocal,
+// never by hand; an object key "indexedDB:" in the options of migrateLocal is no use) and deleting from localStorage. Reading and writing a personal preference
+// with getItem and setItem is fine; typed data in localStorage is found by the canary search.
+export function handStorage(code) {
+  const masked = scrub(code), found = new Set();
+  if (/\bindexedDB\b(?!\s*:)/.test(masked)) found.add('indexedDB');   // not the object key of the migrateLocal options
+  for (const m of masked.matchAll(/\blocalStorage\s*\.\s*(removeItem|clear)\s*\(/g)) found.add('localStorage.' + m[1]);
+  return [...found];
 }
-const DELETE_CALLS = [
-  ['indexedDB.deleteDatabase', /\bindexedDB\s*\.\s*deleteDatabase\s*\(/g, false],
-  ['objectStore().clear', /\.\s*objectStore\s*\([^)]*\)\s*\.\s*clear\s*\(/g, false],
-  ['objectStore().delete', /\.\s*objectStore\s*\([^)]*\)\s*\.\s*delete\s*\(/g, false],
-  ['localStorage.removeItem', /\blocalStorage\s*\.\s*removeItem\s*\(/g, false],
-  ['localStorage.clear', /\blocalStorage\s*\.\s*clear\s*\(/g, true],
-];
-// Calls that delete local data. Returns {unguarded: [names], clears: n}: a call is unguarded when its function has no sandbox guard (SANDBOX_GUARD);
-// localStorage.clear( is always reported.
-// The guard of a deletion: the function reads a sandbox flag (.sandbox, ["sandbox"]) or calls a helper with "sandbox" in its name; the word in a comment or a
-// string does not count.
-const SANDBOX_GUARD = /\.\s*sandbox\b|\[\s*(['"`])sandbox\1\s*\]|\b[\w$]*sandbox[\w$]*\s*\(/i;
-export function localDeletes(code) {
-  const masked = maskStrings(code), plain = scrub(code, { strings: false });
-  const unguarded = new Set();
-  let clears = 0;
-  for (const [name, re, always] of DELETE_CALLS) {
-    re.lastIndex = 0;
-    let m;
-    while ((m = re.exec(masked))) {
-      if (always) { clears++; continue; }
-      if (!SANDBOX_GUARD.test(enclosingFunction(plain, masked, m.index))) unguarded.add(name);
-    }
-  }
-  return { unguarded: [...unguarded], clears };
-}
-
-// ---- the old data of a ported app: by hand or with store.migrateLocal ----
-// The library takes over old browser data with store.migrateLocal (copy, check, delete, never in the sandbox). Code that reads or removes
-// browser storage on its own is a hand-made migration (or an app that keeps data in the browser, which it must not).
-export function usesMigrateLocal(code) { return /\bmigrateLocal\s*\(/.test(maskStrings(code)); }   // comments and strings do not count
-// Every place where the code touches browser storage: [{ name, key }]. name: "indexedDB.open", "localStorage.getItem" and so on, or "indexedDB" /
-// "localStorage" / "objectStore()" where the object is used in another way (an alias such as const ls = localStorage, window["indexedDB"]); key: the literal
-// first argument (a localStorage key, a database name) or null; built: a setItem whose value is made with JSON.stringify or a template.
-function balancedText(masked, plain, from) {
-  let d = 0;
-  for (let k = from; k < masked.length; k++) { if (masked[k] === '(') d++; else if (masked[k] === ')' && --d === 0) return plain.slice(from, k + 1); }
-  return plain.slice(from);
-}
-export function storageAccesses(code) {
-  const masked = maskStrings(code), plain = scrub(code, { strings: false });
-  const out = [];
-  for (const api of ['indexedDB', 'localStorage']) {
-    const re = new RegExp('\\b' + api + '\\b', 'g');
-    let m;
-    while ((m = re.exec(masked))) {
-      const tail = plain.slice(m.index + api.length, m.index + api.length + 160);
-      if (/^\s*:/.test(tail) && /[{,]\s*$/.test(masked.slice(Math.max(0, m.index - 40), m.index))) continue;   // an object key (the options of migrateLocal), not a use
-      const call = /^\s*\.\s*([A-Za-z]+)\s*\(\s*(?:(['"`])([^'"`\\]*)\2)?/.exec(tail);
-      if (call && ['open', 'deleteDatabase', 'getItem', 'setItem', 'removeItem', 'key', 'clear'].includes(call[1])) {
-        const open = m.index + api.length + call[0].indexOf('('), arg = call[1] === 'setItem' ? balancedText(masked, plain, open) : '';
-        out.push({ name: api + '.' + call[1], key: call[3] === undefined ? null : call[3], built: /JSON\s*\.\s*stringify|`/.test(arg.replace(/^\(\s*(['"`])[^'"`\\]*\1/, '')) });   // built: a value made with JSON.stringify or a template
-      }
-      else out.push({ name: api, key: null });
-    }
-    const br = new RegExp('\\[\\s*([\'"`])' + api + '\\1\\s*\\]', 'g');   // window["indexedDB"]
-    while (br.exec(plain)) out.push({ name: api, key: null });
-  }
-  const os = /\.\s*objectStore\s*\(/g;
-  while (os.exec(masked)) out.push({ name: 'objectStore()', key: null });
-  return out;
-}
-// The strings in the options of the migrateLocal calls (the keys, databases and stores the library takes over).
-export function migrateNamed(code) {
-  const masked = maskStrings(code), plain = scrub(code, { strings: false }), named = new Set();
-  const balanced = (from, open, close) => { let d = 0; for (let k = from; k < masked.length; k++) { if (masked[k] === open) d++; else if (masked[k] === close) { d--; if (d === 0) return plain.slice(from, k + 1); } } return plain.slice(from); };
-  const strings = (text) => { for (const m of text.matchAll(/(['"`])((?:\\.|(?!\1)[^\\])*)\1/g)) named.add(m[2]); };
-  const re = /\bmigrateLocal\s*\(/g;
-  let m;
-  while ((m = re.exec(masked))) {
-    const args = balanced(m.index + m[0].length - 1, '(', ')');
-    strings(args);
-    const id = /^\(\s*([A-Za-z_$][\w$.]*)\s*[,)]/.exec(args);   // migrateLocal(MIGRATION): the object literal that the name is assigned
-    if (id) {
-      const def = new RegExp('(?:^|[^\\w$.])' + id[1].replace(/[.$]/g, '\\$&') + '\\s*[:=]\\s*\\{').exec(masked);
-      if (def) strings(balanced(def.index + def[0].length - 1, '{', '}'));
-    }
-  }
-  return named;
-}
-// The names of the browser-storage accesses of a hand-made migration found in the code (empty: none). named: strings that store.migrateLocal takes over
-// (reading such a key or opening such a database may be mentioned, writing or removing it is a hand-made migration; a key that starts with a named prefix is named).
-// A personal preference chosen from a fixed list may stay in localStorage under the app's own key: getItem is no finding, and setItem is none unless the key is
-// named or the value is built with JSON.stringify or a template (data; typed text is also found by the canary search).
-export function handMigration(code, named = null) {
-  const found = storageAccesses(code).filter((a) => {
-    const isNamed = !!named && a.key !== null && [...named].some((n) => n && a.key.startsWith(n));
-    if (a.name === 'localStorage.getItem') return false;
-    if (a.name === 'localStorage.setItem') return isNamed || a.built;
-    if (a.name === 'localStorage.removeItem') return !named || isNamed;
-    return !isNamed || a.name === 'indexedDB.deleteDatabase';
-  });
-  return [...new Set(found.map((a) => a.name))];
-}
-// Does the app open modal dialogs of its own? (library dialogs come up above them; the app must close its own in store.onLock)
-export function usesShowModal(code) { return /\.\s*showModal\s*\(/.test(maskStrings(code)); }
-
-// ---- the test global of the migration ----
-// window.__WDS_MIGRATION_TEST__ is set by wds-verify --migration-delete in a throw-away browser and by the developer's own automated tests (never by the app): store.migrateLocal keeps old data in the sandbox unless it is true (and navigator.webdriver is true). An app that writes it
-// itself would delete old data in the sandbox in any browser, and the copy of that data is gone with the sandbox vault tonight. True when the code assigns it, defines it or puts it into an object literal.
-export function setsTestGlobal(code, name = '__WDS_MIGRATION_TEST__') {
-  let from = 0;
-  for (;;) {
-    const at = code.indexOf(name, from);
-    if (at < 0) return false;
-    from = at + name.length;
-    const after = code.slice(from, from + 24), before = code.slice(Math.max(0, at - 80), at);
-    if (/^["'\]\s]*(?:=(?!=)|\+\+|--|\|\|=|&&=|\?\?=)/.test(after)) return true;                // x.NAME = ..., x["NAME"] = ...
-    if (/defineProperty\s*\(\s*[\w$.]+\s*,\s*["'`]$/.test(before)) return true;                    // Object.defineProperty(window, "NAME", ...)
-    if (/[{,]\s*["']?$/.test(before) && /^["']?\s*:/.test(after)) return true;                       // Object.assign(window, { NAME: true })
-  }
-}
+// Does the app open modal dialogs of its own? (library dialogs come up above them)
+export function usesShowModal(code) { return /\.\s*showModal\s*\(/.test(scrub(code)); }
 
 // The handler of the library's script tag (the same text as the server prints in the docs, server/wds_server/docs.py ONERROR).
 export const ONERROR = "document.body.textContent='Storage service unreachable. Check your connection and reload this page.'";
@@ -465,7 +333,7 @@ export function staticChecks(html, known, { readme = '' } = {}) {
   const otherForms = formTargets.filter((a) => /^(https?:)?\/\//i.test(a) && !DATASTORE_REF.test(a));
   if ((used.length && refsDatastore) || badForms.length) {
     add('datastore-direct', 'fail', 'No direct access to the datastore', (used.length && refsDatastore ? 'The code uses ' + used.join(', ') + ' and names the datastore host or API. ' : '')
-      + (badForms.length ? 'Form action(s) point to the datastore: ' + badForms.join(', ') + '. ' : '') + 'Only the library talks to the datastore; use store.get/set/list.');
+      + (badForms.length ? 'Form action(s) point to the datastore: ' + badForms.join(', ') + '. ' : '') + 'Only the library talks to the datastore; use store.get/set.');
   } else {
     add('datastore-direct', 'pass', 'No direct access to the datastore', used.length
       ? 'The code uses ' + used.join(', ') + ' but names no datastore address; the dynamic test shows what it sends.'
@@ -481,26 +349,17 @@ export function staticChecks(html, known, { readme = '' } = {}) {
   const baseMatch = /WDS\.connect\s*\(\s*\{[^}]*?\bbaseUrl\s*:\s*(['"])(https?:\/\/[^'"]+)\1/.exec(code);
   if (library && !/WDS\.connect\s*\(/.test(code)) add('connect', 'warn', 'WDS.connect', 'No call of WDS.connect({ scope }) found in the page code.');
 
+  if (!/<html\b[^>]*\blang\s*=/i.test(html)) add('html-lang', 'warn', 'No <html lang>', 'The library\'s dialogs follow <html lang> (de… German, else English). Set it to the language of the app, for example <html lang="en">.');
+
   // 6. the sandbox: never in the app file, never hidden, no local deletion without a sandbox guard (PLAN: sandbox, wds-verify 3.3)
   if (html.includes(SANDBOX_SCOPE)) add('sandbox-id', 'fail', 'Sandbox scope ID in the app', 'The page contains the sandbox scope ID "' + SANDBOX_SCOPE + '": this file would store its users\' data in the sandbox, where everything is deleted every night. Use the app\'s own scope ID. To test against the sandbox without editing the file, use wds-verify --target sandbox (or --sandbox-copy).');
   else add('sandbox-id', 'pass', 'No sandbox scope ID in the app', '');
   const hiding = hidingRules(tags.filter((t) => t.name === 'style').map((t) => t.content || ''));
   if (hiding.length) add('sandbox-label-css', 'fail', 'CSS hides the library\'s dialogs', 'The style sheet changes display, visibility or opacity of the library\'s own markup (' + hiding.slice(0, 4).join('; ') + '). That includes the sandbox label, which must stay visible, and the dialogs people need to unlock their data. Remove these rules.');
-  const del = localDeletes(code);
-  const migrates = usesMigrateLocal(code);
-  if (del.unguarded.length) add('local-delete', 'warn', 'Deleting local data', 'The code calls ' + del.unguarded.join(', ') + ' in a named function that never mentions the sandbox. '
-    + (migrates ? 'The app uses store.migrateLocal, which deletes the old data itself after it has copied and checked it (and never in the sandbox): remove your own deletion. '
-      : 'To take over old browser data use store.migrateLocal (porting.md): it copies, checks and deletes, and keeps the old data in the sandbox (the sandbox is wiped every night, the old data would be gone for good). ')
-    + 'An app keeps no data in the browser.');
-  if (migrates) add('migrate-local', 'info', 'Old data: store.migrateLocal', 'The app calls store.migrateLocal: the library copies the old browser data into the vault, checks it, and deletes it (not in the sandbox). With a "seed" in wds-verify.json the run tests it (see tools/README.md, "Testing a migration").');
-  // Browser storage that the app touches itself: without migrateLocal a hand-made migration; with it, everything the options do not name (the keys and databases
-  // that migrateLocal takes over may be mentioned, e.g. for a message; anything else is data in the browser).
-  const hand = handMigration(code, migrates ? migrateNamed(code) : null);
-  if (hand.length && migrates) add('hand-storage', 'warn', 'Browser storage next to migrateLocal', 'Besides store.migrateLocal the code uses ' + hand.join(', ') + ', with a key or database that migrateLocal does not name (or none that can be read), or writes a built value (JSON.stringify, a template) or a key that migrateLocal names or covers by a prefix. An app keeps its data in the vault; only a preference chosen from a fixed list (one short string) may stay in localStorage, under a key that no migrateLocal prefix covers. If these are old keys of the earlier version, name them in migrateLocal (localStorage: { keys }, indexedDB: { stores }) and remove your own code.');
-  else if (hand.length) add('hand-migration', 'warn', 'Old data taken over by hand', 'The code uses ' + hand.join(', ') + ' and never calls store.migrateLocal. An app keeps its data in the vault (only a preference chosen from a fixed list may stay in localStorage). To take over the old data of a local-only version use store.migrateLocal (porting.md): the library copies, checks and deletes safely, and your code is only the mapping.');
-  if (usesShowModal(code)) add('app-modals', 'info', 'Modal dialogs of the app', 'The app opens modal dialogs with showModal(). Library dialogs open above your own modal dialogs. Close your own dialogs in store.onLock and open none while a store call is pending (the person has to answer the library dialog first; select your own dialogs with dialog:not(.wds-dialog)).');
-  if (setsTestGlobal(code)) add('migration-test-global', 'fail', 'The app sets the migration test global', 'The code assigns window.__WDS_MIGRATION_TEST__. The app must never set it: only wds-verify --migration-delete and your own automated test (context.addInitScript in a browser that Playwright drives) do; store.migrateLocal then deletes the old data in the sandbox as well. In a real browser that would delete data whose only copy is in a sandbox vault that is wiped tonight. Remove the assignment; to see the deletion, run wds-verify --target sandbox --migration-delete.');
+  if (usesMigrateLocal(code)) add('migrate-local', 'info', 'Old data: store.migrateLocal', 'The app calls store.migrateLocal: the library copies the old browser data into the vault and, at the next start, asks whether to delete it (never in the sandbox). With a "seed" in wds-verify.json the run tests it (porting.md, section 5).');
+  const hand = handStorage(code);
+  if (hand.length) add('hand-storage', 'warn', 'Browser storage of the app\'s own', 'The code uses ' + hand.join(', ') + '. An app keeps its data in the vault; the old data of a local-only version is taken over by store.migrateLocal (porting.md) and nothing else reads or deletes it. Only a personal preference chosen from a fixed list may stay in localStorage, under the app\'s own key. Never localStorage.clear(): it deletes the items of the library, too.');
+  if (usesShowModal(code)) add('app-modals', 'info', 'Modal dialogs of the app', 'The app opens modal dialogs with showModal(). Library dialogs open above your own modal dialogs; select your own dialogs with dialog:not(.wds-dialog).');
   if (!PRIVACY.some((s) => flat(html).includes(s) || flat(readme).includes(s))) add('privacy-sentence', 'info', 'Privacy sentence', 'Neither the page nor README.md contains the official sentence. Wherever the app describes its privacy, use it word for word: "' + PRIVACY[0] + '" (German: "' + PRIVACY[1] + '"). For a text in another language use the English sentence.');
-  if (del.clears) add('local-clear', 'warn', 'localStorage.clear()', 'localStorage.clear() deletes everything the page origin stored, including data of other parts of the app and of the library itself (the remembered access ID). Remove the named keys instead; and never in the sandbox.');
   return { findings, library, csp, scope: scopeMatch ? scopeMatch[2] : siteScope ? siteScope.id : null, baseUrl: baseMatch ? baseMatch[2] : null };
 }

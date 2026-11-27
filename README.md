@@ -90,7 +90,7 @@ Copy `server/config.example.ini` to `config.ini` first and put escrow public key
 | `scripts/test-server.sh` | server unit tests (in-process ASGI client, injectable clock and disk probe) |
 | `scripts/test-client.sh` | client node tests (protocol, vectors, UI helpers, build), then Playwright UI tests in Chromium against an in-memory fake server. `SKIP_BROWSER=1` runs only the node tests |
 | `scripts/test-integration.sh` | the real server against the real bundle in Chromium, Firefox and WebKit, from file:// pages: protocol behaviour (`integration.spec.mjs`) and the documentation, the example app under the documented Content-Security-Policy, and the export page (`docs.spec.mjs`) |
-| `scripts/test-examples.sh` | the example apps in examples/ and the code blocks of integration.md and porting.md (collections, conflicts in code, lock and unlock, `store.migrateLocal` with a seeded old database) from file:// in Chromium against the real server (library and service URL mapped to it); `WDS_BROWSERS=chromium,firefox,webkit` for all three |
+| `scripts/test-examples.sh` | the example apps in examples/ and the code blocks of integration.md and porting.md (collections, conflicts in code, files, `store.migrateLocal` with a seeded old database) from file:// in Chromium against the real server (library and service URL mapped to it); `WDS_BROWSERS=chromium,firefox,webkit` for all three |
 
 Run one browser with `WDS_BROWSERS=chromium scripts/test-integration.sh`, one test with `-g "export page"`. Details in client/README.md.
 

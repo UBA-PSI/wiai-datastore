@@ -11,7 +11,7 @@
 //
 // The bundle is one function scope: the vendored hash-wasm runs in a private scope (it sees no AMD/CommonJS loader of the
 // page and sets no global), its Argon2id function is handed to wds-core.js through a private variable, and wds-core.js is
-// built with PRODUCTION = true (no setRandom, setArgon2 or internals on WDSCore).
+// built with PRODUCTION = true (no setRandom, setArgon2 or internals on WDSCore), and without the lines of wds-ui.js that set TEST_HOOKS (opts.testHooks keeps them for the test bundles).
 //
 // Outputs (in dist/, or in opts.dist for test bundles): dist/wds-<version>.js, dist/wds-<version>.js.sri ("sha384-<base64>", no newline) and dist/hashes.json, which
 // records every built version (file, sri, sha256, size, escrow pins, frozen). A released version is immutable: after
@@ -69,6 +69,7 @@ export function build(opts = {}) {
   core = replaceOnce(core, /var BUILTIN_RETIRED_ESCROW = \[[^\]]*\];/, 'var BUILTIN_RETIRED_ESCROW = ' + JSON.stringify(retired) + ';', 'BUILTIN_RETIRED_ESCROW');
   core = replaceOnce(core, /var PRODUCTION = false;/, 'var PRODUCTION = true;', 'PRODUCTION');
   ui = replaceOnce(ui, /var UI_VERSION = '[^']*';/, "var UI_VERSION = '" + version + "';", 'ui UI_VERSION');
+  if (!opts.testHooks) ui = ui.split('\n').filter((l) => !/^\s*TEST_HOOKS\.\w+ = /.test(l)).join('\n');   // the hooks of the library's own tests are not in a published bundle
 
   const banner = '/*! WIAI Datastore client library ' + version + ' - hash-wasm Argon2id (MIT, see client/vendor/LICENSE), wds-core.js, wds-ui.js */\n';
   // One function scope. "module", "exports" and "define" are hidden from wds-core.js and wds-ui.js, so their UMD headers

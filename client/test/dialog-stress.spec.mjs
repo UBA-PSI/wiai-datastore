@@ -7,8 +7,7 @@ import { test as base, expect } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { startStack } from './integration-env.mjs';
-import { createVault, unlock, DriveError } from '../../tools/lib/drive-library.mjs';
-import { viewOf, dialog, dialogState, waitForView } from '../../tools/lib/dialog-internals.mjs';
+import { createVault, unlock, DriveError, viewOf, dialog, dialogState, waitForView } from '../../tools/lib/dialog-internals.mjs';
 
 const test = base.extend({
   stack: [async ({}, use) => {
@@ -52,7 +51,7 @@ const INIT = '(' + function () {
     let loading = false;
     dialogs.forEach(function (d) { if (d.getAttribute('data-wds-view') === 'loading') loading = true; });
     L.dupMax = Math.max(L.dupMax, dialogs.length);
-    const locked = window.__unlocking === true && !(window.store && window.store.isUnlocked());
+    const locked = window.__unlocking === true && !(window.store && window.store.status().unlocked);
     if (locked && !dialogs.length) { if (!L.noDialogSince) L.noDialogSince = now; L.noDialogMax = Math.max(L.noDialogMax, now - L.noDialogSince); } else L.noDialogSince = 0;
     if (loading) { if (!L.loadingSince) L.loadingSince = now; L.loadingMax = Math.max(L.loadingMax, now - L.loadingSince); } else L.loadingSince = 0;
   }, 25);
@@ -134,7 +133,7 @@ test('reload and unlock with a slow, failing and stalling network: a dialog alwa
     expect(agg.noDialogMax, 'round ' + i + ' (' + started + '): the page was locked and waiting for its unlock, and showed no dialog for ' + agg.noDialogMax + ' ms').toBeLessThan(3000);
     expect(agg.loadingMax, 'round ' + i + ' (' + started + '): a library dialog was "loading" for ' + agg.loadingMax + ' ms').toBeLessThan(12000);
     expect(agg.gapMax, 'round ' + i + ' (' + started + '): the main thread of the page was blocked for ' + agg.gapMax + ' ms').toBeLessThan(15000);
-    expect(await page.evaluate(() => window.store.isUnlocked()), 'round ' + i).toBe(true);
+    expect(await page.evaluate(() => window.store.status().unlocked), 'round ' + i).toBe(true);
   }
   console.log('dialog stress: ' + JSON.stringify(stats) + ', requests disturbed ' + injected + ', watcher maxima ' + JSON.stringify(agg));
   expect(page.errors).toEqual([]);
@@ -152,7 +151,7 @@ test('reload, then the drive unlock() at once, as a test of an app does it: alwa
     await unlock(page, { accessId: made.accessId, passphrase: PASSPHRASE });   // no polling of our own: the helper has to cope with whatever the dialog does
     expect(Date.now() - t0, 'unlock ' + i + ' took ' + (Date.now() - t0) + ' ms').toBeLessThan(25000);
     expect(await page.evaluate(() => window.unlockP), 'round ' + i).toBe('unlocked');
-    expect(await page.evaluate(() => window.store.isUnlocked()), 'round ' + i).toBe(true);
+    expect(await page.evaluate(() => window.store.status().unlocked), 'round ' + i).toBe(true);
   }
   await harvest(page, agg);
   expect(agg.dupMax).toBeLessThanOrEqual(1);

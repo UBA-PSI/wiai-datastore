@@ -66,7 +66,7 @@ function pageUrl(stack, via) {
     : '<script src="file://' + stack.bundleFile + '"></script>';
   const file = join(dir, 'app' + (++pageCount) + '.html');
   writeFileSync(file, '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>wds integration</title>' + tag + '</head>'
-    + '<body><main id="app"><h1>Integration test app</h1><p id="out"></p></main></body></html>');
+    + '<body><main id="app"><h1>Integration test app</h1><p id="out"></p><form><input id="typed"><textarea id="typed2"></textarea></form></main></body></html>');
   return 'file://' + file;
 }
 
@@ -75,11 +75,12 @@ async function openApp(ctx, stack, { via = 'file', service, ui } = {}) {
   const page = await ctx.newPage();
   page.errors = [];
   page.on('pageerror', (e) => page.errors.push(String(e)));
+  // with ui: the store is created again after every load (a lock reloads the page)
+  if (ui) await page.addInitScript(({ scope, svc }) => { document.addEventListener('DOMContentLoaded', () => { window.store = WDS.connect({ scope, baseUrl: svc }); }); }, { scope: stack.scope, svc: service || stack.service });
   await page.goto(pageUrl(stack, via));
   await page.evaluate(({ scope, service: svc, ui: withUi }) => {
     if (typeof WDSCore === 'undefined') throw new Error('the bundle did not load');
-    if (withUi) window.store = WDS.connect({ scope, baseUrl: svc });
-    else window.c = new WDSCore.Client({ scope, service: svc });
+    if (!withUi) window.c = new WDSCore.Client({ scope, service: svc });
   }, { scope: stack.scope, service: service || stack.service, ui: !!ui });
   return page;
 }
@@ -295,7 +296,9 @@ test('conflict dialog in two browser contexts: the dialog offers both versions a
   expect(res.resolution).toBe('mine');
   expect(res.version).toBe(3);
   expect(await A.evaluate(() => store.get('note'))).toEqual({ text: 'v2 from B' });
-  expect(await A.evaluate(() => store.history('note').then((h) => h.map ? h.length : h.versions.length))).toBe(3); // theirs stays in the history
+  await A.evaluate(() => { window.histP = store.showHistory('note'); });
+  await expect(A.getByRole('dialog').last().locator('li')).toHaveCount(3);   // theirs stays in the history
+  await A.getByRole('dialog').last().getByRole('button', { name: 'Close' }).first().click();
 
   // the other way round: keep theirs
   await A.evaluate(() => store.set('note', { text: 'v4 from A' }));
@@ -339,16 +342,19 @@ test('collections on the real server: no lost update with two devices, and an it
   await uiUnlock(B, accessId, passphrase);
   const load = (p) => p.evaluate(() => { window.notes = store.collection('notes/', { meta: (v) => ({ t: v.t }) }); return notes.load().then((l) => l.length); });
   const ids = (p) => p.evaluate(() => notes.items().map((i) => i.id).sort());
+  // the list entries are written in the background: flush them, then run the check that runs on focus (what another device changed reaches this one)
+  const sync = async (...pages) => { await Promise.all(pages.map((p) => p.evaluate(() => notes._flush()))); for (const p of pages) await p.evaluate(() => WDS.internals.testHooks.checkNow()); };
   expect([await load(A), await load(B)]).toEqual([0, 0]);   // both loaded an index that does not exist yet
 
   // (a) lost update: B adds x, A (which has not seen x) adds y and z, B removes x, A adds w
   await B.evaluate(() => notes.set('x', { t: 'x' }));
   await A.evaluate(() => notes.set('y', { t: 'y' }));
   await A.evaluate(() => notes.set('z', { t: 'z' }));
+  await A.evaluate(() => notes._flush());   // the list entries go out in the background; the write that carries y and z merges in x
   expect(await ids(A)).toEqual(['x', 'y', 'z']);
   await B.evaluate(() => notes.remove('x'));
   await A.evaluate(() => notes.set('w', { t: 'w' }));
-  await A.evaluate(() => notes.refresh()); await B.evaluate(() => notes.refresh());
+  await sync(A, B);
   expect(await ids(A)).toEqual(['w', 'y', 'z']);
   expect(await ids(B)).toEqual(['w', 'y', 'z']);
   const C = await openApp(ctxC, stack, { ui: true });
@@ -357,12 +363,12 @@ test('collections on the real server: no lost update with two devices, and an it
 
   // (c) A deletes k, B edits it without a meta change and keeps its version: k is visible on both
   await A.evaluate(() => notes.set('k', { t: 'same' }));
-  await B.evaluate(() => notes.refresh());
-  await B.evaluate(() => { store.onConflict('notes/', (c) => c.keepMine()); });
+  await sync(A, B);
+  await B.evaluate(() => { store.onConflict(() => 'mine'); });
   await A.evaluate(() => notes.remove('k'));
   const res = await B.evaluate(() => notes.set('k', { t: 'same', extra: 1 }));
   expect(res.resolution).toBe('mine');
-  await A.evaluate(() => notes.refresh()); await B.evaluate(() => notes.refresh());
+  await sync(A, B);
   expect(await ids(A)).toContain('k');
   expect(await ids(B)).toContain('k');
   expect(await A.evaluate(() => notes.get('k'))).toEqual({ t: 'same', extra: 1 });
@@ -1123,8 +1129,8 @@ test('no canary plaintext in any request body the browsers sent, and none in the
     await store.set('ui/' + name + '.bin', pattern(200000, 7, bin));
     await store.set('ui/' + name, { text: canary + ' again' });
   }, { name: NAME_CANARY, canary: CANARY, bin: BINARY_CANARY });
-  await page.evaluate(() => { window.shareP = store.share(); });
-  await expect(page.getByRole('dialog').last().getByRole('heading', { name: 'Sharing and access' })).toBeVisible();
+  await page.evaluate(() => { window.shareP = store.openVault(); });
+  await expect(page.getByRole('dialog').last().getByRole('heading', { name: 'Vault' })).toBeVisible();
   await shot(page, 'share-dialog');
   await page.getByRole('dialog').last().getByRole('button', { name: 'Close' }).click();
 
@@ -1175,8 +1181,8 @@ test('no canary plaintext in any request body the browsers sent, and none in the
   expect(log).not.toMatch(/GET \/datastore|PUT \/datastore/);
 });
 
-// Library dialogs, toasts and the sandbox bar are in the top layer: they work above a modal <dialog> of the app, in every engine.
-test('library dialogs above app modals: conflict, toast action, Escape, expired session with a re-unlock, and app CSS that styles every dialog', async ({ browser, stack }) => {
+// Library dialogs, notices and the sandbox badge are in the top layer: they work above a modal <dialog> of the app, in every engine.
+test('library dialogs above app modals: conflict, offline dialog, Escape, expired session with a re-unlock, and app CSS that styles every dialog', async ({ browser, stack }) => {
   const ctx = await newContext(browser);
   const page = await openApp(ctx, stack, { ui: true });
   const passphrase = 'purple elephants marching slowly ' + PASS_CANARY;
@@ -1203,20 +1209,23 @@ test('library dialogs above app modals: conflict, toast action, Escape, expired 
   await page.locator('#m1-ok').click();                                   // the app modal is usable again
   await page.evaluate(() => document.getElementById('m1').close());
 
-  // (3) a toast with an action above an app modal; a click on it does not reach the modal's click-outside handler
+  // (3) the offline dialog above an app modal; a click on it does not reach the modal's click-outside handler
   await openModal('m3');
   await page.route(/\/records\//, (route) => route.abort('failed'));
   expect(await page.evaluate(() => store.set('draft', { text: 'unsaved' }).then(() => null, (e) => e.name))).toBe('OfflineError');
   const dl = page.waitForEvent('download');
-  await page.locator('[data-wds-toast=offline] [data-wds=toast-action]').click();
+  await lib.locator('[data-wds=backup]').click();
   await dl;
   expect(await page.evaluate(() => window.outsideClosed)).toBeUndefined();
-  await page.locator('[data-wds-toast=offline] [data-wds=toast-dismiss]').click();
+  await lib.locator('[data-wds=close]').click();
   await page.unroute(/\/records\//);
+  await page.evaluate(() => store.set('draft', { text: 'unsaved' }));   // saved now: nothing is pending, so the lock below reloads at once
   await page.evaluate(() => document.getElementById('m3').close());
 
-  // (5) Escape three times: a mandatory dialog stays, a cancelable one closes and rejects with "cancelled"
-  await page.evaluate(() => store.lock());
+  // (5) Escape three times: a mandatory dialog stays; lock = reload
+  const reloaded = page.waitForEvent('load');
+  await page.evaluate(() => { void store.lock(); });
+  await reloaded;
   await page.evaluate(() => { window.unlockP = store.unlock().then(() => 'unlocked', (e) => e.code); });
   await expect(lib.getByRole('heading', { name: 'Unlock your data' })).toBeVisible();
   for (let i = 0; i < 3; i++) await page.keyboard.press('Escape');
@@ -1229,38 +1238,28 @@ test('library dialogs above app modals: conflict, toast action, Escape, expired 
   await lib.getByLabel('Passphrase', { exact: true }).fill(passphrase);
   await lib.getByRole('button', { name: 'Unlock' }).click();
   expect(await page.evaluate(() => window.unlockP)).toBe('unlocked');
-  await page.evaluate(() => store.lock());
-  await page.evaluate(() => { window.cancelP = store.unlock({ cancelable: true }).then(() => 'unlocked', (e) => e.code); });
-  await expect(lib).toHaveCount(1);
-  await page.keyboard.press('Escape');
-  expect(await page.evaluate(() => window.cancelP)).toBe('cancelled');
-  await expect(lib).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.getAttribute('data-wds-role'))).toBe('owner');
 
-  // (7) the session expires while an app modal and the share dialog are open: the library dialogs close, onLock runs, the unlock dialog is on top and usable
-  await page.evaluate(() => { window.unlockP = store.unlock(); });
-  await lib.getByLabel('Access ID').fill(accessId);
-  await lib.getByLabel('Passphrase', { exact: true }).fill(passphrase);
-  await lib.getByRole('button', { name: 'Unlock' }).click();
-  await page.evaluate(() => window.unlockP);
-  await page.evaluate(() => { window.locks = []; store.onLock((r) => { window.locks.push(r); window.relock = store.unlock().then(() => 'unlocked', (e) => e.code); }); window.shareP = store.share(); });
-  await expect(lib.getByRole('heading', { name: 'Sharing and access' })).toBeVisible();
+  // (7) the session expires while an app modal and the vault dialog are open: the unlock dialog (cancelable) opens above, the page stays, writes go on
+  await page.evaluate(() => { window.state = { text: 'pending' }; window.h = store.autosave('pending', () => window.state, { delayMs: 60000 }); h.changed(); window.shareP = store.openVault(); });
+  await expect(lib.getByRole('heading', { name: 'Vault' })).toBeVisible();
   await openModal('m7');
   await page.route(/\/records\//, (route) => route.fulfill({ status: 401, contentType: 'application/json', headers: { 'access-control-allow-origin': '*', 'www-authenticate': 'Bearer realm="wds"' }, body: '{"error":"unauthorized"}' }));
   expect(await page.evaluate(() => store.get('x').then(() => null, (e) => e.name))).toBe('AuthError');
-  expect(await page.evaluate(() => window.locks)).toEqual(['expired']);
-  await page.evaluate(() => window.shareP);
-  await expect(lib).toHaveCount(1);
-  await expect(lib.getByRole('heading', { name: 'Unlock your data' })).toBeVisible();
-  await expect(page.locator('[data-wds-toast=session]')).toBeVisible();
+  await expect(lib.last().getByRole('heading', { name: 'Unlock your data' })).toBeVisible();
+  await expect(lib.last().getByLabel('Access ID')).toHaveValue(accessId);
   await page.unroute(/\/records\//);
-  await lib.getByLabel('Passphrase', { exact: true }).fill(passphrase);
-  await lib.getByRole('button', { name: 'Unlock' }).click();              // no force: above the app modal
-  expect(await page.evaluate(() => window.relock)).toBe('unlocked');
-  await page.evaluate(() => document.getElementById('m7').close());
+  await lib.last().getByLabel('Passphrase', { exact: true }).fill(passphrase);
+  await lib.last().getByRole('button', { name: 'Unlock' }).click();              // no force: above the app modal
+  await expect.poll(() => page.evaluate(() => store.get('pending'))).toEqual({ text: 'pending' });   // the pending save went on from memory
+  await page.evaluate(() => { document.getElementById('m7').close(); window.h.stop(); });
+  await lib.locator('[data-wds=close]').click();
 
   // (9) app CSS for "dialog" (centring with a transform, opacity pattern, padding, max-width, a transparent backdrop) does not change our box
+  const reloaded2 = page.waitForEvent('load');
+  await page.evaluate(() => { void store.lock(); });
+  await reloaded2;
   await page.addStyleTag({ content: 'dialog{padding:3rem;max-width:200px;border:5px solid red;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);display:flex;opacity:0;transition:opacity .5s;overflow:hidden;width:200px;height:100px;margin:0}dialog[open]{opacity:0}dialog::backdrop{background:transparent}' });
-  await page.evaluate(() => store.lock());
   await page.evaluate(() => { window.unlockP = store.unlock(); });
   await expect(lib.getByRole('heading', { name: 'Unlock your data' })).toBeVisible();
   const box = await page.evaluate(() => {
@@ -1275,4 +1274,17 @@ test('library dialogs above app modals: conflict, toast action, Escape, expired 
   await lib.getByRole('button', { name: 'Unlock' }).click();
   await page.evaluate(() => window.unlockP);
   expect(page.errors).toEqual([]);
+});
+
+test('lock = reload: text typed into the static fields of the page does not come back (Firefox restores form fields after a reload)', async ({ browser, stack }) => {
+  const ctx = await newContext(browser);
+  const page = await openApp(ctx, stack, { ui: true });
+  await uiCreate(page, stack, 'lock fields ' + (++counter) + ' ' + PASS_CANARY);
+  await page.locator('#typed').fill('plain text of the vault');
+  await page.locator('#typed2').fill('more plain text of the vault');
+  const reloaded = page.waitForEvent('load');
+  await page.evaluate(() => { void store.lock(); });
+  await reloaded;
+  expect(await page.evaluate(() => [document.getElementById('typed').value, document.getElementById('typed2').value])).toEqual(['', '']);
+  expect(await page.evaluate(() => store.status().unlocked)).toBe(false);
 });
