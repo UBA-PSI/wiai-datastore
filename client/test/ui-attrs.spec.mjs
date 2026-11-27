@@ -111,7 +111,7 @@ test('dialog controls carry data-wds: conflict, history, sharing, revoking, noti
   // sharing: owner with an unused invite, a redeemed member, an invite code on screen
   await page.evaluate(() => { window.shareP = store.share(); });
   await expect(byWds(page, 'invite-create')).toBeVisible();
-  await check(page, 'share', ['close', 'form-error', 'invite-role', 'invite-expiry', 'invite-label', 'invite-create', 'me-keyfile', 'me-renew', 'me-lock', 'me-passphrase-toggle', 'passphrase', 'passphrase-repeat', 'show-passphrase', 'me-passphrase-submit']);
+  await check(page, 'share', ['close', 'form-error', 'invite-role', 'invite-label', 'invite-create', 'me-keyfile', 'me-renew', 'me-lock', 'me-passphrase-toggle', 'passphrase', 'passphrase-repeat', 'show-passphrase', 'me-passphrase-submit']);
   await byWds(page, 'invite-label').fill('Anna');
   await byWds(page, 'invite-create').click();
   await expect(byWds(page, 'invite-code')).toBeVisible();
@@ -329,10 +329,6 @@ test('sandbox: the share dialog offers only "until the wipe", and that invite is
   await finishSheet(page);
   await page.evaluate(() => { window.shareP = store.share(); });
   await expect(byWds(page, 'invite-create')).toBeVisible();
-  const opts = await byWds(page, 'invite-expiry').locator('option').evaluateAll((os) => os.map((o) => Number(o.value)));
-  expect(opts.length).toBe(1);
-  expect(opts[0]).toBeGreaterThanOrEqual(3600);
-  expect(Math.floor(Date.now() / 1000) + opts[0]).toBeLessThanOrEqual(nextWipe);
   await byWds(page, 'invite-create').click();
   await expect(byWds(page, 'invite-code')).toBeVisible();   // the server (fake) refuses an invite that outlives the wipe
   const code = (await byWds(page, 'invite-code').innerText()).trim();
@@ -353,7 +349,7 @@ test('sandbox: the share dialog offers only "until the wipe", and that invite is
   expect(await byWds(p2, 'invite-create').count()).toBe(0);
 });
 
-test('sandbox: a vault that was swept after the dialog opened (unknown vault at unlock) is reported as emptied', async ({ browser }) => {
+test('sandbox: a vault that was swept after the dialog opened fails the unlock; the next start reports it as emptied', async ({ browser }) => {
   await sandboxWorld();
   const ctx = await browser.newContext();
   const page = await openApp(ctx, w);
@@ -367,8 +363,11 @@ test('sandbox: a vault that was swept after the dialog opened (unknown vault at 
   w.world.server.scopes.get(w.scope).sandbox.last_wipe = Math.floor(Date.now() / 1000) + 60;
   await byWds(p2, 'passphrase').fill(PASS);
   await byWds(p2, 'unlock-submit').click();
-  await expect(dialog(p2).locator('h2')).toHaveText('Sandbox: Create your vault');
-  await expect(dialog(p2).getByText('The sandbox was emptied on')).toBeVisible();
+  await expect(byWds(p2, 'form-error')).not.toBeEmpty();
+  const p3 = await openApp(ctx, w);
+  await p3.evaluate(() => { window.unlockP = store.unlock(); });
+  await expect(dialog(p3).locator('h2')).toHaveText('Sandbox: Create your vault');
+  await expect(dialog(p3).getByText('The sandbox was emptied on')).toBeVisible();
 });
 
 test('data-wds-view is never empty or missing while a dialog is visible; aria-busy marks loading, progress and a submit in flight', async ({ browser }) => {
@@ -398,4 +397,29 @@ test('data-wds-view is never empty or missing while a dialog is visible; aria-bu
   expect(seen.length).toBeGreaterThan(2);
   for (const [view] of seen) expect(view).toBeTruthy();
   expect(seen.some(([view, busy]) => view === 'loading' && busy === 'true')).toBe(true);
+});
+
+test('share dialog: aria-busy until the roster is refreshed; what the person chose in the invite form survives the refresh, with the focus', async ({ browser }) => {
+  const page = await openApp(await browser.newContext(), w);
+  await createByAttrs(page);
+  await finishSheet(page);
+  let release; w.world.server.gate = { path: '/slots/', until: new Promise((res) => { release = res; }) };   // the refresh of the roster (maintain) is held back
+  await page.evaluate(() => { window.shareP = store.share(); });
+  await expect(byWds(page, 'invite-create')).toBeVisible();
+  await expect(dialog(page)).toHaveAttribute('aria-busy', 'true');
+  await byWds(page, 'invite-role').selectOption('read');
+  await byWds(page, 'invite-label').fill('Zoe');   // typing in the label leaves the focus there
+  await expect(dialog(page)).toHaveAttribute('aria-busy', 'true');   // still waiting: the refresh did not come before the input
+  release(); w.world.server.gate = null;
+  await expect(dialog(page)).not.toHaveAttribute('aria-busy', /.*/);
+  await expect(byWds(page, 'invite-role')).toHaveValue('read');
+  await expect(byWds(page, 'invite-label')).toHaveValue('Zoe');
+  await expect(byWds(page, 'invite-label')).toBeFocused();
+  await byWds(page, 'invite-create').click();
+  await expect(byWds(page, 'invite-code')).toBeVisible();
+  await expect(byWds(page, 'member-role')).toHaveValue('read');
+  await expect(byWds(page, 'person').filter({ hasText: 'Zoe' })).toHaveCount(1);
+  await byWds(page, 'invite-another').click();   // the form starts again after an invite was created
+  await expect(byWds(page, 'invite-role')).toHaveValue('write');
+  await expect(byWds(page, 'invite-label')).toHaveValue('');
 });

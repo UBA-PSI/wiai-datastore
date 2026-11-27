@@ -86,6 +86,14 @@ async function unlock(page, accessId) {
   await dlg.getByRole('button', { name: 'Entsperren' }).click();
   await expect(page.locator('#app')).toBeVisible({ timeout: 60000 });
 }
+// The unlock dialog by its stable attributes: it works in either language (a page opened after the person chose English starts in English).
+async function unlockAnyLanguage(page, accessId) {
+  const u = page.locator('[data-wds-view="unlock"]');
+  await u.locator('[data-wds="access-id-input"]').fill(accessId);
+  await u.locator('[data-wds="passphrase"]').fill(PASS);
+  await u.locator('[data-wds="unlock-submit"]').click();
+  await expect(page.locator('#app')).toBeVisible({ timeout: 60000 });
+}
 async function redeem(page, code) {
   const dlg = dialogOf(page);
   await dlg.getByRole('button', { name: 'Ich habe einen Einladungscode' }).click();
@@ -388,7 +396,7 @@ test('reload, export, CSV, language, lock', async ({ browser, stack }) => {
   expect(lines).toContain(w.monday + ';Projekt Alpha;Planung;0:45;0,75');
   expect(lines).toContain(w.tuesday + ';Projekt Alpha;Umsetzung;1:15;1,25');
 
-  // language toggle (stored in the vault) and back
+  // language toggle (a personal preference: this browser's localStorage, not the vault) and back
   await page.locator('#btn-lang').click();
   await expect(page.locator('#tab-week')).toHaveText('Week');
   await expect(page.locator('html')).toHaveAttribute('lang', 'en');
@@ -400,7 +408,8 @@ test('reload, export, CSV, language, lock', async ({ browser, stack }) => {
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toHaveCount(0);
   const page2 = await openApp(ctx, stack);
-  await unlock(page2, shared.accessId);
+  await expect(page2.locator('html')).toHaveAttribute('lang', 'en');             // the choice is this browser's (localStorage): a new page starts in English, the library's dialogs included
+  await unlockAnyLanguage(page2, shared.accessId);
   await expect(page2.locator('#tab-week')).toHaveText('Week');
   await page2.locator('#btn-lang').click();
   await expect(page2.locator('#tab-week')).toHaveText('Woche');
@@ -694,7 +703,7 @@ test('repair lists: a list that is gone is rebuilt from the records, and the app
   await ctx.close();
 });
 
-test('old data of the local-only version is taken over: asked once, copied, checked and deleted; the attachment belongs to its note, the timer runs, the language is applied', async ({ browser, browserName, stack }) => {
+test('old data of the local-only version is taken over: asked once, copied, checked and deleted; the attachment belongs to its note, the timer runs, the language row is skipped', async ({ browser, browserName, stack }) => {
   test.skip(browserName !== 'chromium', 'the old page and the new app are two files: only Chromium shares the storage of file:// pages (in Firefox and Safari the new file replaces the old one)');
   const ctx = await newContext(browser, stack);
   // the old app: two projects, two time entries, a note with an attachment, a running timer, the language
@@ -727,7 +736,7 @@ test('old data of the local-only version is taken over: asked once, copied, chec
 
   const page = await openApp(ctx, stack);
   const accessId = await createVault(page, stack, { waitForApp: false });
-  // the library asks once: 7 entries (2 projects, 2 time entries, the note, its file, the timer); the backup is a ZIP with the file in it
+  // the library asks once: 7 entries (2 projects, 2 time entries, the note, its file, the timer); the language row is skipped (a personal preference): "Take over" waits for the backup; the backup is a ZIP with the file in it
   const q = page.locator('[data-wds-view="migrate"]');
   await expect(q).toBeVisible({ timeout: 30000 });
   await expect(q).toContainText('7 Einträge');
@@ -742,8 +751,8 @@ test('old data of the local-only version is taken over: asked once, copied, chec
   await expect(page.locator('#app')).toBeVisible({ timeout: 60000 });
   await expect(page.locator('.wds-toast').filter({ hasText: '7 Einträge sind jetzt in Ihrem Tresor' })).toBeVisible();
 
-  // everything is there, in the language of the old app's settings
-  await expect(page.locator('html')).toHaveAttribute('lang', 'en');
+  // everything is there; the language of the old app was not taken over (the new app starts in the language of the browser)
+  await expect(page.locator('html')).toHaveAttribute('lang', 'de');
   await page.locator('#tab-projects').click();
   await expect(page.locator('#project-list')).toContainText('Altes Projekt Alpha');
   await expect(page.locator('#project-list')).toContainText('Altes Projekt Beta');
@@ -765,7 +774,7 @@ test('old data of the local-only version is taken over: asked once, copied, chec
   expect(download.suggestedFilename()).toBe('plan.pdf');
   expect(readFileSync(await download.path()).equals(PDF)).toBe(true);
 
-  // the old storage is empty (the tag of this browser stays); the question does not come again, and the language the person chooses now is not overwritten
+  // the old storage is empty (the tag of this browser stays); the question does not come again, and the language the person chooses now stays (localStorage)
   const oldState = await page.evaluate(async () => {
     const db = await new Promise((resolve, reject) => { const r = indexedDB.open('zeitnotizen'); r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error); });
     const counts = {};
@@ -774,13 +783,13 @@ test('old data of the local-only version is taken over: asked once, copied, chec
     return { counts, data: localStorage.getItem('zeitnotizen.daten'), tag: /^[0-9a-f]{8}$/.test(localStorage.getItem('wds:migrate:zeitnotizen:tag') || '') };
   });
   expect(oldState).toEqual({ counts: { notes: 0, files: 0, meta: 0 }, data: null, tag: true });
-  await page.locator('#btn-lang').click();                                                      // English -> German
-  await expect(page.locator('html')).toHaveAttribute('lang', 'de');
-  await expect(page.locator('#toast')).toContainText('Sprache');
+  await page.locator('#btn-lang').click();                                                      // German -> English
+  await expect(page.locator('html')).toHaveAttribute('lang', 'en');
+  await expect(page.locator('#toast')).toContainText('Language');
   const again = await openApp(ctx, stack);
-  await unlock(again, accessId);
+  await unlockAnyLanguage(again, accessId);
   await expect(again.locator('[data-wds-view="migrate"]')).toHaveCount(0);
-  await expect(again.locator('html')).toHaveAttribute('lang', 'de');
+  await expect(again.locator('html')).toHaveAttribute('lang', 'en');
   await noViolations(page, again);
   await ctx.close();
 });

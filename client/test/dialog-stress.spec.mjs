@@ -1,14 +1,14 @@
 // Stress test of the library's dialogs: reload and unlock many times against the real server while the network is slow, jittery, fails
 // and stalls (requests are delayed, aborted, answered with 500, or never answered). Whatever happens, there is never more than one library
 // dialog, a page that is locked and waits for the unlock always shows one, a dialog never waits for ever (a request that does not answer ends
-// in the "error" view with a retry, or in the form's error), and a view that cannot be built ends in the "error" view as well. A key file
-// dropped on a dialog never replaces the access sheet, a form that is being submitted or a view that still loads. Chromium, Firefox and WebKit
+// in the "error" view with a retry, or in the form's error), and a view that cannot be built ends in the "error" view as well. Chromium, Firefox and WebKit
 // (playwright.integration.config.mjs). WDS_STRESS_ROUNDS=50 makes a longer run; WDS_STRESS_SEED=<n> repeats the faults of an earlier run.
 import { test as base, expect } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { startStack } from './integration-env.mjs';
-import { createVault, unlock, confirmSheet, viewOf, dialog, dialogState, waitForView, DriveError } from '../../tools/lib/drive-library.mjs';
+import { createVault, unlock, DriveError } from '../../tools/lib/drive-library.mjs';
+import { viewOf, dialog, dialogState, waitForView } from '../../tools/lib/dialog-internals.mjs';
 
 const test = base.extend({
   stack: [async ({}, use) => {
@@ -64,14 +64,6 @@ async function harvest(page, agg) {
   if (w) for (const k of KEYS) agg[k] = Math.max(agg[k], w[k]);
 }
 const fresh = () => ({ dupMax: 0, noDialogMax: 0, loadingMax: 0, gapMax: 0 });
-
-// A key file (not a valid one) dropped on the topmost library dialog.
-const drop = (page) => page.evaluate(() => {
-  const d = document.querySelector('dialog.wds-dialog');
-  const dt = new DataTransfer();
-  dt.items.add(new File(['not a key file'], 'x.json', { type: 'application/json' }));
-  d.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }));
-});
 
 async function newPage(browser) {
   const ctx = await browser.newContext({ viewport: { width: 1100, height: 800 }, locale: 'en-US' });
@@ -168,44 +160,6 @@ test('reload, then the drive unlock() at once, as a test of an app does it: alwa
   expect(page.errors).toEqual([]);
 });
 
-test('a key file dropped on a dialog that still loads, on the access sheet or on a form that is being submitted changes nothing', async ({ browser, stack }) => {
-  // 1. the scope request is held: the dialog loads; a drop must not turn it into the unlock form (the answer would replace the form later)
-  const page = await newPage(browser);
-  let release;
-  const gate = new Promise((r) => { release = r; });
-  await page.route((url) => url.pathname.endsWith('/scopes/' + stack.scope), async (route) => { await gate; await route.continue().catch(() => {}); });
-  await page.goto(appUrl(stack));
-  await waitForView(page, 'loading', { timeout: 20000 });
-  await drop(page);
-  await page.waitForTimeout(400);
-  expect(await viewOf(page), 'the drop replaced the loading view').toBe('loading');
-  release();
-  await waitForView(page, 'unlock', { timeout: 20000 });
-  // 2. the access sheet: the recovery code stays until it is confirmed
-  const made = await createVault(page, { passphrase: PASSPHRASE, joinCode: stack.joinCode, confirm: false });
-  const sheetText = await dialog(page).innerText();
-  await drop(page);
-  await page.waitForTimeout(400);
-  expect(await viewOf(page), 'the drop replaced the access sheet').toBe('sheet');
-  expect(await dialog(page).innerText()).toBe(sheetText);
-  await confirmSheet(page);
-  expect(await page.evaluate(() => window.unlockP)).toBe('unlocked');
-  // 3. a form that is being submitted: the same form stays, busy, until the answer arrives
-  const delayed = await newPage(browser);
-  await delayed.route('**/datastore/api/**', async (route) => { await new Promise((r) => setTimeout(r, 1200)); await route.continue().catch(() => {}); });
-  await delayed.goto(appUrl(stack));
-  await waitForView(delayed, 'unlock', { timeout: 30000 });
-  await delayed.locator('[data-wds="access-id-input"]').fill(made.accessId);
-  await delayed.locator('[data-wds="passphrase"]').fill(PASSPHRASE);
-  await delayed.evaluate(() => { window.__form = document.querySelector('[data-wds="passphrase"]'); });
-  await delayed.locator('[data-wds="unlock-submit"]').click();
-  await delayed.waitForSelector('dialog[data-wds-view="unlock"][aria-busy="true"]', { timeout: 10000 });
-  await drop(delayed);
-  await delayed.waitForTimeout(300);
-  expect(await delayed.evaluate(() => window.__form.isConnected), 'the drop rebuilt the form that was being submitted').toBe(true);
-  expect(await delayed.evaluate(() => window.unlockP)).toBe('unlocked');
-});
-
 test('a view that cannot be built ends in the error view with a retry, not in a dialog that loads for ever', async ({ browser, stack }) => {
   const page = await newPage(browser);
   // The build of the unlock form throws (a fieldset cannot be created) as long as the flag is set.
@@ -221,13 +175,9 @@ test('a view that cannot be built ends in the error view with a retry, not in a 
   // a fixed sentence for the person; the exception text is for the console only
   await expect(page.locator('[data-wds-view="error"] [data-wds="form-error"]')).toContainText(/could not be built/i);
   await expect(page.locator('[data-wds-view="error"] [data-wds="form-error"]')).not.toContainText(/boom/);
-  // the same failure again after a retry: the page is to be reloaded, a retry would fail the same way
+  // the same failure again after a retry: the error view again, with a retry
   await page.locator('[data-wds-view="error"] [data-wds="retry"]').click();
-  await expect(page.locator('[data-wds-view="error"] [data-wds="reload"]')).toBeVisible({ timeout: 10000 });
-  await expect(page.locator('[data-wds-view="error"] [data-wds="retry"]')).toHaveCount(0);
-  await page.evaluate(() => { window.__breakFieldset = false; });
-  await page.reload();   // the init script breaks the form again at load: reloading is what the button does
-  await waitForView(page, 'error', { timeout: 20000 });
+  await expect(page.locator('[data-wds-view="error"] [data-wds="retry"]')).toBeVisible({ timeout: 10000 });
   await page.evaluate(() => { window.__breakFieldset = false; });
   await page.locator('[data-wds-view="error"] [data-wds="retry"]').click();
   await waitForView(page, 'unlock', { timeout: 20000 });

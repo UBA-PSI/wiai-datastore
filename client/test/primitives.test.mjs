@@ -14,8 +14,8 @@ test('base64url: round trips, rejects padding, bad characters, non-canonical tai
   }
   assert.equal(I.b64u(new Uint8Array([0xfb, 0xff])), '-_8');
   assert.deepEqual(Array.from(I.b64uDecode('-_8')), [0xfb, 0xff]);
-  for (const bad of ['QQ==', 'Q', 'QR', 'QQR=', 'a+b/', 'ab cd', 'ab\ncd', 'ä', 'QUJDRA=', '-_9']) assert.throws(() => I.b64uDecode(bad), core.IntegrityError, bad);
-  assert.throws(() => I.b64uDecode('QQ', 2), core.IntegrityError); // wrong decoded length
+  for (const bad of ['QQ==', 'Q', 'QR', 'QQR=', 'a+b/', 'ab cd', 'ab\ncd', 'ä', 'QUJDRA=', '-_9']) assert.throws(() => I.b64uDecode(bad), core.errors.IntegrityError, bad);
+  assert.throws(() => I.b64uDecode('QQ', 2), core.errors.IntegrityError); // wrong decoded length
   assert.deepEqual(Array.from(I.b64uDecode('QQ')), [0x41]);
 });
 
@@ -34,22 +34,22 @@ test('b32c: check bits catch typos; all lengths used in the protocol round-trip'
   }
   // 4 check bits: at most about 1/16 of single-symbol substitutions inside the data pass by chance
   assert.ok(undetected / total < 0.1, undetected + '/' + total);
-  await rejects(I.b32cDecode(good, 17), core.UsageError);
+  await rejects(I.b32cDecode(good, 17), core.errors.UsageError);
   assert.equal(core.classifyCode('abc'), 'unknown');
   assert.equal(core.classifyCode('U'.repeat(20)), 'unknown');
 });
 
 test('cjson: encoder rules', () => {
   for (const bad of [1.5, -1, NaN, Infinity, 2 ** 53, undefined, 1n, new Date(0), () => 1, 'é', 'a"b', 'a\\b', 'tab\t', { a: undefined }, { 'k"': 1 }, [undefined]]) {
-    assert.throws(() => I.cjson(bad), core.UsageError, String(bad));
+    assert.throws(() => I.cjson(bad), core.errors.UsageError, String(bad));
   }
   assert.equal(I.cjson({ b: [1, true, null], a: 'x' }), '{"a":"x","b":[1,true,null]}');
   assert.equal(I.cjson(Object.create(null)), '{}');
   assert.equal(I.cjson(0), '0');
-  assert.throws(() => I.cjson(Object.is(-0, -0) ? -0 : 0), core.UsageError);
-  assert.throws(() => I.cjsonParse('{"a":1}x'), core.IntegrityError);
-  assert.throws(() => I.cjsonParse('[' .repeat(40) + ']'.repeat(40)), core.IntegrityError);
-  assert.throws(() => I.cjsonParse('{"a":01}'), core.IntegrityError);
+  assert.throws(() => I.cjson(Object.is(-0, -0) ? -0 : 0), core.errors.UsageError);
+  assert.throws(() => I.cjsonParse('{"a":1}x'), core.errors.IntegrityError);
+  assert.throws(() => I.cjsonParse('[' .repeat(40) + ']'.repeat(40)), core.errors.IntegrityError);
+  assert.throws(() => I.cjsonParse('{"a":01}'), core.errors.IntegrityError);
   assert.deepEqual(I.cjsonParse('{"a":[1,{"b":null}],"c":false}'), { a: [1, { b: null }], c: false });
 });
 
@@ -60,25 +60,25 @@ test('padme: never shrinks, bounded overhead, idempotent', () => {
     assert.equal(I.padme(p), p);
     if (L > 64) assert.ok(p / L <= 1.125, L + ' -> ' + p);
   }
-  assert.throws(() => I.padme(0), core.UsageError);
+  assert.throws(() => I.padme(0), core.errors.UsageError);
 });
 
 test('envelope parsing: magic, type, flags, epoch, lengths', async () => {
   const nonce = seq(12, 0), good = await I.sealEnvelope(await I.aesKey(seq(32, 0)), 1, 5, seq(30, 0), new Uint8Array(0), nonce);
   assert.equal(I.parseEnvelope(good, 1).epoch, 5);
   const mut = (f) => { const b = new Uint8Array(good); f(b); return b; };
-  assert.throws(() => I.parseEnvelope(mut((b) => { b[0] = 0x58; }), 1), core.IntegrityError);
-  assert.throws(() => I.parseEnvelope(good, 2), core.IntegrityError);
-  assert.throws(() => I.parseEnvelope(mut((b) => { b[5] = 1; }), 1), core.IntegrityError);
-  assert.throws(() => I.parseEnvelope(good.subarray(0, 37), 1), core.IntegrityError);
-  assert.throws(() => I.parseEnvelope(good, 1, 40), core.IntegrityError);
+  assert.throws(() => I.parseEnvelope(mut((b) => { b[0] = 0x58; }), 1), core.errors.IntegrityError);
+  assert.throws(() => I.parseEnvelope(good, 2), core.errors.IntegrityError);
+  assert.throws(() => I.parseEnvelope(mut((b) => { b[5] = 1; }), 1), core.errors.IntegrityError);
+  assert.throws(() => I.parseEnvelope(good.subarray(0, 37), 1), core.errors.IntegrityError);
+  assert.throws(() => I.parseEnvelope(good, 1, 40), core.errors.IntegrityError);
   const slot = await I.sealEnvelope(await I.aesKey(seq(32, 0)), 2, 0, seq(20, 0), new Uint8Array(0), nonce);
-  assert.throws(() => I.parseEnvelope(mut.call(null, (b) => b) && new Uint8Array([...slot.subarray(0, 6), 0, 0, 0, 1, ...slot.subarray(10)]), 2), core.IntegrityError); // epoch must be 0
-  assert.throws(() => I.parseEnvelope(new Uint8Array(5000), 2), core.IntegrityError);
+  assert.throws(() => I.parseEnvelope(mut.call(null, (b) => b) && new Uint8Array([...slot.subarray(0, 6), 0, 0, 0, 1, ...slot.subarray(10)]), 2), core.errors.IntegrityError); // epoch must be 0
+  assert.throws(() => I.parseEnvelope(new Uint8Array(5000), 2), core.errors.IntegrityError);
   const ring = await I.eciesSeal({ recipientPub: (await I.generateKeyPair('E')).pub, plaintext: seq(10, 0), aadTail: new Uint8Array(0) });
   assert.equal(I.parseEnvelope(ring, 3).eph.length, 65);
-  assert.throws(() => I.parseEnvelope(ring.subarray(0, 102), 3), core.IntegrityError);
-  assert.throws(() => I.parseEnvelope(mut.call(null, () => new Uint8Array([...ring.subarray(0, 10), 5, ...ring.subarray(11)])), 3), core.IntegrityError);
+  assert.throws(() => I.parseEnvelope(ring.subarray(0, 102), 3), core.errors.IntegrityError);
+  assert.throws(() => I.parseEnvelope(mut.call(null, () => new Uint8Array([...ring.subarray(0, 10), 5, ...ring.subarray(11)])), 3), core.errors.IntegrityError);
 });
 
 test('ECIES: only the intended recipient can open; AAD is bound', async () => {
@@ -87,8 +87,8 @@ test('ECIES: only the intended recipient can open; AAD is bound', async () => {
   const env = await I.eciesSeal({ recipientPub: r.pub, plaintext: I.utf8('hello'), aadTail: aad });
   const open = async (kp, a) => I.eciesOpen({ recipientPriv: await I.importPrivate('E', kp.d, kp.pub), recipientPub: kp.pub, envelope: env, aadTail: a });
   assert.equal(new TextDecoder().decode(await open(r, aad)), 'hello');
-  await rejects(open(other, aad), core.IntegrityError);
-  await rejects(open(r, seq(20, 2)), core.IntegrityError);
+  await rejects(open(other, aad), core.errors.IntegrityError);
+  await rejects(open(r, seq(20, 2)), core.errors.IntegrityError);
   assert.notDeepEqual(await I.eciesSeal({ recipientPub: r.pub, plaintext: I.utf8('hello'), aadTail: aad }), env); // fresh ephemeral key and nonce
 });
 
@@ -99,18 +99,18 @@ test('record plaintext: layout, padding checks, name check, size limits', () => 
   assert.equal(p.length, I.padme(4 + built.headerBytes.length + body.length));
   assert.equal(JSON.stringify(Object.keys(JSON.parse(new TextDecoder().decode(built.headerBytes)))), '["k","l","n","t"]');
   assert.deepEqual(I.parseRecordPlaintext(p, 'n').value, { a: 1 });
-  assert.throws(() => I.parseRecordPlaintext(p, 'other'), core.IntegrityError);
+  assert.throws(() => I.parseRecordPlaintext(p, 'other'), core.errors.IntegrityError);
   const dirty = new Uint8Array(p); dirty[dirty.length - 1] = 1;
-  if (p.length > 4 + built.headerBytes.length + body.length) assert.throws(() => I.parseRecordPlaintext(dirty, 'n'), core.IntegrityError, /padding/);
-  assert.throws(() => I.parseRecordPlaintext(p.subarray(0, 10), 'n'), core.IntegrityError);
-  const long = new Uint8Array(p); long[3] = 200; assert.throws(() => I.parseRecordPlaintext(long, 'n'), core.IntegrityError);
+  if (p.length > 4 + built.headerBytes.length + body.length) assert.throws(() => I.parseRecordPlaintext(dirty, 'n'), core.errors.IntegrityError, /padding/);
+  assert.throws(() => I.parseRecordPlaintext(p.subarray(0, 10), 'n'), core.errors.IntegrityError);
+  const long = new Uint8Array(p); long[3] = 200; assert.throws(() => I.parseRecordPlaintext(long, 'n'), core.errors.IntegrityError);
   // unknown header keys are ignored by readers
   const hdr = I.utf8(JSON.stringify({ k: 'json', l: 7, n: 'n', t: 1, zz: 'future' })), pt = new Uint8Array(4 + hdr.length + 7);
   pt.set(I.u32(hdr.length)); pt.set(hdr, 4); pt.set(body, 4 + hdr.length);
   assert.deepEqual(I.parseRecordPlaintext(pt, 'n').value, { a: 1 });
-  assert.throws(() => I.buildRecordPlaintext('n', 'bytes', body, 'x'.repeat(256), 1), core.UsageError);
-  assert.throws(() => I.buildRecordPlaintext('n', 'json', body, 'text/plain', 1), core.UsageError);
-  assert.throws(() => I.buildRecordPlaintext('n', 'weird', body, undefined, 1), core.UsageError);
+  assert.throws(() => I.buildRecordPlaintext('n', 'bytes', body, 'x'.repeat(256), 1), core.errors.UsageError);
+  assert.throws(() => I.buildRecordPlaintext('n', 'json', body, 'text/plain', 1), core.errors.UsageError);
+  assert.throws(() => I.buildRecordPlaintext('n', 'weird', body, undefined, 1), core.errors.UsageError);
   // names are used as they are: NFC and NFD forms are different records
   const k = seq(32, 0);
   return Promise.all([I.recordId(k, 'é'), I.recordId(k, 'e' + String.fromCharCode(0x301))]).then(([a, b]) => assert.notEqual(a, b));
@@ -133,10 +133,10 @@ test('key file: strict checks', async () => {
   assert.equal((await core.parseKeyFile(kf.text, o)).accessId, '000G40R40M30E209185Z');
   const doc = JSON.parse(kf.text);
   for (const mut of [{ type: 'x' }, { v: 2 }, { access_id: '000G40R40M30E209185Y' }, { vault: 'short' }, { scope: 'other-aaaaaa' }]) {
-    await rejects(core.parseKeyFile(JSON.stringify(Object.assign({}, doc, mut)), o), core.WDSError);
+    await rejects(core.parseKeyFile(JSON.stringify(Object.assign({}, doc, mut)), o), core.errors.WDSError);
   }
   assert.ok(await core.parseKeyFile(JSON.stringify(Object.assign({}, doc, { future: true })), o)); // unknown keys are ignored
-  await rejects(core.parseKeyFile('{', o), core.UsageError);
+  await rejects(core.parseKeyFile('{', o), core.errors.UsageError);
 });
 
 test('UMD: loads as a classic script (window.WDSCore) without require/module', () => {

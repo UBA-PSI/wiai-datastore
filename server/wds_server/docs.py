@@ -16,6 +16,7 @@ script tag with its Subresource Integrity hash always names the library that is 
     {{sandbox_scope}}   scope ID of the public sandbox, or "(no sandbox on this server)"
     {{sandbox_wipe}}    nightly wipe time with time zone, e.g. "03:30 Europe/Berlin" ("-" without a sandbox)
     {{sandbox_limits}}  sandbox limits in words, e.g. "512 KB per record, 2 MB per vault, 2 versions" ("-" without a sandbox)
+    {{sandbox_creation}} the creation limits of the sandbox, e.g. "20 per network per hour, 60 for the whole sandbox per 10 minutes" ("-" without a sandbox)
     {{sandbox_section}} the whole paragraph block of llms.txt about the sandbox (one sentence when there is none)
     {{index_integration}}, {{index_porting}}   only in llms.txt: the sections of that guide with their line ranges in the text as served
                         (section_index; computed from the served document, so it cannot go stale)
@@ -113,10 +114,19 @@ NO_SANDBOX_SECTION = (
     "integration.md, section \"wds-verify\"), or tell the person that the end-to-end run is still open.")
 
 
+def _window(seconds: int) -> str:
+    """3600 -> "hour", 7200 -> "2 hours", 600 -> "10 minutes", 60 -> "minute"."""
+    for unit, size in (("hour", 3600), ("minute", 60)):
+        if seconds % size == 0:
+            n = seconds // size
+            return unit if n == 1 else f"{n} {unit}s"
+    return f"{seconds} seconds"
+
+
 def sandbox_placeholders(svc) -> dict:
     sb = svc.config.sandbox
     if sb is None:
-        return {"sandbox_scope": "(no sandbox on this server)", "sandbox_wipe": "-", "sandbox_limits": "-",
+        return {"sandbox_scope": "(no sandbox on this server)", "sandbox_wipe": "-", "sandbox_limits": "-", "sandbox_creation": "-",
                 "sandbox_section": NO_SANDBOX_SECTION}
     wipe, limits = sb.wipe_time + " " + sb.timezone, (f"{_size(sb.max_value_bytes)} per record, {_size(sb.vault_bytes)} per vault, "
                                                       f"{sb.history_versions} versions")
@@ -128,7 +138,10 @@ def sandbox_placeholders(svc) -> dict:
         "**Never write the sandbox scope ID into the app file** (the app would lose its data every night; wds-verify fails such a file). "
         "Never enter real data there. There is no recovery in the sandbox.\n"
         "Details: integration.md, section \"The sandbox\".")
-    return {"sandbox_scope": sb.scope_id, "sandbox_wipe": wipe, "sandbox_limits": limits, "sandbox_section": section}
+    creation = (f"{sb.create_per_ip} per network per {_window(sb.create_window)}, "
+                f"{sb.create_global} for the whole sandbox per {_window(sb.create_global_window)}")
+    return {"sandbox_scope": sb.scope_id, "sandbox_wipe": wipe, "sandbox_limits": limits, "sandbox_creation": creation,
+            "sandbox_section": section}
 
 
 def placeholders(svc) -> dict:

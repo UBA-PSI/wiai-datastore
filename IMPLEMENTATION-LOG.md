@@ -796,3 +796,116 @@ One library SRI everywhere: `sha384-fmN0nQDEY+C5dimjydhbS0WkgIoFDxgwHjlNS9Iqm8+C
 A fourth clean-room trial with an app unrelated to `examples/zeit-notizen` and to both porting examples, so that the documents, not a copied example, carry the port.
 
 Nothing committed. The two new test files, `client/test/dialog-stress.spec.mjs` and `client/test/request-timeout.test.mjs`, are still untracked.
+
+## Round H: fourth clean-room trial, simplification
+
+### Input
+
+A Claude ported a local-only equipment inventory app (IndexedDB with composite keys, a localStorage JSON, photos, a JSON backup, modal dialogs) in a clean-room container from the public documents only (llms.txt, integration.md, porting.md, library 1.0.0 and wds-verify at commit 93781d8). It is the first trial with an app unrelated to `examples/zeit-notizen` and to both porting examples. Its port passed wds-verify with 31 passed, 0 failed, 0 warnings, including `--migration-delete`.
+
+What worked, by its feedback: the section map of llms.txt; `store.migrateLocal` (the `from` rule, `h.ref` with array keys); the script tag, CSP and wds-verify as printed; porting.md section 7 (its own toast hidden under its own modal); drive-library for its own conflict, invite and lock tests.
+
+Theme of the round (the owner's concern): the library and the documents may be over-engineered. The round fixes real bugs and makes things smaller and simpler: no new recipe, feature or option. The security properties stay: E2EE, revocation and rekey, escrow recovery, conflict detection, "every old row is claimed" in `migrateLocal`, create-only writes with read-back, a backup before any delete.
+
+### The feedback points and what became of them
+
+1. *Settings after "Not now"* (an app that autosaves a whole settings object blocks the old values, which are deleted at the next take-over anyway): the cause, the `settings` kind with its fill-only-gaps rule, is gone (the settings rule below). porting.md says what happens after `declined`, `partial` and `failed` and to write a record only when the person changed it.
+2. *Settings in shared vaults* (one member's theme, filter and search text applied to everyone; a read member could store no preference): the settings rule below.
+3. *Thumbnails in lists*, 4. *replace-all import*, 6. *unique keys across devices*: one sentence each, no recipe (porting.md: the mapping row "A unique index", the write-new-then-remove order of an import that replaces everything).
+5. *The ZIP of `exportAll` cannot be imported*: said in integration.md section 9 and porting.md section 3.
+7. *A reload of an item that is open in a form disables the conflict dialog*: its own point in the porting.md section 7 checklist; integration.md points there.
+8. *Member with old data*: the owner imports a member's old export only if the old import adds and does not replace.
+9. *Rate limit of the sandbox*: the limits come from the server (`{{sandbox_creation}}`), and the text says to wait, at most an hour.
+10. *The invite role did not stick* (bug a below).
+11. *`createVault` and `unlock` time out when the migration dialog follows* (bug b below).
+12. *"Nothing to copy but settings asks nothing"* is moot: there is no `settings` kind.
+13. *Length and repetition*: porting.md from 527 to 353 lines, integration.md from 829 to 760.
+
+### The two bugs
+
+- **(a) The share dialog reset the invite form.** A deferred `maintain()` re-render (the roster refresh after opening) rebuilt the dialog, so a role chosen right after opening came back as `write`. Fix: the role and the label live in `st` and survive every redraw (flash, revoke-back, error retry too); the refresh redraws only when the roster, the recovery request or the pending rekey changed, never while the focus is in a form of the dialog or a form is in flight (`st.submitting`), and otherwise only clears `aria-busy`, which is the readiness signal for tests. The test holds the roster request back (`server.gate` in fake-server.mjs) until after the input and asserts that value, focus and `aria-busy` survive.
+- **(b) `createVault` and `unlock` of drive-library timed out when `migrateLocal` opened its question after the unlock.** Fix: both resolve with `next`, the view the dialog ended on (`"migrate"`, `"sheet"`, `null`, …); a look that finds no dialog is repeated once after a moment so that a dialog opening right after is not missed; `answerMigration` goes on from there. The single steps moved to `tools/lib/dialog-internals.mjs`; drive-library exports only the high-level functions.
+
+### The settings rule
+
+A personal preference chosen from a fixed list (theme, language, sort order, density, last tab) stays in that browser's localStorage under the app's own key; the app reads and writes it directly and never names it in `migrateLocal`. Typed view state (search text, free-text filters) lives in memory only. Anything a person typed or would miss on another device, and every value for everyone who shares the vault, is data: a record, written only when the person changed it. `settings` in the result of `map` is a `UsageError`; `WDS.fillGaps` is gone. A preference that the old app kept in IndexedDB or inside a data key is claimed with `h.skip` and reset. wds-verify fails `localStorage.setItem` with a value built by `JSON.stringify` or a template, or with a key under a prefix that `migrateLocal` names (data, not a preference); a plain string is no finding.
+
+### What was cut, and why
+
+- **migrateLocal:** `tagged` (ids are always `<tag>-<token>`), `texts` (40 overridable keys; the library words its own dialogs), the `settings` kind and `WDS.fillGaps` (a merge rule that silently drops old values), the discard path ("delete the old data without taking it over", `discarded`), the `migrate-differs` view with "keep vault"/"later" (an entry that exists with other content is written create-only as `<id>~<tag>-<hash>`, no dialog), `downloadBackup()` on the result and on `OfflineError` (the notices have the button), and the result fields `copied`, `total`, `tooLarge`, `differs`, `again`, `sandbox`: the result is `{ status, deleted?, copies?, why? }`. `migrate-large` has one ZIP download instead of one per entry, and deleting waits for that ZIP.
+- **Store and handles:** `connect({ notify, watch })` (notices cannot be switched off), `getMany({ concurrency })` (fixed at 6), `col.add(value, { id })` (use `set`), `autosave({ onReplaced })` and `stopReason` (the `replaced` status went with them; `onResolved` covers it). The removed `id` and `onReplaced` throw a `UsageError` that names the replacement.
+- **Share dialog:** the expiry choice of invites (2 days, in a sandbox until the nightly wipe; the core still takes `expiresIn` for `wds-recover`).
+- **drive-library:** the exports `waitForView`, `enableMigrationDelete`, `newPassphrase` and the single steps (now internal in `dialog-internals.mjs`).
+- **Docs:** porting.md Example 1 reduced to a forward reference, the options and result tables shortened to lists, one numbered list of what the person sees and four safety bullets, the join-code and test-vault subsections merged, "Without wds-verify" and "Without a clone" halved, the window.open recipe and the headless-PDF paragraph only once (integration.md section 6), integration.md section 16 two lines, the MB definition and the "theirs" advice in one place each.
+
+### Further fixes found on the way
+
+- **Copy name of migrateLocal.** The copy of an entry that exists with other content is `<id>~<tag>-<first 6 hex of the entry's hash>` (ids cut to 180 characters before it). The name can only hold that content, so a second change makes a second copy; the "unsettled" branch and `partial` with `why: "differs"` are gone. If the name holds other content anyway (a hash collision), the run fails and deletes nothing. Test: an entry that differs twice ends `migrated`.
+- **Copies are reported.** `copies: [names]` in the result (only when there are some), a sticky toast when a record was copied, and porting.md says that a record copy is invisible to the app unless it reads `copies`. The copy of an item keeps its explicit meta. `migrate.done.copies` needs no plural.
+- **wds-verify.** A failed download of the too-large files is the finding `migration-large` and ends the run instead of a click on the disabled delete button; the member count counts `.wds-person`.
+- **Docs.** A prefix must not cover a key the app keeps writing; `seed.keep` is in porting.md; a member's notice comes at every start; the delete button of `migrate-large` waits for the built ZIP.
+
+### Rejected or limited, with reasons
+
+Proposals of the round's audits and of the trial:
+
+- **auditF: collapse statuses into nothing | migrated | pending | failed with `why`.** Rejected: tests and wds-verify distinguish declined/partial/skipped/busy, and the rename saves no lines; the result is reduced to `{ status, deleted?, why? }` instead (auditO).
+- **auditF: keep the migrate-differs view with "keep vault" and "later".** Rejected in favour of auditO's no-dialog rule (write the old version as `<id>~<tag>`): "keep vault" drops the old version from everything but an optional backup, and the view is the hardest part to apply and to test. With always-tagged ids the case is rare.
+- **auditF: drop the skip-ack checkbox gate on "Take over".** Rejected: `h.skip` rows are deleted without a copy; the checkbox-or-backup confirmation is part of the migrateLocal safety core.
+- **auditF: replace Example 2 with a pointer to examples/zeit-notizen.** Rejected: clean-room porters read only served docs, and Example 2 is the one complete tested map with records, `h.skip` and a reverse `h.ref`. Example 1 is shortened instead (auditO).
+- **auditF: remove the real-scope join-code subsections and `joinCodeFile`/`readJoinCode`/`deleteVault` from drive-library.** Rejected: `server/wds_server/prompt.py` tells every porter to end real-scope tests with `deleteVault`, and the join-code rule (never read, print or ask for it) must stay unweakened; the three subsections are merged and shortened instead.
+- **auditF: remove "Without wds-verify" and "Without a clone" from integration.md section 12.** Rejected: they are the only path for a porter without Node or a clone; shortened by half instead.
+- **auditF: remove the window.open recipe and the headless-PDF paragraph entirely.** Partly rejected: kept once in integration.md section 6, porting.md points there in one line.
+- **auditF: review the wds-verify options `--heading-level`, `--locale`, `--wait-ms`, `--hashes`, `--scope-check off`.** Not this round: no evidence they are unused, and each is one clause.
+- **Keep search text in localStorage with the other personal UI state.** Rejected: search text is typed by the person, wds-verify types canaries into search fields and the leak search would (rightly) flag it in localStorage. Search text stays in memory only; only preferences chosen from a fixed list go to localStorage.
+- **Keep the `settings` kind with `fillGaps` and add "write only changed settings" advice (feedback 1 as worded).** Rejected: it keeps a mechanism whose only purpose is a merge rule that silently drops old values; with personal preferences local and shared values as create-only records, the kind is not needed.
+- **Feedback 3, 4 and 6 as recipes (thumbnail list, replace-all import, unique keys across devices).** Rejected per theme: one sentence each instead. Per-member settings (feedback 2) likewise: the settings rule answers it without a new place in the vault.
+- **Dropping invite labels, the passphrase estimator, the top-layer handling, or anything in wds-core.js.** Rejected: labels are how an owner revokes the right person; the estimator guards weak passphrases when HIBP is off; top-layer handling prevents inert pages; the core carries the security properties.
+- **Removing the deferred `maintain()` re-render entirely (auditO's subtraction fix for bug a).** Rejected as the only fix: other re-renders (flash, revoke-back, error retry) would still reset the form; values in `st` fix all of them, and `aria-busy` gives tests a readiness signal.
+
+Items of the review of the round's implementation:
+
+- **Enable the delete button of `migrate-large` after a backup too:** a second way to reach delete. The dead end (the ZIP cannot be built) is the safe direction, and it is documented.
+- **A non-sticky toast or a remembered dismissal for members:** the remembered dismissal was removed on purpose; the behaviour is documented instead.
+- **Moving the copy name's tail before the file ending:** more code for a cosmetic gain.
+- **A node-identity assertion in the share test, as the reviewer proposed:** with the new design the dialog is not redrawn while the focus is in a form, so the test asserts that value, focus and `aria-busy` survive instead.
+- **Re-rendering the share dialog while the person types, to keep the roster current:** the roster is fixed at the next opening; typing is never lost.
+
+**A decision for the owner:** porting.md Example 2 still makes every migrating owner tick "1 entries not taken over" for the language row, because a preference in IndexedDB must be claimed. It is documented and the skip reason says so; removing the friction would need a library change (PLAN.md §16).
+
+### Size (wc -l, at commit 93781d8 and after the round)
+
+| File | Before | After |
+|---|---|---|
+| client/src/wds-core.js | 2039 | 2038 |
+| client/src/wds-ui.js | 4442 | 4231 |
+| docs/site/integration.md | 829 | 760 |
+| docs/site/porting.md | 527 | 353 |
+| tools/lib/*.mjs | 2604 (10 files) | 2575 (11 files) |
+| **Total** | **10441** | **9957** |
+
+The diff against the last commit: 47 files, about 1670 lines added and 2650 removed (tests and docs included). **Targets missed:** wds-ui.js 4231 against 4150, tools/lib 2575 against 2540. The late fixes (the content-addressed copy name, `result.copies`) added about as much as the last cuts (the `tt` wrapper, `leftFileName`, the unsettled branch, comment blocks in dialog-internals) removed; the move of the single steps to `dialog-internals.mjs` saved little by itself. Candidates for the next round: the "seen" storage of the share notice, the console hints of migrateLocal (`migrateInformed`), the backup ZIP converter, and the long finding texts of dynamic-checks.mjs.
+
+### PLAN.md
+
+Updated to the system as it now is: the round H trial in the status and the trials list (§15), §8.1 without `notify`, `watch`, `concurrency`, `id` of `add`, `onReplaced`, `stopReason` and `downloadBackup()`, §5.8 and §8.5 without the expiry choice, §8.5 `migrateLocal` without `tagged`, `texts`, `settings`, the discard path and `migrate-differs` (with the copy name and the reduced result), §8.6 the case count, §9 the drive-library exports with `next`, `dialog-internals.mjs`, the `setItem` check and `migration-large`, §13 porting.md, §14 Share without expiry, §16 the trial point replaced by the IndexedDB-preference friction.
+
+### Test counts (final sequential run)
+
+| Suite | Result |
+|---|---|
+| `scripts/test-server.sh` | 502 tests OK |
+| `scripts/test-client.sh` | node tests OK, 82 Playwright cases passed (Chromium) |
+| `scripts/test-tools.sh` | 114 passed |
+| `scripts/test-integration.sh` | 191 passed, 4 skipped (Chromium, Firefox, WebKit) |
+| `scripts/test-examples.sh` | 40 passed (Chromium) |
+| `scripts/check-public.sh` | clean (165 files) |
+| `wds-verify examples/zeit-notizen/index.html --target mock --hashes client/dist/hashes.json` | 32 passed, 0 failed, 0 warnings |
+
+Library SRI unchanged by a rebuild: `sha384-zNTgKx5jm6ESzFb+xzoqPjMSbtWdS/DSbc5D/BBUIc4+J8zQViLK5TNk26/L3grZ` (client/dist, tools/test-apps/{good,bad}, examples/zeit-notizen/index.html).
+
+### Next
+
+Freeze library version 1.0.0 (`node client/build.mjs --freeze`) before the first app embeds its tag.
+
+Nothing committed. `tools/lib/dialog-internals.mjs` is untracked.

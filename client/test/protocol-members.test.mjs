@@ -24,7 +24,7 @@ test('invite, redeem, automatic renewal by the owner, key set cleanup', async ()
   assert.equal(member.s.activeIdx, 0);
 
   // the invite is spent
-  await rejects(newClient(world).redeemInvite({ inviteCode: invite.code.canonical, passphrase: 'x y z x y z' }), core.RequestError, /already/);
+  await rejects(newClient(world).redeemInvite({ inviteCode: invite.code.canonical, passphrase: 'x y z x y z' }), core.errors.RequestError, /already/);
 
   // owner unlock adopts the renewal into roster version 3
   const f2 = newClient(world, { storage: world.storage });
@@ -52,15 +52,15 @@ test('an unredeemed invite expires; owners can cancel it', async () => {
   const ctx = await setupVault();
   const i1 = await ctx.founder.createInvite({ role: 'read', expiresIn: 3600 });
   ctx.world.server.nowFn = () => Math.floor(Date.now() / 1000) + 4000;
-  await rejects(newClient(ctx.world).redeemInvite({ inviteCode: i1.code.display, passphrase: 'abc def ghi jkl' }), core.AuthError);
+  await rejects(newClient(ctx.world).redeemInvite({ inviteCode: i1.code.display, passphrase: 'abc def ghi jkl' }), core.errors.AuthError);
   ctx.world.server.nowFn = () => Math.floor(Date.now() / 1000);
   const i2 = await ctx.founder.createInvite({ role: 'write' });
   await ctx.founder.cancelInvite(i2.slotId);
   assert.ok(!ctx.founder.members().some((m) => m.slotId === i2.slotId));
-  await rejects(newClient(ctx.world).redeemInvite({ inviteCode: i2.code.display, passphrase: 'abc def ghi jkl' }), core.RequestError);
-  await rejects(ctx.founder.createInvite({ role: 'owner' }), core.UsageError);
-  await rejects(ctx.founder.createInvite({ role: 'write', expiresIn: 20 * 86400 }), core.UsageError);
-  await rejects(newClient(ctx.world).redeemInvite({ inviteCode: i2.code.display.slice(0, -1) + (i2.code.display.endsWith('0') ? '1' : '0'), passphrase: 'abc def ghi jkl' }), core.UsageError);
+  await rejects(newClient(ctx.world).redeemInvite({ inviteCode: i2.code.display, passphrase: 'abc def ghi jkl' }), core.errors.RequestError);
+  await rejects(ctx.founder.createInvite({ role: 'owner' }), core.errors.UsageError);
+  await rejects(ctx.founder.createInvite({ role: 'write', expiresIn: 20 * 86400 }), core.errors.UsageError);
+  await rejects(newClient(ctx.world).redeemInvite({ inviteCode: i2.code.display.slice(0, -1) + (i2.code.display.endsWith('0') ? '1' : '0'), passphrase: 'abc def ghi jkl' }), core.errors.UsageError);
 });
 
 test('invalid renewals are ignored, valid member renewals are adopted', async () => {
@@ -113,11 +113,11 @@ test('roles: write to read and back; roster edits retry after a concurrent chang
   const slotId = member.s.slotId;
   await member.put('a', 1);
   await ctx.founder.setRole(slotId, 'read');
-  await rejects(member.put('a', 2), core.AuthError); // the server enforces the role from the head roster
+  await rejects(member.put('a', 2), core.errors.AuthError); // the server enforces the role from the head roster
   await ctx.founder.setRole(slotId, 'write');
   await member.get('a');
   await member.put('a', 3);
-  await rejects(ctx.founder.setRole(ctx.founder.s.slotId, 'read'), core.UsageError);
+  await rejects(ctx.founder.setRole(ctx.founder.s.slotId, 'read'), core.errors.UsageError);
   // a roster conflict (somebody else was faster) is retried on a fresh head
   ctx.world.server.conflictOnce = true;
   await ctx.founder.setRole(slotId, 'read');
@@ -157,8 +157,8 @@ test('revocation re-encrypts current records and history, then drops the old epo
   assert.deepEqual((await founder.history('doc0')).versions.map((v) => v.version), [2, 1]);
   assert.deepEqual((await founder.getVersion('doc0', 1)).value, { i: 0 });
   // revoked member is locked out; the other member continues without any manual refresh
-  await rejects(m1.member.get('doc0'), core.AuthError);
-  const e = await rejects(m1.member.get('doc0'), core.AuthError); assert.equal(e.code, 'revoked');
+  await rejects(m1.member.get('doc0'), core.errors.AuthError);
+  const e = await rejects(m1.member.get('doc0'), core.errors.AuthError); assert.equal(e.code, 'revoked');
   assert.deepEqual(await m2.member.get('doc1'), { i: 1, again: true }); // epoch 2 envelope: member reloads its keyring entry
   const w = await m2.member.put('doc1', { by: 'member2' }); // stale epoch on write: 409 epoch_changed, reload, retry
   assert.equal(w.epoch, 2);
@@ -184,7 +184,7 @@ test('409 epoch_changed on a write: the member reloads its keyring entry and ret
   assert.deepEqual(await ctx.founder.get('fresh'), { after: 'revocation' });
   // a second 409 is not retried silently
   ctx.world.server.vaults.get(ctx.created.vaultId).epoch = 9;
-  const e = await rejects(m2.member.put('other', 1), core.RequestError);
+  const e = await rejects(m2.member.put('other', 1), core.errors.RequestError);
   assert.equal(e.code, 'epoch_changed');
 });
 
@@ -196,11 +196,11 @@ test('re-encryption resumes after an interruption (network loss, tab closed)', a
   await populate(founder);
   const slotId = member.s.slotId;
   world.server.rekeyBudget = 4; // the connection dies after four re-encrypted blobs
-  await rejects(founder.revoke([slotId]), core.OfflineError);
+  await rejects(founder.revoke([slotId]), core.errors.OfflineError);
   world.server.rekeyBudget = null;
   assert.deepEqual(epochsOnServer(world.server, created.vaultId), [1, 2]);
   assert.equal(world.server.vaults.get(created.vaultId).epoch, 2);
-  await rejects(member.get('doc0'), core.AuthError); // revocation took effect immediately
+  await rejects(member.get('doc0'), core.errors.AuthError); // revocation took effect immediately
   // new session: the roster still commits epoch 1, so re-encryption is pending
   const f2 = newClient(world, { storage: world.storage });
   const st = await f2.unlock({ accessId: created.accessId, passphrase });
@@ -230,7 +230,7 @@ test('two owner sessions resuming at once do not clobber each other', async () =
   await a.unlock({ accessId: created.accessId, passphrase }); await b.unlock({ accessId: created.accessId, passphrase });
   const [ra, rb] = await Promise.allSettled([a.resumeRekey(), b.resumeRekey()]);
   // one of them may lose the race when dropping the old epoch; the data is consistent in every case
-  for (const r of [ra, rb]) if (r.status === 'rejected') assert.ok(r.reason instanceof core.WDSError, String(r.reason));
+  for (const r of [ra, rb]) if (r.status === 'rejected') assert.ok(r.reason instanceof core.errors.WDSError, String(r.reason));
   assert.deepEqual(epochsOnServer(world.server, created.vaultId), [2]);
   const c = newClient(world, { storage: core.memoryStorage() });
   await c.unlock({ accessId: created.accessId, passphrase });
@@ -254,13 +254,13 @@ test('a member who leaves history behind is not able to read new epochs; cancell
 
 test('owners and escrow cannot be revoked; unknown slots are refused', async () => {
   const ctx = await setupVault();
-  await rejects(ctx.founder.revoke([ctx.founder.s.slotId]), core.UsageError);
+  await rejects(ctx.founder.revoke([ctx.founder.s.slotId]), core.errors.UsageError);
   const esc = ctx.founder.members().find((m) => m.escrow);
-  await rejects(ctx.founder.revoke([esc.slotId]), core.UsageError);
-  await rejects(ctx.founder.revoke(['AAAAAAAAAAAAAAAA']), core.UsageError);
+  await rejects(ctx.founder.revoke([esc.slotId]), core.errors.UsageError);
+  await rejects(ctx.founder.revoke(['AAAAAAAAAAAAAAAA']), core.errors.UsageError);
   const { member } = await addMember(ctx, 'write');
-  await rejects(member.createInvite({ role: 'read' }), core.AuthError);
-  await rejects(member.revoke(['AAAAAAAAAAAAAAAA']), core.AuthError);
+  await rejects(member.createInvite({ role: 'read' }), core.errors.AuthError);
+  await rejects(member.revoke(['AAAAAAAAAAAAAAAA']), core.errors.AuthError);
 });
 
 test('recovery by the faculty: escrow-signed roster adds an owner invite; clients flag it and require acknowledgement', async () => {
@@ -291,7 +291,7 @@ test('recovery by the faculty: escrow-signed roster adds an owner invite; client
   assert.equal(founder.status().recoveredByFaculty, true);
   assert.deepEqual(founder.status().recoverySlots, [slotId]);
   assert.ok(founder.members().find((m) => m.slotId === slotId).addedByEscrow);
-  await rejects(founder.createInvite({ role: 'write' }), core.UsageError, /recovered|acknowledge/);
+  await rejects(founder.createInvite({ role: 'write' }), core.errors.UsageError, /recovered|acknowledge/);
   founder.acknowledgeRecovery();
   await founder.createInvite({ role: 'write' });
   // the user holding the recovery invite redeems it and becomes an owner; adopting its own renewal works
@@ -314,5 +314,5 @@ test('server cannot make the escrow slot add anything else than one owner invite
   body.version++; body.prev = head.hash; body.signer = escSlot.id;
   body.slots.find((x) => x.kind === 'passphrase').e_pub = I.b64u((await I.generateKeyPair('E')).pub); // escrow swaps the founder's key
   const roster = await I.signRoster(body, await I.importPrivate('S', esc.s.d, esc.s.pub));
-  await assert.rejects(I.verifyRosterChain({ scope: world.scope, vault: created.vaultId, escrowPins: world.pins, docs: [head.body && { body: founder.s.chain[0].body, sig: founder.s.chain[0].sig }, roster], prior: null }), core.IntegrityError);
+  await assert.rejects(I.verifyRosterChain({ scope: world.scope, vault: created.vaultId, escrowPins: world.pins, docs: [head.body && { body: founder.s.chain[0].body, sig: founder.s.chain[0].sig }, roster], prior: null }), core.errors.IntegrityError);
 });

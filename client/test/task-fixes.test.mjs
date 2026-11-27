@@ -40,7 +40,7 @@ test('cancelInvite on an invite that was opened with its token falls back to a r
   await founder.maintain();
   assert.equal(founder.members().find((m) => m.slotId === inv.slotId).used, true);
   // the UI asks for a confirmation first: without the fallback the call reports what is needed
-  const e = await rejects(founder.cancelInvite(inv.slotId, { revoke: false }), core.RequestError, /revocation_required/);
+  const e = await rejects(founder.cancelInvite(inv.slotId, { revoke: false }), core.errors.RequestError, /revocation_required/);
   assert.equal(e.status, 409);
   assert.equal(founder.status().epoch, 1);
   const r = await founder.cancelInvite(inv.slotId);
@@ -73,10 +73,10 @@ test('a redeemed invite is revoked, not cancelled', async () => {
   const inv = await founder.createInvite({ role: 'write' });
   const member = newClient(world);
   await member.redeemInvite({ inviteCode: inv.code.display, passphrase: 'member passphrase one two' });
-  await rejects(founder.cancelInvite(inv.slotId, { revoke: false }), core.RequestError, /revocation_required/);
+  await rejects(founder.cancelInvite(inv.slotId, { revoke: false }), core.errors.RequestError, /revocation_required/);
   const r = await founder.cancelInvite(inv.slotId);
   assert.equal(r.revoked, true);
-  await rejects(member.get('x'), core.AuthError);
+  await rejects(member.get('x'), core.errors.AuthError);
 });
 
 // ---- reads and re-encryption do not depend on the scope's current limit ----
@@ -127,18 +127,18 @@ async function forged(ctx, change) {
 test('the verifier requires the escrow slot to keep its slot ID', async () => {
   const ctx = await setupVault();
   await forged(ctx, () => {}); // an unchanged copy is fine for the verifier (the server refuses no-ops)
-  await rejects(forged(ctx, (body) => { body.slots.find((s) => s.kind === 'escrow').id = I.randomSlotId(); }), core.IntegrityError, /escrow slot must keep its slot ID/);
+  await rejects(forged(ctx, (body) => { body.slots.find((s) => s.kind === 'escrow').id = I.randomSlotId(); }), core.errors.IntegrityError, /escrow slot must keep its slot ID/);
   // a second escrow slot with the old one removed is the same swap
   await rejects(forged(ctx, (body) => {
     const old = body.slots.find((s) => s.kind === 'escrow');
     body.slots = body.slots.filter((s) => s !== old).concat([Object.assign({}, old, { id: I.randomSlotId() })]);
-  }), core.IntegrityError, /escrow slot must keep its slot ID/);
+  }), core.errors.IntegrityError, /escrow slot must keep its slot ID/);
 });
 
 test('the verifier refuses an expiry change of a slot that stays an invite', async () => {
   const ctx = await setupVault();
   const inv = await ctx.founder.createInvite({ role: 'write' });
-  await rejects(forged(ctx, (body) => { body.slots.find((s) => s.id === inv.slotId).expires += 60; }), core.IntegrityError, /expiry cannot change/);
+  await rejects(forged(ctx, (body) => { body.slots.find((s) => s.id === inv.slotId).expires += 60; }), core.errors.IntegrityError, /expiry cannot change/);
 });
 
 // ---- a missing keyring entry is an integrity failure, not a TypeError ----
@@ -154,7 +154,7 @@ test('GET /slots without a keyring entry raises IntegrityError', async () => {
     }
     return res;
   };
-  const e = await rejects(newClient(world, { fetch }).unlock({ accessId: created.accessId, passphrase }), core.IntegrityError, /keyring/);
+  const e = await rejects(newClient(world, { fetch }).unlock({ accessId: created.accessId, passphrase }), core.errors.IntegrityError, /keyring/);
   assert.ok(!(e instanceof TypeError));
 });
 

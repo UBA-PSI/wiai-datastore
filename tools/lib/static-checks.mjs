@@ -178,6 +178,11 @@ function scrub(code, { strings = true } = {}) {
       j = Math.min(j, code.length - 1);
       out += strings ? c + blank(code.slice(i + 1, j)) + code[j] : code.slice(i, j + 1);
       i = j + 1;
+    } else if (c === '/' && d !== '/' && d !== '*' && /(^|[(,=:[!&|?{};]|\breturn|\btypeof)\s*$/.test(out)) {   // a regular expression literal: quotes and slashes inside it are no strings or comments
+      let j = i + 1, cls = false;
+      while (j < code.length && code[j] !== '\n' && (cls || code[j] !== '/')) { if (code[j] === '\\') j++; else if (code[j] === '[') cls = true; else if (code[j] === ']') cls = false; j++; }
+      if (code[j] !== '/') { out += c; i++; continue; }   // no closing slash on this line: not a literal
+      out += strings ? '/' + blank(code.slice(i + 1, j)) + '/' : code.slice(i, j + 1); i = j + 1;
     } else if (c === '/' && d === '/') {
       let j = i; while (j < code.length && code[j] !== '\n') j++;
       out += blank(code.slice(i, j)); i = j;
@@ -252,7 +257,12 @@ export function localDeletes(code) {
 export function usesMigrateLocal(code) { return /\bmigrateLocal\s*\(/.test(maskStrings(code)); }   // comments and strings do not count
 // Every place where the code touches browser storage: [{ name, key }]. name: "indexedDB.open", "localStorage.getItem" and so on, or "indexedDB" /
 // "localStorage" / "objectStore()" where the object is used in another way (an alias such as const ls = localStorage, window["indexedDB"]); key: the literal
-// first argument (a localStorage key, a database name) or null.
+// first argument (a localStorage key, a database name) or null; built: a setItem whose value is made with JSON.stringify or a template.
+function balancedText(masked, plain, from) {
+  let d = 0;
+  for (let k = from; k < masked.length; k++) { if (masked[k] === '(') d++; else if (masked[k] === ')' && --d === 0) return plain.slice(from, k + 1); }
+  return plain.slice(from);
+}
 export function storageAccesses(code) {
   const masked = maskStrings(code), plain = scrub(code, { strings: false });
   const out = [];
@@ -263,7 +273,10 @@ export function storageAccesses(code) {
       const tail = plain.slice(m.index + api.length, m.index + api.length + 160);
       if (/^\s*:/.test(tail) && /[{,]\s*$/.test(masked.slice(Math.max(0, m.index - 40), m.index))) continue;   // an object key (the options of migrateLocal), not a use
       const call = /^\s*\.\s*([A-Za-z]+)\s*\(\s*(?:(['"`])([^'"`\\]*)\2)?/.exec(tail);
-      if (call && ['open', 'deleteDatabase', 'getItem', 'setItem', 'removeItem', 'key', 'clear'].includes(call[1])) out.push({ name: api + '.' + call[1], key: call[3] === undefined ? null : call[3] });
+      if (call && ['open', 'deleteDatabase', 'getItem', 'setItem', 'removeItem', 'key', 'clear'].includes(call[1])) {
+        const open = m.index + api.length + call[0].indexOf('('), arg = call[1] === 'setItem' ? balancedText(masked, plain, open) : '';
+        out.push({ name: api + '.' + call[1], key: call[3] === undefined ? null : call[3], built: /JSON\s*\.\s*stringify|`/.test(arg.replace(/^\(\s*(['"`])[^'"`\\]*\1/, '')) });   // built: a value made with JSON.stringify or a template
+      }
       else out.push({ name: api, key: null });
     }
     const br = new RegExp('\\[\\s*([\'"`])' + api + '\\1\\s*\\]', 'g');   // window["indexedDB"]
@@ -292,9 +305,17 @@ export function migrateNamed(code) {
   return named;
 }
 // The names of the browser-storage accesses of a hand-made migration found in the code (empty: none). named: strings that store.migrateLocal takes over
-// (accesses with such a literal key are not reported).
+// (reading such a key or opening such a database may be mentioned, writing or removing it is a hand-made migration; a key that starts with a named prefix is named).
+// A personal preference chosen from a fixed list may stay in localStorage under the app's own key: getItem is no finding, and setItem is none unless the key is
+// named or the value is built with JSON.stringify or a template (data; typed text is also found by the canary search).
 export function handMigration(code, named = null) {
-  const found = storageAccesses(code).filter((a) => !(named && a.key !== null && named.has(a.key)));
+  const found = storageAccesses(code).filter((a) => {
+    const isNamed = !!named && a.key !== null && [...named].some((n) => n && a.key.startsWith(n));
+    if (a.name === 'localStorage.getItem') return false;
+    if (a.name === 'localStorage.setItem') return isNamed || a.built;
+    if (a.name === 'localStorage.removeItem') return !named || isNamed;
+    return !isNamed || a.name === 'indexedDB.deleteDatabase';
+  });
   return [...new Set(found.map((a) => a.name))];
 }
 // Does the app open modal dialogs of its own? (library dialogs come up above them; the app must close its own in store.onLock)
@@ -475,8 +496,8 @@ export function staticChecks(html, known, { readme = '' } = {}) {
   // Browser storage that the app touches itself: without migrateLocal a hand-made migration; with it, everything the options do not name (the keys and databases
   // that migrateLocal takes over may be mentioned, e.g. for a message; anything else is data in the browser).
   const hand = handMigration(code, migrates ? migrateNamed(code) : null);
-  if (hand.length && migrates) add('hand-storage', 'warn', 'Browser storage next to migrateLocal', 'Besides store.migrateLocal the code uses ' + hand.join(', ') + ', with a key or database that migrateLocal does not name (or none that can be read). An app keeps no data in the browser: everything goes into the vault. If these are old keys of the earlier version, name them in migrateLocal (localStorage: { keys }, indexedDB: { stores }) and remove your own code.');
-  else if (hand.length) add('hand-migration', 'warn', 'Old data taken over by hand', 'The code uses ' + hand.join(', ') + ' and never calls store.migrateLocal. An app keeps no data in the browser. To take over the old data of a local-only version use store.migrateLocal (porting.md): the library copies, checks and deletes safely, and your code is only the mapping.');
+  if (hand.length && migrates) add('hand-storage', 'warn', 'Browser storage next to migrateLocal', 'Besides store.migrateLocal the code uses ' + hand.join(', ') + ', with a key or database that migrateLocal does not name (or none that can be read), or writes a built value (JSON.stringify, a template) or a key that migrateLocal names or covers by a prefix. An app keeps its data in the vault; only a preference chosen from a fixed list (one short string) may stay in localStorage, under a key that no migrateLocal prefix covers. If these are old keys of the earlier version, name them in migrateLocal (localStorage: { keys }, indexedDB: { stores }) and remove your own code.');
+  else if (hand.length) add('hand-migration', 'warn', 'Old data taken over by hand', 'The code uses ' + hand.join(', ') + ' and never calls store.migrateLocal. An app keeps its data in the vault (only a preference chosen from a fixed list may stay in localStorage). To take over the old data of a local-only version use store.migrateLocal (porting.md): the library copies, checks and deletes safely, and your code is only the mapping.');
   if (usesShowModal(code)) add('app-modals', 'info', 'Modal dialogs of the app', 'The app opens modal dialogs with showModal(). Library dialogs open above your own modal dialogs. Close your own dialogs in store.onLock and open none while a store call is pending (the person has to answer the library dialog first; select your own dialogs with dialog:not(.wds-dialog)).');
   if (setsTestGlobal(code)) add('migration-test-global', 'fail', 'The app sets the migration test global', 'The code assigns window.__WDS_MIGRATION_TEST__. The app must never set it: only wds-verify --migration-delete and your own automated test (context.addInitScript in a browser that Playwright drives) do; store.migrateLocal then deletes the old data in the sandbox as well. In a real browser that would delete data whose only copy is in a sandbox vault that is wiped tonight. Remove the assignment; to see the deletion, run wds-verify --target sandbox --migration-delete.');
   if (!PRIVACY.some((s) => flat(html).includes(s) || flat(readme).includes(s))) add('privacy-sentence', 'info', 'Privacy sentence', 'Neither the page nor README.md contains the official sentence. Wherever the app describes its privacy, use it word for word: "' + PRIVACY[0] + '" (German: "' + PRIVACY[1] + '"). For a text in another language use the English sentence.');

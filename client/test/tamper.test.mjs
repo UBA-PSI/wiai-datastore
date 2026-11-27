@@ -18,21 +18,21 @@ test('forged keyring entry: wrong keys under the right ECIES envelope fail the r
   const env = await I.eciesSeal({ recipientPub: pub, plaintext: I.keyringPlaintext([{ e: 1, k: fakeVmk }], fakeNk), aadTail: I.aadKeyring(ctx.world.scope, ctx.created.vaultId, slotId, head.body.version, pub) });
   vault.keyring.set(slotId, I.b64u(env));
   const c = newClient(ctx.world, { storage: core.memoryStorage() });
-  const e = await rejects(c.unlock({ accessId, passphrase: 'member pass one' }), core.IntegrityError);
+  const e = await rejects(c.unlock({ accessId, passphrase: 'member pass one' }), core.errors.IntegrityError);
   assert.equal(e.code, 'keyring_mismatch');
   // right VMK, wrong NK
   const realVmk = ctx.founder.s.vmk.get(1);
   const env2 = await I.eciesSeal({ recipientPub: pub, plaintext: I.keyringPlaintext([{ e: 1, k: realVmk }], fakeNk), aadTail: I.aadKeyring(ctx.world.scope, ctx.created.vaultId, slotId, head.body.version, pub) });
   vault.keyring.set(slotId, I.b64u(env2));
-  const e2 = await rejects(newClient(ctx.world, { storage: core.memoryStorage() }).unlock({ accessId, passphrase: 'member pass one' }), core.IntegrityError);
+  const e2 = await rejects(newClient(ctx.world, { storage: core.memoryStorage() }).unlock({ accessId, passphrase: 'member pass one' }), core.errors.IntegrityError);
   assert.equal(e2.code, 'keyring_mismatch');
   // an entry copied from another slot (the founder's) does not decrypt under this slot's AAD and key
   vault.keyring.set(slotId, vault.keyring.get(ctx.founder.s.slotId));
-  await rejects(newClient(ctx.world, { storage: core.memoryStorage() }).unlock({ accessId, passphrase: 'member pass one' }), core.IntegrityError);
+  await rejects(newClient(ctx.world, { storage: core.memoryStorage() }).unlock({ accessId, passphrase: 'member pass one' }), core.errors.IntegrityError);
   // an entry from an older roster version (replayed) fails the AAD
   const olderEnv = await I.eciesSeal({ recipientPub: pub, plaintext: I.keyringPlaintext([{ e: 1, k: realVmk }], ctx.founder.s.nk), aadTail: I.aadKeyring(ctx.world.scope, ctx.created.vaultId, slotId, head.body.version - 1, pub) });
   vault.keyring.set(slotId, I.b64u(olderEnv));
-  await rejects(newClient(ctx.world, { storage: core.memoryStorage() }).unlock({ accessId, passphrase: 'member pass one' }), core.IntegrityError);
+  await rejects(newClient(ctx.world, { storage: core.memoryStorage() }).unlock({ accessId, passphrase: 'member pass one' }), core.errors.IntegrityError);
 });
 
 test('a keyring entry missing a committed epoch, or listing extra ones, is rejected', async () => {
@@ -44,9 +44,9 @@ test('a keyring entry missing a committed epoch, or listing extra ones, is rejec
   const aad = I.aadKeyring(ctx.world.scope, ctx.created.vaultId, slotId, head.body.version, pub);
   const k = ctx.founder.s.vmk.get(1), nk = ctx.founder.s.nk;
   vault.keyring.set(slotId, I.b64u(await I.eciesSeal({ recipientPub: pub, plaintext: I.keyringPlaintext([{ e: 1, k }, { e: 2, k }], nk), aadTail: aad })));
-  await rejects(newClient(ctx.world, { storage: core.memoryStorage() }).unlock({ accessId, passphrase: 'member pass one' }), core.IntegrityError, /keyring/);
+  await rejects(newClient(ctx.world, { storage: core.memoryStorage() }).unlock({ accessId, passphrase: 'member pass one' }), core.errors.IntegrityError, /keyring/);
   vault.keyring.set(slotId, I.b64u(await I.eciesSeal({ recipientPub: pub, plaintext: I.keyringPlaintext([], nk), aadTail: aad })));
-  await rejects(newClient(ctx.world, { storage: core.memoryStorage() }).unlock({ accessId, passphrase: 'member pass one' }), core.IntegrityError, /keyring/);
+  await rejects(newClient(ctx.world, { storage: core.memoryStorage() }).unlock({ accessId, passphrase: 'member pass one' }), core.errors.IntegrityError, /keyring/);
 });
 
 test('swapped blobs: record A served for B, version 1 served as version 2, tampered bytes', async () => {
@@ -61,16 +61,16 @@ test('swapped blobs: record A served for B, version 1 served as version 2, tampe
   // 1. B's envelope and commitment under A's ID
   const saved = recA.versions.map((v) => Object.assign({}, v));
   recA.versions[1].bytes = recB.versions[0].bytes; recA.versions[1].commit = recB.versions[0].commit;
-  await rejects(reader.get('A'), core.IntegrityError);
+  await rejects(reader.get('A'), core.errors.IntegrityError);
   // 2. A's old version 1 presented as the latest (ETag 2): the version in the AAD does not match
   recA.versions[1].bytes = saved[0].bytes; recA.versions[1].commit = saved[0].commit;
-  await rejects(reader.get('A'), core.IntegrityError);
+  await rejects(reader.get('A'), core.errors.IntegrityError);
   // 3. one flipped bit
   recA.versions[1].bytes = new Uint8Array(saved[1].bytes); recA.versions[1].bytes[recA.versions[1].bytes.length - 3] ^= 1; recA.versions[1].commit = saved[1].commit;
-  await rejects(reader.get('A'), core.IntegrityError);
+  await rejects(reader.get('A'), core.errors.IntegrityError);
   // 4. header tampering (epoch field) is caught by the AAD too
   recA.versions[1].bytes = new Uint8Array(saved[1].bytes); recA.versions[1].bytes[9] = 7;
-  await rejects(reader.get('A'), core.IntegrityError);
+  await rejects(reader.get('A'), core.errors.IntegrityError);
   // restored: fine again
   recA.versions[1].bytes = saved[1].bytes;
   assert.deepEqual(await reader.get('A'), { n: 'a2' });
@@ -78,7 +78,7 @@ test('swapped blobs: record A served for B, version 1 served as version 2, tampe
   recA.versions[1].bytes = recB.versions[0].bytes; recA.versions[1].commit = recB.versions[0].commit;
   const lister = newClient(ctx.world, { storage: core.memoryStorage() });
   await lister.unlock({ accessId: ctx.created.accessId, passphrase: ctx.passphrase });
-  await rejects(lister.list(), core.IntegrityError);
+  await rejects(lister.list(), core.errors.IntegrityError);
 });
 
 test('history commitment: a replaced commitment or a rewritten old version is detected', async () => {
@@ -88,13 +88,13 @@ test('history commitment: a replaced commitment or a rewritten old version is de
   const vault = vaultOf(ctx), rid = await founder._rid('n'), rec = vault.records.get(rid);
   const good = rec.versions[0].commit;
   rec.versions[0].commit = I.b64u(seq(32, 9));
-  await rejects(founder.getVersion('n', 1), core.IntegrityError, /commitment/);
+  await rejects(founder.getVersion('n', 1), core.errors.IntegrityError, /commitment/);
   rec.versions[0].commit = good;
   assert.deepEqual((await founder.getVersion('n', 1)).value, { v: 1 });
   // a (colluding) write member rewrites version 1 under the same ID and version with other content, keeping the commitment
   const forged = I.buildRecordPlaintext('n', 'json', I.utf8(JSON.stringify({ v: 'evil' })), undefined, Date.now());
   rec.versions[0].bytes = await I.sealRecord({ kEncRaw: await I.hkdf(founder.s.vmk.get(1), new Uint8Array(0), 'wds1/record-enc'), epoch: 1, scope: ctx.world.scope, vault: ctx.created.vaultId, rid, version: 1, plaintext: forged.plaintext });
-  await rejects(founder.getVersion('n', 1), core.IntegrityError, /commitment/);
+  await rejects(founder.getVersion('n', 1), core.errors.IntegrityError, /commitment/);
 });
 
 test('rekey refuses to re-encrypt a version whose content no longer matches its commitment', async () => {
@@ -109,7 +109,7 @@ test('rekey refuses to re-encrypt a version whose content no longer matches its 
   const fb = await I.sealRecord({ kEncRaw: await I.hkdf(founder.s.vmk.get(1), new Uint8Array(0), 'wds1/record-enc'), epoch: 1, scope: ctx.world.scope, vault: ctx.created.vaultId, rid, version: 1, plaintext: forged.plaintext });
   assert.ok(fb.length <= old.length + 32);
   rec.versions[0].bytes = fb;
-  const e = await rejects(founder.revoke([member.s.slotId]), core.IntegrityError);
+  const e = await rejects(founder.revoke([member.s.slotId]), core.errors.IntegrityError);
   assert.equal(e.code, 'commit_mismatch');
   // the old epoch was not dropped
   assert.ok(founder.s.head.body.commit.epochs.length === 2);
@@ -124,7 +124,7 @@ test('a record whose header names another record is rejected', async () => {
   const key = await I.hkdf(founder.s.vmk.get(1), new Uint8Array(0), 'wds1/record-enc');
   rec.versions[0].bytes = await I.sealRecord({ kEncRaw: key, epoch: 1, scope: ctx.world.scope, vault: ctx.created.vaultId, rid, version: 1, plaintext: forged.plaintext });
   rec.versions[0].commit = await I.commitment(founder.s.keys.kCommit, rid, 1, forged.plaintext);
-  await rejects(founder.get('real'), core.IntegrityError, /name/);
+  await rejects(founder.get('real'), core.errors.IntegrityError, /name/);
 });
 
 test('rolled-back roster: an older head is refused on a device that has seen the newer one', async () => {
@@ -137,7 +137,7 @@ test('rolled-back roster: an older head is refused on a device that has seen the
   assert.equal((await c0.unlock({ accessId: created.accessId, passphrase })).rosterVersion, 2);
   // the server drops version 2 and serves the old keyring
   const v2 = vault.rosters.pop(); vault.keyring = keyringV1; vault.keyringVersion = 1;
-  const e = await rejects(newClient(world, { storage: world.storage }).unlock({ accessId: created.accessId, passphrase }), core.IntegrityError);
+  const e = await rejects(newClient(world, { storage: world.storage }).unlock({ accessId: created.accessId, passphrase }), core.errors.IntegrityError);
   assert.equal(e.code, 'rollback');
   // with a fresh device the same rollback is invisible (documented limitation, PLAN.md section 5.5)
   const fresh = newClient(world, { storage: core.memoryStorage() });
@@ -155,7 +155,7 @@ test('rolled-back roster, part 2: live session and forks', async () => {
   assert.equal(founder.status().rosterVersion, 2);
   // live session: the server pretends the head is version 1 again
   vault.rosters.pop(); vault.keyring = keyringV1; vault.keyringVersion = 1;
-  const e = await rejects(founder._syncHead(), core.IntegrityError);
+  const e = await rejects(founder._syncHead(), core.errors.IntegrityError);
   assert.equal(e.code, 'rollback');
   // fork: the server shows a different version 2 (also signed by the founder, who could be tricked or compromised)
   const body = JSON.parse(JSON.stringify(v2.body)); body.time += 5;
@@ -163,7 +163,7 @@ test('rolled-back roster, part 2: live session and forks', async () => {
   const forked = await I.signRoster(body, sPriv);
   vault.rosters.push({ body: forked.body, sig: forked.sig, hash: await I.rosterHash(forked.body) });
   vault.keyring = keyringV2; vault.keyringVersion = 2;
-  const e2 = await rejects(newClient(world, { storage: world.storage }).unlock({ accessId: created.accessId, passphrase }), core.IntegrityError);
+  const e2 = await rejects(newClient(world, { storage: world.storage }).unlock({ accessId: created.accessId, passphrase }), core.errors.IntegrityError);
   assert.equal(e2.code, 'rollback');
   // on a new device (no pinned state) nothing can be detected: documented limitation, and visible as stateStatus 'new'
   const fresh = newClient(world, { storage: core.memoryStorage() });
@@ -180,13 +180,13 @@ test('record rollback: an older version served after a newer one was seen', asyn
   await c.unlock({ accessId: ctx.created.accessId, passphrase: ctx.passphrase });
   assert.equal(await c.get('x'), 2);
   rec.versions.pop(); // the server serves version 1 as the latest again (valid ciphertext, correct AAD for version 1)
-  const e = await rejects(c.get('x'), core.IntegrityError);
+  const e = await rejects(c.get('x'), core.errors.IntegrityError);
   assert.equal(e.code, 'rollback');
-  await rejects(c.list(), core.IntegrityError);
+  await rejects(c.list(), core.errors.IntegrityError);
   // also after a restart of the app (state persisted)
   const c2 = newClient(ctx.world, { storage: ctx.world.storage });
   await c2.unlock({ accessId: ctx.created.accessId, passphrase: ctx.passphrase });
-  await rejects(c2.get('x'), core.IntegrityError);
+  await rejects(c2.get('x'), core.errors.IntegrityError);
 });
 
 test('wrong salt or weaker parameters from the server', async () => {
@@ -196,25 +196,25 @@ test('wrong salt or weaker parameters from the server', async () => {
   // weaker parameters: refused before any Argon2 run
   for (const bad of [{ m: 1024 }, { t: 1 }, { m: 1073741824 }, { p: 2 }, { v: 16 }]) {
     slot.kdf = Object.assign({}, real, bad);
-    const e = await rejects(newClient(world).unlock({ accessId: created.accessId, passphrase }), core.IntegrityError);
+    const e = await rejects(newClient(world).unlock({ accessId: created.accessId, passphrase }), core.errors.IntegrityError);
     assert.equal(e.code, 'weak_kdf', JSON.stringify(bad));
   }
   slot.kdf = Object.assign({}, real, { salt: I.b64u(seq(8, 0)) });
-  await rejects(newClient(world).unlock({ accessId: created.accessId, passphrase }), core.IntegrityError);
+  await rejects(newClient(world).unlock({ accessId: created.accessId, passphrase }), core.errors.IntegrityError);
   slot.kdf = Object.assign({}, real, { extra: 1 });
-  await rejects(newClient(world).unlock({ accessId: created.accessId, passphrase }), core.IntegrityError);
+  await rejects(newClient(world).unlock({ accessId: created.accessId, passphrase }), core.errors.IntegrityError);
   // a different salt that the server also accepts the token for (it cannot know the passphrase here, so the test plays it):
   // the stored blob was wrapped under the original salt/KEK and its AAD names the original descriptor
   const other = Object.assign({}, real, { salt: I.b64u(seq(16, 77)) });
   const kek = await (await import('./helpers.mjs')).fastArgon2({ password: I.utf8(passphrase), salt: seq(16, 77), parallelism: 1, iterations: 3, memorySize: 65536, hashLength: 32 });
   slot.kdf = other; slot.tokenHash = I.b64u((await I.deriveSlotKeys(kek)).tokenHash);
-  const e = await rejects(newClient(world).unlock({ accessId: created.accessId, passphrase }), core.IntegrityError);
+  const e = await rejects(newClient(world).unlock({ accessId: created.accessId, passphrase }), core.errors.IntegrityError);
   assert.equal(e.code, 'decrypt_failed');
   // the slot response disagreeing with the kdf endpoint
   slot.kdf = real; slot.tokenHash = I.b64u((await I.deriveSlotKeys(await (await import('./helpers.mjs')).fastArgon2({ password: I.utf8(passphrase), salt: I.b64uDecode(real.salt), parallelism: 1, iterations: 3, memorySize: 65536, hashLength: 32 }))).tokenHash);
   const orig = world.server.getKdf.bind(world.server);
   world.server.getKdf = (id) => { const r = orig(id); return { json: { kind: r.json.kind, kdf: Object.assign({}, r.json.kdf, { salt: I.b64u(seq(16, 3)) }) } }; };
-  await rejects(newClient(world).unlock({ accessId: created.accessId, passphrase }), core.AuthError); // token differs: server answers 401
+  await rejects(newClient(world).unlock({ accessId: created.accessId, passphrase }), core.errors.AuthError); // token differs: server answers 401
   world.server.getKdf = orig;
   await newClient(world).unlock({ accessId: created.accessId, passphrase });
 });
@@ -222,23 +222,23 @@ test('wrong salt or weaker parameters from the server', async () => {
 test('a server that offers weak KDF parameters in scope info cannot make us create a vault with them', async () => {
   const world = await makeWorld();
   world.server.getScope = ((orig) => (id) => { const r = orig(id); r.json.kdf = { alg: 'argon2id', m: 4096, p: 1, t: 1, v: 19 }; return r; })(world.server.getScope.bind(world.server));
-  await rejects(newClient(world).createVault({ passphrase: 'a perfectly fine passphrase' }), core.IntegrityError, /window|KDF/);
+  await rejects(newClient(world).createVault({ passphrase: 'a perfectly fine passphrase' }), core.errors.IntegrityError, /window|KDF/);
 });
 
 test('escrow keys that are not pinned are refused at vault creation and in rosters', async () => {
   const world = await makeWorld();
   const c = newClient(world, { escrowPins: ['0'.repeat(43)] });
-  const e = await rejects(c.createVault({ passphrase: 'a perfectly fine passphrase' }), core.IntegrityError);
+  const e = await rejects(c.createVault({ passphrase: 'a perfectly fine passphrase' }), core.errors.IntegrityError);
   assert.equal(e.code, 'escrow_not_pinned');
   // a server that sends a made-up ID for real keys
   world.server.escrow.current.id = 'x'.repeat(43);
-  await rejects(newClient(world).createVault({ passphrase: 'a perfectly fine passphrase' }), core.IntegrityError);
+  await rejects(newClient(world).createVault({ passphrase: 'a perfectly fine passphrase' }), core.errors.IntegrityError);
   world.server.escrow.current.id = world.pins[0];
   // a vault created with escrow keys the library does not pin is not trusted later either
   const ok = await newClient(world).createVault({ passphrase: 'a perfectly fine passphrase' });
-  await rejects(newClient(world, { escrowPins: [world.pins[1]] }).unlock({ accessId: ok.accessId, passphrase: 'a perfectly fine passphrase' }), core.IntegrityError, /pinned/);
+  await rejects(newClient(world, { escrowPins: [world.pins[1]] }).unlock({ accessId: ok.accessId, passphrase: 'a perfectly fine passphrase' }), core.errors.IntegrityError, /pinned/);
   // no pins at all
-  await rejects(newClient(world, { escrowPins: [] }).createVault({ passphrase: 'a perfectly fine passphrase' }), core.WDSError, /pinned/);
+  await rejects(newClient(world, { escrowPins: [] }).createVault({ passphrase: 'a perfectly fine passphrase' }), core.errors.WDSError, /pinned/);
 });
 
 test('forged rosters: bad signature, non-owner signer, broken chain, wrong vault, unknown format', async () => {
@@ -251,38 +251,38 @@ test('forged rosters: bad signature, non-owner signer, broken chain, wrong vault
   assert.equal((await verify(docs)).length, 2);
   // flipped signature bit
   const sig = I.b64uDecode(docs[1].sig); sig[10] ^= 1;
-  await rejects(verify([docs[0], { body: docs[1].body, sig: I.b64u(sig) }]), core.IntegrityError, /signature/);
+  await rejects(verify([docs[0], { body: docs[1].body, sig: I.b64u(sig) }]), core.errors.IntegrityError, /signature/);
   // signed by the invited member (not an owner in the previous version)
   const body = JSON.parse(JSON.stringify(docs[1].body)), member = body.slots.find((s) => s.kind === 'invite');
   body.signer = member.id;
-  await rejects(verify([docs[0], { body, sig: docs[1].sig }]), core.IntegrityError, /owner/);
+  await rejects(verify([docs[0], { body, sig: docs[1].sig }]), core.errors.IntegrityError, /owner/);
   // skipping a version
   const skip = JSON.parse(JSON.stringify(docs[1].body)); skip.version = 3;
-  await rejects(verify([docs[0], { body: skip, sig: docs[1].sig }]), core.IntegrityError);
+  await rejects(verify([docs[0], { body: skip, sig: docs[1].sig }]), core.errors.IntegrityError);
   // wrong prev
   const wp = JSON.parse(JSON.stringify(docs[1].body)); wp.prev = I.b64u(seq(32, 1));
-  await rejects(verify([docs[0], { body: wp, sig: docs[1].sig }]), core.IntegrityError, /prev/);
+  await rejects(verify([docs[0], { body: wp, sig: docs[1].sig }]), core.errors.IntegrityError, /prev/);
   // a different vault ID (signature cannot match the vault ID derived from the founder key)
-  await rejects(verify(docs, { vault: 'ZZZZZZZZZZZZZZZZZZZZZZZZZZ' }), core.IntegrityError);
+  await rejects(verify(docs, { vault: 'ZZZZZZZZZZZZZZZZZZZZZZZZZZ' }), core.errors.IntegrityError);
   // first version must be 1
-  await rejects(verify([docs[1]]), core.IntegrityError);
+  await rejects(verify([docs[1]]), core.errors.IntegrityError);
   // attacker-created chain for the same vault ID but with attacker keys
   const atk = await I.generateKeyPair('S'), atkE = await I.generateKeyPair('E');
   const forged = JSON.parse(JSON.stringify(docs[0].body)); const fs = forged.slots.find((s) => s.kind === 'passphrase');
   fs.s_pub = I.b64u(atk.pub); fs.e_pub = I.b64u(atkE.pub);
   const fr = await I.signRoster(forged, await I.importPrivate('S', atk.d, atk.pub));
-  await rejects(verify([fr]), core.IntegrityError, /vault ID/);
+  await rejects(verify([fr]), core.errors.IntegrityError, /vault ID/);
   // unknown format versions are VersionErrors, not generic failures
   const v2 = JSON.parse(JSON.stringify(docs[0].body)); v2.v = 2;
-  await rejects(verify([{ body: v2, sig: docs[0].sig }]), core.VersionError);
+  await rejects(verify([{ body: v2, sig: docs[0].sig }]), core.errors.VersionError);
 });
 
 test('format versions: slot blob and keyring entry with v other than 1 raise VersionError', async () => {
   const kWrap = seq(32, 3), scope = 'notenrechner-k7m2a9', vault = 'A'.repeat(26), accessId = '000G40R40M30E209185Z';
   const pt = I.cjsonBytes({ keys: [], slot: 'AAAAAAAAAAAAAAAA', v: 2, vault });
   const env = await I.sealEnvelope(await I.aesKey(kWrap), 2, 0, pt, I.aadSlot(scope, vault, accessId, { alg: 'invite' }));
-  await rejects(I.unwrapSlot({ kWrapRaw: kWrap, scope, vault, accessId, kdf: { alg: 'invite' }, envelope: env }), core.VersionError);
-  assert.throws(() => I.parseKeyringPlaintext(I.cjsonBytes({ epochs: [], nk: I.b64u(seq(32, 0)), v: 2 })), core.VersionError);
+  await rejects(I.unwrapSlot({ kWrapRaw: kWrap, scope, vault, accessId, kdf: { alg: 'invite' }, envelope: env }), core.errors.VersionError);
+  assert.throws(() => I.parseKeyringPlaintext(I.cjsonBytes({ epochs: [], nk: I.b64u(seq(32, 0)), v: 2 })), core.errors.VersionError);
 });
 
 test('the server cannot swap in another vault: scope and vault IDs are bound everywhere', async () => {
@@ -291,5 +291,5 @@ test('the server cannot swap in another vault: scope and vault IDs are bound eve
   // b's server data is shown to a client of a: different scope/vault in AAD and roster
   const slotA = vaultOf(a).slots.get(a.founder.s.slotId), slotB = vaultOf(b).slots.get(b.founder.s.slotId);
   slotA.wrapped = slotB.wrapped; // blob of another vault/access ID
-  await rejects(newClient(a.world).unlock({ accessId: a.created.accessId, passphrase: a.passphrase }), core.IntegrityError);
+  await rejects(newClient(a.world).unlock({ accessId: a.created.accessId, passphrase: a.passphrase }), core.errors.IntegrityError);
 });

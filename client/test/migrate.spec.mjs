@@ -1,6 +1,6 @@
 // store.migrateLocal against the REAL server and the REAL bundle, in Chromium, Firefox and WebKit (playwright.integration.config.mjs).
 // Every case seeds an "old" browser storage (IndexedDB + localStorage) from the same http://127.0.0.1 page that then runs the new code: the old app and the
-// new app are the same URL, as they must be in a real browser. (WebKit keeps no IndexedDB for file:// pages, so the pages are served over http.) Contract: design B of round F (api in the header comment of src/wds-ui.js).
+// new app are the same URL, as they must be in a real browser. (WebKit keeps no IndexedDB for file:// pages, so the pages are served over http.) Contract: the header comment of src/wds-ui.js.
 import { test as base, expect } from '@playwright/test';
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join, basename } from 'node:path';
@@ -90,14 +90,12 @@ window.setupApp = function () {
   window.pdfCol = store.collection('pdfs/');
   window.MIGRATION = {
     id: 'literatur',
-    indexedDB: { name: 'literatur', stores: ['refs', 'pdfs'] },
-    localStorage: { keys: ['literaturliste.einstellungen'] },
+    indexedDB: { name: 'literatur', stores: ['refs', 'pdfs'] },   // the preferences key stays in localStorage and is not named
     map(old, h) {
       const owner = new Map();
       for (const row of old.rows('refs')) if (row.value && row.value.pdfId != null) owner.set(JSON.stringify(row.value.pdfId), h.id(row.key));
       const items = old.rows('refs').map((row) => {
         const v = row.value;
-        if (!v || typeof v.title !== 'string') h.fail(row, 'not an entry with a title');
         const { id, ...rest } = v;
         const pdfId = h.ref('pdfs', v.pdfId, '.pdf');
         return { col: refCol, id: h.id(row.key), value: { ...rest, pdfId, pdfName: pdfId ? v.pdfName || null : null }, created: h.created(v.created), from: row };
@@ -106,8 +104,7 @@ window.setupApp = function () {
         const ref = owner.get(JSON.stringify(row.key));
         items.push({ col: pdfCol, id: h.id(row.key, '.pdf'), value: h.blob(row.value), meta: { name: String(row.value.name || 'dokument.pdf').slice(0, 200), ...(ref ? { ref } : {}) }, from: row });
       }
-      const prefs = old.json('literaturliste.einstellungen') || {};
-      return { items, settings: { record: 'settings', value: { theme: prefs.theme, sort: prefs.sort, statsOpen: prefs.statsOpen, filter: prefs.filter }, from: 'literaturliste.einstellungen' } };
+      return { items };
     },
   };
 };
@@ -186,7 +183,7 @@ const seed = async (page, spec) => { if (spec.idb) await needIdb(page, JSON.stri
 const start = (page) => page.evaluate(() => { window.migP = store.migrateLocal(window.MIGRATION).then((r) => r, (e) => ({ rejected: e.name + ': ' + e.message })); });
 const finish = (page) => page.evaluate(() => window.migP);
 
-// The old Literaturliste: 3 references (numeric autoIncrement ids 1..3), ref 1 with the pdf 1, ref 2 points to a pdf that does not exist, ref 3 has none; 1 pdf; settings.
+// The old Literaturliste: 3 references (numeric autoIncrement ids 1..3), ref 1 with the pdf 1, ref 2 points to a pdf that does not exist, ref 3 has none; 1 pdf; preferences in localStorage.
 const PDF1 = { __blob: 'PDF-1.4 old pdf one %%EOF', type: 'application/pdf', name: 'eins.pdf' };
 const OLD = {
   idb: [{ name: 'literatur', stores: [
@@ -207,11 +204,11 @@ async function vaultState(page) {
     await refCol.load(); await pdfCol.load();
     const refs = await refCol.getAll(), pdfs = [];
     for (const e of pdfCol.items()) { const b = await store.getBlob(e.name); pdfs.push({ id: e.id, meta: e.meta, size: b.size, type: b.type, text: await b.text() }); }
-    return { tag, refs: refs.map((r) => ({ id: r.id, meta: r.meta, value: r.value })), pdfs, settings: await store.get('settings'), records: (await store.list()).map((r) => r.name) };
+    return { tag, refs: refs.map((r) => ({ id: r.id, meta: r.meta, value: r.value })), pdfs, records: (await store.list()).map((r) => r.name) };
   });
 }
 
-test('owner: the old data is copied, checked and deleted; references in both directions, a dead reference becomes null, the settings arrive', async ({ browser, stack }) => {
+test('owner: the old data is copied, checked and deleted; references in both directions, a dead reference becomes null, the preferences key stays', async ({ browser, stack }) => {
   const ctx = await newCtx(browser);
   const url = appUrl(stack);
   const page = await openApp(ctx, url, stack);
@@ -226,7 +223,7 @@ test('owner: the old data is copied, checked and deleted; references in both dir
   expect((await dl).suggestedFilename()).toMatch(/^literatur-old-data-\d{4}-\d{2}-\d{2}\.zip$/);
   await wds(page, 'migrate-yes').click();
   const res = await finish(page);
-  expect(res).toEqual({ status: 'migrated', deleted: 'deleted', copied: 4, total: 4, sandbox: false });
+  expect(res).toEqual({ status: 'migrated', deleted: 'deleted' });
   const st = await vaultState(page);
   expect(st.refs).toHaveLength(3);
   const byTitle = Object.fromEntries(st.refs.map((r) => [r.value.title, r]));
@@ -238,18 +235,17 @@ test('owner: the old data is copied, checked and deleted; references in both dir
   expect(byTitle.Gamma.value.pdfId).toBeNull();
   expect(byTitle.Alpha.meta).toEqual({ title: 'Alpha' });
   expect(st.pdfs).toEqual([{ id: st.tag + '-j1.pdf', meta: { name: 'eins.pdf', ref: st.tag + '-j1' }, size: 25, type: 'application/pdf', text: 'PDF-1.4 old pdf one %%EOF' }]);
-  expect(st.settings).toEqual({ theme: 'dark', sort: 'year', statsOpen: true, filter: '' });
   expect(st.records).not.toContain('.wds/migration/literatur/' + st.tag);   // the marker is hidden from list()
   const old = await page.evaluate(() => window.oldState('literatur', ['refs', 'pdfs']));
   expect(old.stores).toEqual({ refs: 0, pdfs: 0 });
-  expect(old.local).toEqual({ 'other.app.key': 'keep me' });
+  expect(old.local).toEqual(OLD.local);   // personal preferences are not named in migrateLocal: never read, copied or deleted
   await expect(dlgView(page)).toHaveCount(0);
   await expect(page.locator('[data-wds-toast=migration]')).toContainText('4 entries are now in your vault');
   // a later start finds nothing
   const page2 = await openApp(ctx, url, stack);
   await unlock(page2, accessId);
   await start(page2);
-  expect(await finish(page2)).toEqual({ status: 'nothing', sandbox: false });
+  expect(await finish(page2)).toEqual({ status: 'nothing' });
   expect(page.problems).toEqual([]);
 });
 
@@ -283,14 +279,13 @@ test('a member is not asked: status skipped with a notice and a backup action, o
   await page.evaluate(() => window.unlockP);
   await seed(page, OLD);
   await start(page);
-  expect(await finish(page)).toEqual({ status: 'skipped', why: 'not-owner', sandbox: false });
+  expect(await finish(page)).toEqual({ status: 'skipped', why: 'not-owner' });
   await expect(dlgView(page)).toHaveCount(0);
   await expect(page.locator('[data-wds-toast=migration]')).toContainText('only be taken over into a vault of your own');
   const dl = page.waitForEvent('download');
   await page.locator('[data-wds-toast=migration] [data-wds=toast-action]').click();
   expect((await dl).suggestedFilename()).toMatch(/\.zip$/);
   await page.locator('[data-wds-toast=migration] [data-wds=toast-dismiss]').click();
-  expect(await page.evaluate(() => localStorage.getItem('wds:migrate:literatur:member'))).toBe('dismissed');   // the person ended the notice: no sticky notice at the next start
   await start(page);
   expect((await finish(page)).status).toBe('skipped');
   await expect(page.locator('[data-wds-toast=migration]')).toHaveCount(0);   // not shown again in this page
@@ -303,7 +298,7 @@ test('nothing to take over: no dialog, no unlock, no request', async ({ browser,
   const requests = [];
   page.on('request', (r) => { if (r.url().includes('/datastore/api/')) requests.push(r.url()); });
   await start(page);
-  expect(await finish(page)).toEqual({ status: 'nothing', sandbox: false });
+  expect(await finish(page)).toEqual({ status: 'nothing' });
   await expect(page.locator('dialog.wds-dialog')).toHaveCount(0);
   expect(requests).toEqual([]);
   expect(await page.evaluate(() => store.status().unlocked)).toBe(false);
@@ -314,7 +309,7 @@ test('declined (Not now, Escape, close) writes nothing and asks again at the nex
   await start(o.page);
   await expect(dlgView(o.page)).toHaveAttribute('data-wds-view', 'migrate');
   await wds(o.page, 'migrate-no').click();
-  expect(await finish(o.page)).toEqual({ status: 'declined', sandbox: false });
+  expect(await finish(o.page)).toEqual({ status: 'declined' });
   expect(await o.page.evaluate(() => store.list())).toEqual([]);
   expect((await oldCount(o.page)).stores).toEqual({ refs: 3, pdfs: 1 });
   await start(o.page);                                     // Escape
@@ -334,7 +329,7 @@ test('sandbox: copies and keeps the old data; later starts ask nothing, show not
   await start(o.page);
   await expect(dlgView(o.page)).toContainText('Sandbox: the old data stays in this browser');
   await wds(o.page, 'migrate-yes').click();
-  expect(await finish(o.page)).toEqual({ status: 'migrated', deleted: 'kept', copied: 4, total: 4, sandbox: true });
+  expect(await finish(o.page)).toEqual({ status: 'migrated', deleted: 'kept' });
   await expect(o.page.locator('[data-wds-toast=migration]')).toContainText('Sandbox: the old data stays in this browser');
   expect((await oldCount(o.page)).stores).toEqual({ refs: 3, pdfs: 1 });
   // the person works with the new app: edits one entry and its settings, deletes another
@@ -350,7 +345,7 @@ test('sandbox: copies and keeps the old data; later starts ask nothing, show not
   for (let i = 0; i < 3; i++) {
     const p = await reopen(o);
     await start(p);
-    expect(await finish(p)).toEqual({ status: 'migrated', again: true, deleted: 'kept', copied: 0, total: 4, sandbox: true });
+    expect(await finish(p)).toEqual({ status: 'migrated', deleted: 'kept' });
     await expect(p.locator('dialog.wds-dialog')).toHaveCount(0);
     await expect(p.locator('[data-wds-toast=migration]')).toHaveCount(0);
     const now = await p.evaluate(async () => { await refCol.load(); return { titles: refCol.items().map((e) => e.meta.title).sort(), settings: await store.get('settings') }; });
@@ -364,7 +359,7 @@ test('sandbox: copies and keeps the old data; later starts ask nothing, show not
 test('sandbox with the test global in an automated browser deletes (the way wds-verify checks the delete); without webdriver the global is ignored', async ({ browser, stack }) => {
   const o = await ownerWithOld(browser, stack, stack.sandbox, null, { migrationTest: true });
   expect(await o.page.evaluate(() => navigator.webdriver)).toBe(true);
-  expect(await run(o.page)).toEqual({ status: 'migrated', deleted: 'deleted', copied: 4, total: 4, sandbox: true });
+  expect(await run(o.page)).toEqual({ status: 'migrated', deleted: 'deleted' });
   expect((await oldCount(o.page)).stores).toEqual({ refs: 0, pdfs: 0 });
   const p = await newCtx(browser, { migrationTest: true, webdriver: false });
   const url = appUrl(stack), page = await openApp(p, url, stack.sandbox);
@@ -382,7 +377,7 @@ test('crash between copy and delete: the next start deletes without asking and w
   const p = await reopen(o);
   await p.evaluate(() => { window.__WDS_MIGRATION_TEST__ = true; });   // now the sandbox rule is lifted (automated browser)
   await start(p);
-  expect(await finish(p)).toEqual({ status: 'migrated', again: true, deleted: 'deleted', copied: 0, total: 4, sandbox: true });
+  expect(await finish(p)).toEqual({ status: 'migrated', deleted: 'deleted' });
   await expect(p.locator('dialog.wds-dialog')).toHaveCount(0);
   await expect(p.locator('[data-wds-toast=migration]')).toContainText('already copied');
   expect((await oldCount(p)).stores).toEqual({ refs: 0, pdfs: 0 });
@@ -403,33 +398,27 @@ test('an interrupted run (connection lost after two writes) continues: what was 
   const second = await run(p);
   expect(second.status).toBe('migrated');
   expect(second.deleted).toBe('deleted');
-  expect(second.copied).toBe(2);
-  expect(second.total).toBe(4);
   const st = await vaultState(p);
   expect(st.refs).toHaveLength(3);
   expect(st.pdfs).toHaveLength(1);
 });
 
-test('the connection is lost between the copy and the settings: the next start applies the settings once', async ({ browser, stack }) => {
+test('a shared record that the vault holds with other content: the old value is written as "<name>~<tag>-<hash>", listed in result.copies and kept in the export', async ({ browser, stack }) => {
   const o = await ownerWithOld(browser, stack);
-  let puts = 0;
-  await o.page.route(/\/records\//, (route) => { if (route.request().method() === 'PUT' && ++puts > 4) return route.abort('failed'); return route.continue(); });
-  await start(o.page); await yes(o.page);
-  expect((await finish(o.page)).status).toBe('failed');
-  await o.page.close();
-  const p = await reopen(o);
-  expect(await p.evaluate(() => store.get('settings'))).toBeUndefined();
-  const res = await run(p);
-  expect(res).toMatchObject({ status: 'migrated', deleted: 'deleted', copied: 0, total: 4 });
-  expect(await p.evaluate(() => store.get('settings'))).toEqual({ theme: 'dark', sort: 'year', statsOpen: true, filter: '' });
-});
-
-test('settings fill gaps only: what the app already wrote (also null) stays', async ({ browser, stack }) => {
-  const o = await ownerWithOld(browser, stack);
-  await o.page.evaluate(() => store.set('settings', { theme: 'light', sort: null }));   // the app wrote its defaults before the migration
+  await o.page.evaluate(() => {
+    const baseMap = window.MIGRATION.map;
+    window.MIGRATION = { ...window.MIGRATION, localStorage: { keys: ['literaturliste.einstellungen'] }, map(old, h) {
+      return { items: baseMap(old, h).items, records: [{ name: 'units', value: { unit: old.json('literaturliste.einstellungen').sort }, from: 'literaturliste.einstellungen' }] };
+    } };
+  });
+  await o.page.evaluate(() => store.set('units', { unit: 'cm' }));   // the app wrote the record before the person agreed
   const res = await run(o.page);
-  expect(res.status).toBe('migrated');
-  expect(await o.page.evaluate(() => store.get('settings'))).toEqual({ theme: 'light', sort: null, statsOpen: true, filter: '' });
+  const tag = await o.page.evaluate(() => localStorage.getItem('wds:migrate:literatur:tag'));
+  expect(res).toEqual({ status: 'migrated', deleted: 'deleted', copies: [expect.stringMatching(new RegExp('^units~' + tag + '-[0-9a-f]{6}$'))] });
+  expect(await o.page.evaluate(() => store.get('units'))).toEqual({ unit: 'cm' });            // nothing is overwritten
+  expect(await o.page.evaluate((n) => store.get(n), res.copies[0])).toEqual({ unit: 'year' });   // the old value is kept next to it, and the app can learn its name
+  await expect(o.page.locator('[data-wds-toast=migration]')).toContainText('Entries that already existed in your vault with other content: 1');
+  expect((await oldCount(o.page)).local).toEqual({ 'other.app.key': 'keep me' });
 });
 
 test('old data changed while the question was open: nothing is deleted ("changed"); the next start copies the rest', async ({ browser, stack }) => {
@@ -439,12 +428,12 @@ test('old data changed while the question was open: nothing is deleted ("changed
   await o.page.evaluate(() => window.mutateOld('literatur', 'refs', (os) => os.add({ title: 'Delta', authors: 'D. Author', year: 2004, created: '2024-03-04T10:00:00.000Z' })));
   await wds(o.page, 'migrate-yes').click();
   const first = await finish(o.page);
-  expect(first).toEqual({ status: 'migrated', deleted: 'changed', copied: 4, total: 4, sandbox: false });
+  expect(first).toEqual({ status: 'migrated', deleted: 'changed' });
   await expect(o.page.locator('[data-wds-toast=migration]')).toContainText('used again in the meantime');
   expect((await oldCount(o.page)).stores).toEqual({ refs: 4, pdfs: 1 });
   const p = await reopen(o);
   const second = await run(p);
-  expect(second).toEqual({ status: 'migrated', deleted: 'deleted', copied: 1, total: 5, sandbox: false });
+  expect(second).toEqual({ status: 'migrated', deleted: 'deleted' });
   expect((await vaultState(p)).refs.map((r) => r.value.title).sort()).toEqual(['Alpha', 'Beta', 'Delta', 'Gamma']);
   expect((await oldCount(p)).stores).toEqual({ refs: 0, pdfs: 0 });
 });
@@ -456,7 +445,8 @@ test('a file replaced by one of the same size with other bytes while the questio
   await o.page.evaluate(() => window.mutateOld('literatur', 'pdfs', (os) => os.put({ name: 'eins.pdf', blob: new File([new TextEncoder().encode('PDF-1.4 NEW pdf one ##EOF')], 'eins.pdf', { type: 'application/pdf' }) }, 1)));
   await wds(o.page, 'migrate-yes').click();
   const res = await finish(o.page);
-  expect(['changed', 'kept']).toContain(res.deleted);   // Firefox cannot read the replaced file any more and stops ("failed"): safe as well
+  if (res.status === 'migrated') expect(['changed', 'kept']).toContain(res.deleted);
+  else expect(res.status).toBe('failed');   // Firefox cannot read the replaced file any more and stops: safe as well
   const rows = await o.page.evaluate(() => window.rawStore('literatur', 'pdfs').then((r) => r[0].value.blob.text()));
   expect(rows).toBe('PDF-1.4 NEW pdf one ##EOF');
 });
@@ -471,41 +461,48 @@ async function differsSetup(browser, stack) {
   expect((await finish(o.page)).deleted).toBe('changed');
   const p = await reopen(o);
   await start(p);
-  await yes(p);
-  await expect(dlgView(p)).toHaveAttribute('data-wds-view', 'migrate-differs');
-  await expect(dlgView(p)).toContainText('1 entries already exist');
-  return { o, p };
+  return { o, p, tag: await p.evaluate(() => localStorage.getItem('wds:migrate:literatur:tag')) };
 }
-test('an entry that differs from the vault: keep the vault version settles it and the old data is deleted', async ({ browser, stack }) => {
+const copyId = (tag) => new RegExp('^refs/' + tag + '-j1~' + tag + '-[0-9a-f]{6}$');
+test('an entry that differs from the vault is written next to it as "<id>~<tag>-<hash>" without a question; it counts as copied and the old data is deleted', async ({ browser, stack }) => {
   const { p } = await differsSetup(browser, stack);
-  await wds(p, 'migrate-differs-keep-vault').click();
-  expect(await finish(p)).toEqual({ status: 'migrated', deleted: 'deleted', copied: 0, total: 4, sandbox: false });
-  expect((await vaultState(p)).refs.map((r) => r.value.title).sort()).toEqual(['Alpha', 'Beta', 'Gamma']);
-});
-test('an entry that differs from the vault: keep both writes the old version as a copy "<id>~<tag>"', async ({ browser, stack }) => {
-  const { p } = await differsSetup(browser, stack);
-  await wds(p, 'migrate-differs-keep-both').click();
+  await yes(p);
   const res = await finish(p);
-  expect(res).toMatchObject({ status: 'migrated', deleted: 'deleted', copied: 1 });
   const st = await vaultState(p);
+  expect(res).toEqual({ status: 'migrated', deleted: 'deleted', copies: [expect.stringMatching(copyId(st.tag))] });
   expect(st.refs.map((r) => r.value.title).sort()).toEqual(['Alpha', 'Alpha changed in the old app', 'Beta', 'Gamma']);
-  expect(st.refs.find((r) => r.value.title.endsWith('old app')).id).toBe(st.tag + '-j1~' + st.tag);
+  expect(st.refs.find((r) => r.value.title.endsWith('old app')).id).toMatch(new RegExp('^' + st.tag + '-j1~' + st.tag + '-[0-9a-f]{6}$'));
+  await expect(p.locator('[data-wds-toast=migration]')).toContainText('Entries that already existed in your vault with other content: 1');
+  expect((await oldCount(p)).stores).toEqual({ refs: 0, pdfs: 0 });
 });
-test('an entry that differs from the vault: decide later keeps the old data and reports the names', async ({ browser, stack }) => {
-  const { p } = await differsSetup(browser, stack);
-  await wds(p, 'migrate-differs-later').click();
-  const res = await finish(p);
-  expect(res).toMatchObject({ status: 'partial', why: 'differs', deleted: 'kept' });
-  expect(res.differs).toHaveLength(1);
-  expect(res.differs[0]).toMatch(/^refs\/.+-j1$/);
-  expect((await oldCount(p)).stores).toEqual({ refs: 3, pdfs: 1 });
-  await expect(p.locator('[data-wds-toast=migration]')).toContainText('not decided yet');
+test('an entry that differs a second time with other content gets a second copy: migrated, never stuck on partial', async ({ browser, stack }) => {
+  const { o, p } = await differsSetup(browser, stack);
+  await expect(dlgView(p)).toHaveAttribute('data-wds-view', 'migrate');   // the snapshot of the old data is taken
+  await p.evaluate(() => window.mutateOld('literatur', 'refs', (os) => os.put({ title: 'Alpha changed twice', authors: 'A. Author', year: 2001, pdfId: 1, pdfName: 'eins.pdf', created: '2024-03-01T10:00:00.000Z' }, 1)));   // while the question is open
+  await yes(p);
+  expect((await finish(p)).deleted).toBe('changed');
+  const p2 = await reopen(o);
+  const res = await run(p2);
+  expect(res).toMatchObject({ status: 'migrated', deleted: 'deleted' });
+  const st = await vaultState(p2);
+  expect(st.refs.map((r) => r.value.title).sort()).toEqual(['Alpha', 'Alpha changed in the old app', 'Alpha changed twice', 'Beta', 'Gamma']);
+  expect((await oldCount(p2)).stores).toEqual({ refs: 0, pdfs: 0 });
 });
 
 async function limitedScope(stack, slug, limits) {
   const r = await api(stack, 'POST', '/admin/scopes', { auth: operatorAuth(stack), json: { slug, name: slug, enrollment: 'join_code', join_code: null, hibp: false, limits } });
   expect(r.status, JSON.stringify(r.json)).toBe(201);
   return { scope: r.json.scope, service: stack.service, joinCode: r.json.join_code };
+}
+// The entries of a ZIP file without compression (what makeZip writes): name -> bytes.
+function zipEntries(buf) {
+  const entries = {};
+  for (let pos = 0; buf.readUInt32LE(pos) === 0x04034b50;) {
+    const size = buf.readUInt32LE(pos + 18), nl = buf.readUInt16LE(pos + 26), el = buf.readUInt16LE(pos + 28), name = buf.toString('utf8', pos + 30, pos + 30 + nl);
+    entries[name] = buf.subarray(pos + 30 + nl + el, pos + 30 + nl + el + size);
+    pos += 30 + nl + el + size;
+  }
+  return entries;
 }
 const BIG = (n, seed, name) => ({ __bytes: n, seed, name, type: 'application/pdf' });
 test('entries that are too large, or do not fit, become downloads; the old data stays until the person decides; references to them become null', async ({ browser, stack }) => {
@@ -523,30 +520,27 @@ test('entries that are too large, or do not fit, become downloads; the old data 
   await expect(wds(page, 'migrate-delete')).toBeDisabled();
   const dl = page.waitForEvent('download');
   await wds(page, 'migrate-large-download').click();
-  expect((await dl).suggestedFilename()).toBe('big.pdf');
-  await expect(wds(page, 'migrate-delete')).toBeEnabled();     // every file was downloaded
+  const zip = await dl;
+  expect(zip.suggestedFilename()).toBe('literatur-too-large.zip');
+  const files = zipEntries(readFileSync(await zip.path()));
+  expect(Object.keys(files)).toEqual(['big.pdf']);
+  expect(files['big.pdf'].length).toBe(1200000);
+  await expect(wds(page, 'migrate-delete')).toBeEnabled();     // the files were handed over
   await wds(page, 'migrate-keep').click();
-  const first = await finish(page);
-  expect(first.status).toBe('partial');
-  expect(first.deleted).toBe('kept');
-  expect(first.tooLarge).toHaveLength(1);
-  expect(first.tooLarge[0]).toMatchObject({ size: 1200000, why: 'too-large' });
-  expect(first.tooLarge[0].name).toMatch(/^pdfs\/.+-j1\.pdf$/);
+  expect(await finish(page)).toEqual({ status: 'partial', why: 'too-large' });
   const st = await vaultState(page);
   expect(st.refs.find((r) => r.value.title === 'With big').value.pdfId).toBeNull();
   expect(st.refs.find((r) => r.value.title === 'With medium').value.pdfId).toMatch(/-j2\.pdf$/);
   expect(st.pdfs).toHaveLength(1);
   expect((await page.evaluate(() => window.oldState('literatur', ['refs', 'pdfs']))).stores).toEqual({ refs: 3, pdfs: 2 });
-  // the next start asks about the file that is left; the checkbox is the other way to enable the delete
+  // the next start asks about the file that is left; the delete waits for the download
   const p = await openApp(ctx, url, target); await unlock(p, accessId);
   await start(p); await yes(p);
   await expect(dlgView(p)).toHaveAttribute('data-wds-view', 'migrate-large');
   await expect(wds(p, 'migrate-delete')).toBeDisabled();
-  await wds(p, 'migrate-large-ack').check();
+  await wds(p, 'migrate-large-download').click();
   await wds(p, 'migrate-delete').click();
-  const second = await finish(p);
-  expect(second).toMatchObject({ status: 'migrated', deleted: 'deleted', copied: 0 });
-  expect(second.tooLarge).toHaveLength(1);
+  expect(await finish(p)).toEqual({ status: 'migrated', deleted: 'deleted' });
   expect((await p.evaluate(() => window.oldState('literatur', ['refs', 'pdfs']))).stores).toEqual({ refs: 0, pdfs: 0 });
 });
 
@@ -560,41 +554,28 @@ test('a vault that is too full for everything: the largest files are left out fi
   ] }] });
   await start(page); await yes(page);
   await expect(dlgView(page)).toHaveAttribute('data-wds-view', 'migrate-large');
-  await expect(dlgView(page).locator('[data-wds=migrate-large-download]')).toHaveCount(2);   // the 1.1 MB and the 0.9 MB file
+  await expect(dlgView(page).locator('li')).toHaveCount(2);   // the 1.1 MB and the 0.9 MB file
+  const dl = page.waitForEvent('download');
+  await wds(page, 'migrate-large-download').click();
+  const files = zipEntries(readFileSync(await (await dl).path()));
+  expect(Object.values(files).map((b) => b.length).sort((a, b) => a - b)).toEqual([900000, 1100000]);
   await wds(page, 'migrate-keep').click();
-  const res = await finish(page);
-  expect(res.status).toBe('partial');
-  expect(res.tooLarge.map((e) => e.size).sort((a, b) => a - b)).toEqual([900000, 1100000]);
-  expect(res.tooLarge.every((e) => e.why === 'space')).toBe(true);
+  expect(await finish(page)).toEqual({ status: 'partial', why: 'too-large' });
   const st = await vaultState(page);
   expect(st.pdfs.map((x) => x.size)).toEqual([500000]);
   expect(st.refs.map((r) => r.value.pdfId).filter(Boolean)).toHaveLength(1);
 });
 
-test('two browsers with the same old ids: tagged ids give two copies, tagged:false and identical data gives one', async ({ browser, stack }) => {
+test('two browsers with the same old ids get two copies: the ids carry the tag of the browser', async ({ browser, stack }) => {
   const o = await ownerWithOld(browser, stack);
   expect((await run(o.page)).status).toBe('migrated');
   const ctx2 = await newCtx(browser), url2 = appUrl(stack), p2 = await openApp(ctx2, url2, stack);
   await unlock(p2, o.accessId);
   await seed(p2, OLD);
-  expect((await run(p2)).copied).toBe(4);
+  expect((await run(p2)).status).toBe('migrated');
   const st = await vaultState(p2);
   expect(st.refs).toHaveLength(6);
   expect(new Set(st.refs.map((r) => r.id)).size).toBe(6);
-  // untagged
-  const u = await ownerWithOld(browser, stack);
-  await u.page.evaluate(() => { window.MIGRATION = { ...window.MIGRATION, tagged: false }; });
-  const r1 = await run(u.page);
-  expect(r1).toMatchObject({ status: 'migrated', copied: 4 });
-  const ctx3 = await newCtx(browser), p3 = await openApp(ctx3, appUrl(stack), stack);
-  await unlock(p3, u.accessId);
-  await seed(p3, OLD);
-  await p3.evaluate(() => { window.MIGRATION = { ...window.MIGRATION, tagged: false }; });
-  const r2 = await run(p3);
-  expect(r2).toMatchObject({ status: 'migrated', deleted: 'deleted', copied: 0, total: 4 });
-  const st3 = await vaultState(p3);
-  expect(st3.refs).toHaveLength(3);
-  expect(st3.refs.map((r) => r.id).sort()).toEqual(['j1', 'j2', 'j3']);
 });
 
 test('a key-value store and a localStorage prefix: records, keys as ids, several keys claimed with one "from"', async ({ browser, stack }) => {
@@ -606,14 +587,14 @@ test('a key-value store and a localStorage prefix: records, keys as ids, several
       id: 'kv', indexedDB: { name: 'kvdb', stores: ['meta'] }, localStorage: { prefixes: ['zn.'] },
       map(old, h) {
         const records = old.rows('meta').map((row) => ({ name: 'kv-' + row.key, value: row.value, from: row }));
-        const keys = old.keys('zn.');
+        const keys = Object.keys(old.local).filter((k) => k.startsWith('zn.'));
         records.push({ name: 'zn-all', value: Object.fromEntries(keys.map((k) => [k, old.local[k]])), from: keys });
         return { records };
       },
     };
   });
   const res = await run(page);
-  expect(res).toEqual({ status: 'migrated', deleted: 'deleted', copied: 3, total: 3, sandbox: false });
+  expect(res).toEqual({ status: 'migrated', deleted: 'deleted' });
   expect(await page.evaluate(async () => ({ timer: await store.get('kv-timer'), lang: await store.get('kv-lang'), zn: await store.get('zn-all') }))).toEqual({ timer: { running: true, since: 5 }, lang: 'de', zn: { 'zn.a': '1', 'zn.b': '2', 'zn.c': '3' } });
   const left = await page.evaluate(() => { const o = {}; for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (!k.startsWith('wds:')) o[k] = localStorage.getItem(k); } return o; });
   expect(left).toEqual({ unrelated: 'x', 'zr.d': '4' });
@@ -630,23 +611,23 @@ test('map errors: nothing is written and nothing is deleted; mistakes of the app
     }, src);
   }
   const throwing = await base('(old, h) => { throw new Error("boom"); }');
-  expect(throwing.result).toMatchObject({ status: 'failed', why: 'map threw: boom', deleted: 'kept' });
-  const failing = await base('(old, h) => { h.fail(old.rows("refs")[1], "no title here"); }');
-  expect(failing.result).toMatchObject({ status: 'failed' });
-  expect(failing.result.why).toBe('literatur/refs key 2: no title here');
+  expect(throwing.result).toEqual({ status: 'failed', why: 'map threw: boom' });
+  const settings = await base('(old, h) => ({ settings: { record: "settings", value: { theme: "dark" }, from: "literaturliste.einstellungen" } })');
+  expect(settings.result.status).toBe('failed');
+  expect(settings.result.why).toBe('map returned "settings": personal preferences stay in localStorage and are not named in migrateLocal; shared values are a record');
   const unclaimed = await base('(old, h) => ({ items: old.rows("refs").slice(0, 1).map((row) => ({ col: refCol, id: h.id(row.key), value: { title: "x" }, from: row })) })');
   expect(unclaimed.result.status).toBe('failed');
-  expect(unclaimed.result.why).toMatch(/^4 old row\(s\) were neither copied nor skipped/);
+  expect(unclaimed.result.why).toMatch(/^3 old row\(s\) were neither copied nor skipped/);
   const noFrom = await base('(old, h) => ({ items: [{ col: refCol, id: "x", value: { title: "x" } }] })');
-  expect(noFrom.result).toMatchObject({ status: 'failed', deleted: 'kept' });
+  expect(noFrom.result.status).toBe('failed');
   expect(noFrom.result.why).toMatch(/^items\[0\] \("refs\/x"\): "from" is missing/);
-  const random = await base('(old, h) => ({ items: old.rows("refs").map((row) => ({ col: refCol, id: Math.random().toString(36).slice(2), value: { title: "x" }, from: row })).concat(old.rows("pdfs").map((row) => ({ col: pdfCol, id: h.id(row.key), value: h.blob(row.value), from: row }))), settings: { record: "settings", value: { a: 1 }, from: "literaturliste.einstellungen" } })');
+  const random = await base('(old, h) => ({ items: old.rows("refs").map((row) => ({ col: refCol, id: Math.random().toString(36).slice(2), value: { title: "x" }, from: row })).concat(old.rows("pdfs").map((row) => ({ col: pdfCol, id: h.id(row.key), value: h.blob(row.value), from: row }))) })');
   expect(random.result.status).toBe('failed');
   expect(random.result.why).toMatch(/^map gave different results when it ran twice/);
   const dup = await base('(old, h) => ({ items: old.rows("refs").map((row) => ({ col: refCol, id: "same", value: { title: "x" }, from: row })) })');
   expect(dup.result.status).toBe('failed');
   expect(dup.result.why).toMatch(/two entries would get the same name "refs\/same"/);
-  const deadRef = await base('(old, h) => ({ items: old.rows("refs").map((row) => ({ col: refCol, id: h.id(row.key), value: { title: "x", pdf: h.ref("pdfs", row.value.pdfId, ".pdf") }, from: row })).concat(old.rows("pdfs").map((row) => ({ col: pdfCol, id: h.id(row.key), value: h.blob(row.value), from: row }))), settings: { record: "settings", value: { a: 1 }, from: "literaturliste.einstellungen" } })');
+  const deadRef = await base('(old, h) => ({ items: old.rows("refs").map((row) => ({ col: refCol, id: h.id(row.key), value: { title: "x", pdf: h.ref("pdfs", row.value.pdfId, ".pdf") }, from: row })).concat(old.rows("pdfs").map((row) => ({ col: pdfCol, id: h.id(row.key), value: h.blob(row.value), from: row }))) })');
   expect(deadRef.result.status).toBe('failed');
   expect(deadRef.result.why).toMatch(/^h\.ref returned ".*-j1.pdf", but no item has this id/);
   const nested = await base('(old, h) => ({ items: old.rows("refs").map((row) => ({ col: refCol, id: h.id(row.key), value: { title: "x", file: new Blob(["x"]) }, from: row })) })');
@@ -662,7 +643,7 @@ test('map errors: nothing is written and nothing is deleted; mistakes of the app
   expect(badStore.result.why).toMatch(/old\.rows\("nope"\): not a configured store/);
   // a mistake that depends on one user's data (an id with a slash) is a result as well: the page must still start
   const slashId = await base('(old, h) => ({ items: old.rows("refs").map((row) => ({ col: refCol, id: "a/b", value: { title: "x" }, from: row })) })');
-  expect(slashId.result).toMatchObject({ status: 'failed', deleted: 'kept' });
+  expect(slashId.result.status).toBe('failed');
   expect(slashId.result.why).toMatch(/id must be a string of 1 to 200 characters without "\/"/);
   const sameKeys = await base('(old, h) => ({ items: old.rows("refs").map((row) => ({ col: refCol, id: "n", value: { title: "x" }, from: row })) })');
   expect(sameKeys.result.why).toMatch(/If two stores share keys .* h\.id\(\["notes", row\.key\]\)/);
@@ -670,13 +651,15 @@ test('map errors: nothing is written and nothing is deleted; mistakes of the app
   const opts = await o.page.evaluate(async () => {
     const tries = [{}, { id: 'Bad Id', map() {}, localStorage: { keys: ['a'] } }, { id: 'x', map() {} }, { id: 'x', map() {}, localStorage: { prefixes: [''] } }, { id: 'x', map() {}, localStorage: { prefixes: ['wds:x'] } },
       { id: 'x', map() {}, indexedDB: [{ name: 'a', stores: ['s'] }, { name: 'a', stores: ['t'] }] }, { id: 'x', map() {}, indexedDB: { name: 'a', stores: ['s', 's'] } },
-      { id: 'x', map() {}, localStorage: { keys: ['a'] }, applySettings() {} }];
+      { id: 'x', map() {}, localStorage: { keys: ['a'] }, applySettings() {} }, { id: 'x', map() {}, localStorage: { keys: ['a'] }, tagged: false }, { id: 'x', map() {}, localStorage: { keys: ['a'] }, texts: {} }];
     const out = [];
     for (const t of tries) { try { await store.migrateLocal(t); out.push('no error'); } catch (e) { out.push(e.name + ': ' + e.message.slice(0, 70)); } }
     return out;
   });
   expect(opts.every((s) => s.startsWith('UsageError'))).toBe(true);
   expect(opts[7]).toMatch(/applySettings/);
+  expect(opts[8]).toMatch(/unknown option "tagged"/);
+  expect(opts[9]).toMatch(/unknown option "texts"/);
   expect((await oldCount(o.page)).stores).toEqual({ refs: 3, pdfs: 1 });
   expect(await o.page.evaluate(() => store.list())).toEqual([]);
   await expect(o.page.locator('dialog.wds-dialog')).toHaveCount(0);
@@ -688,7 +671,7 @@ test('two tabs: one migrates, the other gets "busy" at once and loads normally',
   await expect(dlgView(o.page)).toHaveAttribute('data-wds-view', 'migrate');
   const p2 = await openApp(o.ctx, o.url, o.target);
   await start(p2);
-  expect(await finish(p2)).toEqual({ status: 'busy', sandbox: false });
+  expect(await finish(p2)).toEqual({ status: 'busy' });
   await expect(p2.locator('dialog.wds-dialog')).toHaveCount(0);
   await wds(o.page, 'migrate-yes').click();
   expect((await finish(o.page)).status).toBe('migrated');
@@ -696,17 +679,12 @@ test('two tabs: one migrates, the other gets "busy" at once and loads normally',
 
 test('the backup is a ZIP with data.json and every file; Blobs and Dates are described, the localStorage text is there', async ({ browser, stack }) => {
   const o = await ownerWithOld(browser, stack);
+  await o.page.evaluate(() => { const base = window.MIGRATION.map; window.MIGRATION = { ...window.MIGRATION, localStorage: { keys: ['literaturliste.einstellungen'] }, map(old, h) { h.skip('literaturliste.einstellungen', 'a preference'); return base(old, h); } }; });
   await start(o.page);
   await expect(dlgView(o.page)).toHaveAttribute('data-wds-view', 'migrate');
   const dl = o.page.waitForEvent('download');
   await wds(o.page, 'migrate-backup').click();
-  const buf = readFileSync(await (await dl).path());
-  const entries = {};
-  for (let pos = 0; buf.readUInt32LE(pos) === 0x04034b50;) {
-    const size = buf.readUInt32LE(pos + 18), nl = buf.readUInt16LE(pos + 26), el = buf.readUInt16LE(pos + 28), name = buf.toString('utf8', pos + 30, pos + 30 + nl);
-    entries[name] = buf.subarray(pos + 30 + nl + el, pos + 30 + nl + el + size);
-    pos += 30 + nl + el + size;
-  }
+  const entries = zipEntries(readFileSync(await (await dl).path()));
   expect(Object.keys(entries).sort()).toEqual(['data.json', 'files/0001-eins.pdf']);
   const doc = JSON.parse(entries['data.json'].toString());
   expect(doc.app).toBe('literatur');
@@ -730,17 +708,16 @@ test('the question opens above an app dialog that is open with showModal(), and 
   await o.page.locator('#appok').click();
 });
 
-test('texts: German by locale, single keys overridden per language or flat; the dialog names stay', async ({ browser, stack }) => {
+test('German by locale; the dialog names stay', async ({ browser, stack }) => {
   const ctx = await newCtx(browser), url = appUrl(stack), page = await openApp(ctx, url, stack, { locale: 'de' });
   await createVault(page, stack.joinCode);
   await seed(page, OLD);
-  await page.evaluate(() => { window.MIGRATION = { ...window.MIGRATION, texts: { de: { 'migrate.yes': 'Los' }, 'migrate.no': 'Nicht jetzt' } }; });
   await start(page);
   await expect(dlgView(page)).toHaveAttribute('data-wds-view', 'migrate');
   await expect(dlgView(page).locator('h2')).toHaveText('Daten der früheren Version übernehmen');
   await expect(dlgView(page)).toContainText('In diesem Browser liegen 4 Einträge aus einer früheren Version dieser App, unverschlüsselt und nur auf diesem Gerät.');
-  await expect(wds(page, 'migrate-yes')).toHaveText('Los');
-  await expect(wds(page, 'migrate-no')).toHaveText('Nicht jetzt');
+  await expect(wds(page, 'migrate-yes')).toHaveText('Übernehmen');
+  await expect(wds(page, 'migrate-no')).toHaveText('Später');
   await expect(wds(page, 'migrate-backup')).toHaveText('Sicherung herunterladen (nicht verschlüsselt)');
   mkdirSync(SHOTS, { recursive: true }); await page.screenshot({ path: join(SHOTS, 'migrate-de.png') });
   await wds(page, 'migrate-yes').click();
@@ -771,9 +748,9 @@ const setMap = (page, src) => page.evaluate((src) => { window.MIGRATION = { ...w
 
 test('map may change the rows it is given (also in a classic script): the copy gets the change, the old rows are not touched', async ({ browser, stack }) => {
   const o = await ownerWithOld(browser, stack, stack.sandbox, null);
-  await setMap(o.page, '(old, h) => ({ items: old.rows("refs").map(function (row) { var v = row.value; v.title = v.title + "!"; v.extra = 1; return { col: refCol, id: h.id(row.key), value: v, from: row }; }).concat(old.rows("pdfs").map((row) => ({ col: pdfCol, id: h.id(row.key, ".pdf"), value: h.blob(row.value), from: row }))), settings: { record: "settings", value: { theme: "dark" }, from: "literaturliste.einstellungen" } })');
+  await setMap(o.page, '(old, h) => ({ items: old.rows("refs").map(function (row) { var v = row.value; v.title = v.title + "!"; v.extra = 1; return { col: refCol, id: h.id(row.key), value: v, from: row }; }).concat(old.rows("pdfs").map((row) => ({ col: pdfCol, id: h.id(row.key, ".pdf"), value: h.blob(row.value), from: row }))) })');
   const res = await run(o.page);
-  expect(res).toEqual({ status: 'migrated', deleted: 'kept', copied: 4, total: 4, sandbox: true });
+  expect(res).toEqual({ status: 'migrated', deleted: 'kept' });
   const st = await vaultState(o.page);
   expect(st.refs.map((r) => r.value.title).sort()).toEqual(['Alpha!', 'Beta!', 'Gamma!']);
   expect(st.refs.every((r) => r.value.extra === 1)).toBe(true);
@@ -782,21 +759,17 @@ test('map may change the rows it is given (also in a classic script): the copy g
   expect(raw[0].value.extra).toBeUndefined();
 });
 
-test('the old database was never created (only a setting exists): no question, the settings are taken over and the key is deleted', async ({ browser, stack }) => {
+test('only a personal preference exists in localStorage: it is not named in migrateLocal, so there is nothing to take over and the key stays', async ({ browser, stack }) => {
   const ctx = await newCtx(browser), page = await openApp(ctx, appUrl(stack), stack);
-  await createVault(page, stack.joinCode);
   await seed(page, { local: OLD.local });
   await start(page);
-  const res = await finish(page);
-  expect(res).toEqual({ status: 'migrated', deleted: 'deleted', copied: 0, total: 0, sandbox: false });
+  expect(await finish(page)).toEqual({ status: 'nothing' });
   await expect(dlgView(page)).toHaveCount(0);
-  await expect(page.locator('[data-wds-toast=migration]')).toContainText('settings of the earlier version were taken over');
-  expect(await page.evaluate(() => store.get('settings'))).toEqual({ theme: 'dark', sort: 'year', statsOpen: true, filter: '' });
-  expect((await oldCount(page)).local).toEqual({ 'other.app.key': 'keep me' });
+  expect((await oldCount(page)).local).toEqual(OLD.local);
 });
 
 // A map that skips the pdf rows: they are deleted with the old data, so the person has to say that this is fine.
-const SKIP_PDFS = '(old, h) => ({ items: old.rows("refs").map((row) => ({ col: refCol, id: h.id(row.key), value: { title: row.value.title }, from: row })).concat(old.rows("pdfs").map((row) => { h.skip(row, "a cache"); return null; }).filter(Boolean)), settings: { record: "settings", value: { theme: "dark" }, from: "literaturliste.einstellungen" } })';
+const SKIP_PDFS = '(old, h) => ({ items: old.rows("refs").map((row) => ({ col: refCol, id: h.id(row.key), value: { title: row.value.title }, from: row })).concat(old.rows("pdfs").map((row) => { h.skip(row, "a cache"); return null; }).filter(Boolean)) })';
 test('rows that map skips are deleted with the old data: Take over waits for the box or the backup, and the skipped rows are in the backup', async ({ browser, stack }) => {
   const o = await ownerWithOld(browser, stack);
   await setMap(o.page, SKIP_PDFS);
@@ -816,30 +789,28 @@ test('rows that map skips are deleted with the old data: Take over waits for the
   await wds(o.page, 'migrate-skip-ack').check();
   await expect(wds(o.page, 'migrate-yes')).toBeEnabled();
   await wds(o.page, 'migrate-yes').click();
-  expect(await finish(o.page)).toEqual({ status: 'migrated', deleted: 'deleted', copied: 3, total: 3, sandbox: false });
+  expect(await finish(o.page)).toEqual({ status: 'migrated', deleted: 'deleted' });
   expect((await oldCount(o.page)).stores).toEqual({ refs: 0, pdfs: 0 });
 });
 
-test('a failed run offers the backup: notice action, result.downloadBackup(), nothing deleted', async ({ browser, stack }) => {
+test('a failed run offers the backup in its notice; nothing is deleted', async ({ browser, stack }) => {
   const o = await ownerWithOld(browser, stack);
   await setMap(o.page, '(old, h) => { throw new Error("boom"); }');
   await start(o.page);
-  expect(await finish(o.page)).toMatchObject({ status: 'failed', why: 'map threw: boom', deleted: 'kept' });
+  expect(await finish(o.page)).toEqual({ status: 'failed', why: 'map threw: boom' });
   const toast = o.page.locator('[data-wds-toast=migration]');
   await expect(toast).toContainText('Nothing was deleted');
   const dl = o.page.waitForEvent('download');
   await toast.locator('[data-wds=toast-action]').click();
   expect((await dl).suggestedFilename()).toMatch(/^literatur-old-data-.*\.zip$/);
-  const kind = await o.page.evaluate(async () => { const r = await store.migrateLocal(window.MIGRATION); return { type: typeof r.downloadBackup, enumerable: Object.keys(r).includes('downloadBackup'), status: r.status }; });
-  expect(kind).toEqual({ type: 'function', enumerable: false, status: 'failed' });
   expect((await oldCount(o.page)).stores).toEqual({ refs: 3, pdfs: 1 });
 });
 
 test('a changed map is not ignored: entries that map now makes differently are asked about again (sandbox keeps the old data)', async ({ browser, stack }) => {
   const o = await ownerWithOld(browser, stack, stack.sandbox, null);
-  expect((await run(o.page)).copied).toBe(4);
+  expect((await run(o.page)).status).toBe('migrated');
   const p = await reopen(o);
-  await setMap(p, '(old, h) => ({ items: old.rows("refs").map((row) => ({ col: refCol, id: h.id(row.key), value: { title: row.value.title + " (fixed)" }, from: row })).concat(old.rows("pdfs").map((row) => ({ col: pdfCol, id: h.id(row.key, ".pdf"), value: h.blob(row.value), from: row }))), settings: { record: "settings", value: { theme: "dark", sort: "year", statsOpen: true, filter: "" }, from: "literaturliste.einstellungen" } })');
+  await setMap(p, '(old, h) => ({ items: old.rows("refs").map((row) => ({ col: refCol, id: h.id(row.key), value: { title: row.value.title + " (fixed)" }, from: row })).concat(old.rows("pdfs").map((row) => ({ col: pdfCol, id: h.id(row.key, ".pdf"), value: h.blob(row.value), from: row }))) })');
   await start(p);
   await expect(dlgView(p)).toHaveAttribute('data-wds-view', 'migrate');
   await expect(dlgView(p)).toContainText('4 entries');           // the references and the file (its meta changed) are made differently now
@@ -857,7 +828,7 @@ test('one localStorage key that holds many entries: after one more entry appears
     window.MIGRATION = { id: 'zn', localStorage: { keys: ['zn.data'] }, map(old, h) { const d = old.json('zn.data'); return { items: d.items.map((x) => ({ col: entCol, id: h.id(x.id), value: x, from: 'zn.data' })) }; } };
   });
   const first = await run(page);
-  expect(first).toMatchObject({ status: 'migrated', copied: 2, total: 2, deleted: 'kept' });
+  expect(first).toEqual({ status: 'migrated', deleted: 'kept' });
   await page.evaluate(async () => { await entCol.load(); const e = entCol.items()[0]; await entCol.set(e.id, { id: 1, name: 'edited in the new app' }); });
   const edited = await page.evaluate(async () => (await entCol.getAll()).map((x) => x.value.name).sort());
   // the old app adds a third entry
@@ -872,23 +843,7 @@ test('one localStorage key that holds many entries: after one more entry appears
   await expect(dlgView(p2)).toHaveAttribute('data-wds-view', 'migrate');
   await expect(dlgView(p2)).toContainText('1 entries');
   await wds(p2, 'migrate-yes').click();
-  expect(await finish(p2)).toMatchObject({ status: 'migrated', copied: 1, total: 3 });
+  expect((await finish(p2)).status).toBe('migrated');
   const names = await p2.evaluate(async () => { await entCol.load(); return (await entCol.getAll()).map((x) => x.value.name).sort(); });
   expect(names).toEqual([...edited, 'three'].sort());
-});
-
-test('"delete the old data" in the question: asks again, writes nothing to the vault, deletes the old data (status discarded)', async ({ browser, stack }) => {
-  const o = await ownerWithOld(browser, stack);
-  await start(o.page);
-  await expect(dlgView(o.page)).toHaveAttribute('data-wds-view', 'migrate');
-  await wds(o.page, 'migrate-discard').click();
-  await expect(dlgView(o.page)).toHaveAttribute('data-wds-view', 'migrate-discard');
-  await wds(o.page, 'migrate-discard-back').click();
-  await expect(dlgView(o.page)).toHaveAttribute('data-wds-view', 'migrate');
-  await wds(o.page, 'migrate-discard').click();
-  await wds(o.page, 'migrate-discard-confirm').click();
-  expect(await finish(o.page)).toEqual({ status: 'discarded', deleted: 'deleted', sandbox: false });
-  await expect(o.page.locator('[data-wds-toast=migration]')).toContainText('old data was deleted from this browser');
-  expect((await oldCount(o.page)).stores).toEqual({ refs: 0, pdfs: 0 });
-  expect(await o.page.evaluate(() => store.list())).toEqual([]);
 });

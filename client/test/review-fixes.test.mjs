@@ -60,7 +60,7 @@ test('the chain rule: a roster signed by one owner that changes another owner\'s
   sl.e_pub = renewal.e_pub; sl.s_pub = renewal.s_pub; sl.kind = 'passphrase'; sl.expires = null;
   const roster = await I.signRoster(body, f2.s.sPriv);
   const docs = f2.s.chain.map((c) => ({ body: c.body, sig: c.sig })).concat([roster]);
-  await rejects(I.verifyRosterChain({ scope: world.scope, vault: created.vaultId, escrowPins: world.pins, docs, prior: null }), core.IntegrityError, /own keys/);
+  await rejects(I.verifyRosterChain({ scope: world.scope, vault: created.vaultId, escrowPins: world.pins, docs, prior: null }), core.errors.IntegrityError, /own keys/);
   // the server refuses it as well
   const keyring = await I.makeKeyring(world.scope, body, f2.s.vmk, f2.s.nk);
   const res = await world.server.fetch(world.server.service + 'api/v1/vaults/' + created.vaultId + '/roster', {
@@ -83,8 +83,8 @@ test('the founder can revoke an owner slot added by the faculty (epoch bump, re-
   assert.equal(founder.status().epoch, 2);
   assert.equal(founder.members().some((m) => m.slotId === rec.slotId), false);
   assert.deepEqual(await founder.get('data'), { precious: true });
-  await rejects(newClient(world).unlock({ accessId: rec.accessId, passphrase: NEW_OWNER_PASS }), core.RequestError, /not_found/); // the access ID is retired
-  await rejects(newOwner.get('data'), core.AuthError);
+  await rejects(newClient(world).unlock({ accessId: rec.accessId, passphrase: NEW_OWNER_PASS }), core.errors.RequestError, /not_found/); // the access ID is retired
+  await rejects(newOwner.get('data'), core.errors.AuthError);
 });
 
 test('the owner recovered by the faculty can revoke the old founder slot', async () => {
@@ -98,19 +98,19 @@ test('the owner recovered by the faculty can revoke the old founder slot', async
   assert.equal(newOwner.status().epoch, 2);
   assert.deepEqual(await newOwner.get('data'), { precious: true });
   await newOwner.put('after', 1);
-  await rejects(founder.get('data'), core.AuthError);
-  await rejects(newClient(world).unlock({ accessId: created.accessId, passphrase: ctx.passphrase }), core.RequestError, /not_found/);
+  await rejects(founder.get('data'), core.errors.AuthError);
+  await rejects(newClient(world).unlock({ accessId: created.accessId, passphrase: ctx.passphrase }), core.errors.RequestError, /not_found/);
   // the escrow slot and the own slot stay out of reach
-  await rejects(newOwner.revoke([newOwner.s.slotId]), core.UsageError, /own slot/);
-  await rejects(newOwner.revoke([newOwner.members().find((m) => m.escrow).slotId]), core.UsageError, /escrow/);
+  await rejects(newOwner.revoke([newOwner.s.slotId]), core.errors.UsageError, /own slot/);
+  await rejects(newOwner.revoke([newOwner.members().find((m) => m.escrow).slotId]), core.errors.UsageError, /escrow/);
 });
 
 test('without a recovery nobody can revoke an owner slot; a member cannot revoke at all', async () => {
   const ctx = await setupVault();
   const { founder } = ctx;
   const { member } = await addMember(ctx, 'write');
-  await rejects(founder.revoke([founder.s.slotId]), core.UsageError, /own slot/);
-  await rejects(member.revoke([founder.s.slotId]), core.AuthError);
+  await rejects(founder.revoke([founder.s.slotId]), core.errors.UsageError, /own slot/);
+  await rejects(member.revoke([founder.s.slotId]), core.errors.AuthError);
   assert.equal(founder.members().filter((m) => m.revocable).length, 1); // only the member
 });
 
@@ -139,7 +139,7 @@ test('retired escrow keys stay valid for history; an owner replaces them with th
   // an owner who skips maintenance cannot edit the roster: nothing may be encrypted to the retired key
   const f2 = await unlockFounder(ctx, newClient(world, Object.assign({ storage: world.storage }, cfg)), { maintain: false });
   assert.equal(f2.status().escrowRetired, true);
-  await rejects(f2.createInvite({ role: 'read' }), core.UsageError, /retired/);
+  await rejects(f2.createInvite({ role: 'read' }), core.errors.UsageError, /retired/);
   const v0 = f2.status().rosterVersion;
   await f2.maintain();
   assert.equal(f2.status().escrowRetired, false);
@@ -166,8 +166,8 @@ test('a library that neither pins nor retires an escrow set refuses the vault; a
   const A = world.escrow.current, B = world.escrow.spare, C = await escrowSet();
   const docs = ctx.founder.s.chain.map((c) => ({ body: c.body, sig: c.sig }));
   const base = { scope: world.scope, vault: created.vaultId, docs, prior: null };
-  await rejects(I.verifyRosterChain(Object.assign({ escrowPins: [B.id, C.id] }, base)), core.IntegrityError, /pinned/);
-  await rejects(I.verifyRosterChain(Object.assign({ escrowPins: [B.id, C.id], retiredEscrow: [{ id: C.id, until: 5 }] }, base)), core.IntegrityError, /pinned/);
+  await rejects(I.verifyRosterChain(Object.assign({ escrowPins: [B.id, C.id] }, base)), core.errors.IntegrityError, /pinned/);
+  await rejects(I.verifyRosterChain(Object.assign({ escrowPins: [B.id, C.id], retiredEscrow: [{ id: C.id, until: 5 }] }, base)), core.errors.IntegrityError, /pinned/);
   assert.equal((await I.verifyRosterChain(Object.assign({ escrowPins: [B.id, C.id], retiredEscrow: [{ id: A.id, until: 5 }] }, base))).length, 1);
 });
 
@@ -180,7 +180,7 @@ test('a version signed by a retired escrow key counts only up to the retirement 
   const signedAt = (await world.server.vaults.get(ctx.created.vaultId).rosters.at(-1)).body.time;
   world.server.setEscrow(B, C);
   const cfg = (until) => ({ escrowPins: [B.id, C.id], retiredEscrow: [{ id: A.id, until }], storage: core.memoryStorage() });
-  const late = await rejects(newClient(world, cfg(signedAt - 1)).unlock({ accessId: ctx.created.accessId, passphrase: ctx.passphrase }), core.IntegrityError, /retired escrow key/);
+  const late = await rejects(newClient(world, cfg(signedAt - 1)).unlock({ accessId: ctx.created.accessId, passphrase: ctx.passphrase }), core.errors.IntegrityError, /retired escrow key/);
   assert.equal(late.code, 'invalid_roster');
   const ok = newClient(world, cfg(signedAt));
   await ok.unlock({ accessId: ctx.created.accessId, passphrase: ctx.passphrase });

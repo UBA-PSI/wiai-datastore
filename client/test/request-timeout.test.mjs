@@ -9,15 +9,15 @@ const never = () => new Promise(() => {});
 
 test('a request that never answers fails with an OfflineError (timeout) after the timeout', async () => {
   const t0 = Date.now();
-  await assert.rejects(client(never).getScopeInfo(), (e) => e instanceof core.OfflineError && e.code === 'timeout' && /no answer within/.test(e.message));
+  await assert.rejects(client(never).getScopeInfo(), (e) => e instanceof core.errors.OfflineError && e.code === 'timeout' && /no answer within/.test(e.message));
   assert.ok(Date.now() - t0 >= 50 && Date.now() - t0 < 2000);
 });
 
 test('an answer whose body never arrives fails the same way', async () => {
   const stuck = async () => ({ ok: true, status: 200, headers: new Map(), json: never, arrayBuffer: never });
-  await assert.rejects(client(stuck).getScopeInfo(), (e) => e instanceof core.OfflineError && e.code === 'timeout');
+  await assert.rejects(client(stuck).getScopeInfo(), (e) => e instanceof core.errors.OfflineError && e.code === 'timeout');
   const stuckError = async () => ({ ok: false, status: 500, headers: new Map(), json: never });
-  await assert.rejects(client(stuckError).getScopeInfo(), (e) => e instanceof core.RequestError && e.status === 500);   // an error body that never arrives does not hide the status
+  await assert.rejects(client(stuckError).getScopeInfo(), (e) => e instanceof core.errors.RequestError && e.status === 500);   // an error body that never arrives does not hide the status
 });
 
 test('a fast answer clears the timer, and timeout 0 means no limit', async () => {
@@ -34,7 +34,7 @@ test('a fast answer clears the timer, and timeout 0 means no limit', async () =>
 test('an upload gets one more second per 10 KB, and creating or redeeming gets three times the time', async () => {
   const slow = async () => { await new Promise((r) => setTimeout(r, 300)); return { ok: true, status: 200, headers: new Map() }; };
   const c = client(slow, { timeout: 100 });
-  await assert.rejects(c._req('GET', '/x'), (e) => e instanceof core.OfflineError && e.code === 'timeout');
+  await assert.rejects(c._req('GET', '/x'), (e) => e instanceof core.errors.OfflineError && e.code === 'timeout');
   await assert.rejects(c._req('PUT', '/x', { body: new Uint8Array(9000) }), (e) => e.code === 'timeout');   // 9 KB: still within the first 10 KB
   assert.equal((await c._req('PUT', '/x', { body: new Uint8Array(30000) })).ok, true);                     // 30 KB: 100 ms + 3 s
   assert.equal((await c._req('GET', '/x', { timeout: c._patientMs() })).ok, true);                         // three times 100 ms
@@ -64,7 +64,7 @@ test('a write whose answer is lost after the server stored it counts as saved; w
   assert.deepEqual(await founder.get('note'), { n: 1 });
   assert.equal((await founder.put('note', { n: 2 })).version, 2);   // the client's version counter moved on: no 412 against its own write
   mode = 'down';
-  await assert.rejects(founder.put('note', { n: 3 }), (e) => e instanceof core.OfflineError);   // no way to tell: the caller keeps the value pending
+  await assert.rejects(founder.put('note', { n: 3 }), (e) => e instanceof core.errors.OfflineError);   // no way to tell: the caller keeps the value pending
 });
 
 test('status() while an unlock is running says "locked" (an app may poll isUnlocked() at any time)', async () => {

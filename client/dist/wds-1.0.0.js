@@ -2040,7 +2040,6 @@ return module.exports.argon2id;
   var api = {
     version: VERSION, SERVICE_URL: SERVICE_URL, Client: Client,
     errors: { WDSError: WDSError, ConflictError: ConflictError, OfflineError: OfflineError, QuotaError: QuotaError, AuthError: AuthError, IntegrityError: IntegrityError, VersionError: VersionError, RequestError: RequestError, UsageError: UsageError },
-    ConflictError: ConflictError, OfflineError: OfflineError, QuotaError: QuotaError, AuthError: AuthError, IntegrityError: IntegrityError, VersionError: VersionError, RequestError: RequestError, UsageError: UsageError, WDSError: WDSError,
     memoryStorage: memoryStorage,
     // codes and key file (usable without a Client)
     parseInviteCode: parseInviteCode, parseRecoveryCode: parseRecoveryCode, classifyCode: classifyCode, normalizeCode: normalizeCode,
@@ -2061,46 +2060,27 @@ return module.exports.argon2id;
  * module exports the pure helpers only (passphrase rules, ZIP writer, texts) for the unit tests.
  *
  * App code uses:
- *   const store = WDS.connect({ scope, baseUrl?, locale?, notify?, watch?, label? });
+ *   const store = WDS.connect({ scope, baseUrl?, locale?, label? });
  *   await store.unlock();                         // dialog: create vault / unlock / redeem invite / key file
  *   store.onLock(fn(reason)) / store.onUnlock(fn(status))    // register once, outside start(); reasons: user, revoked, expired
- *   await store.get(name, {fresh?}) / getMany(names, {concurrency, fresh}) / set(name, value, {mime?}) / list(prefix) / getBlob(name)
+ *   await store.get(name, {fresh?}) / getMany(names, {fresh}) / set(name, value, {mime?}) / list(prefix) / getBlob(name)
  *   await store.remove(name)                      // -> {name, deleted, resolution: deleted|absent|mine|theirs, value?}
- *   store.autosave(name, () => state, { delayMs, onStatus, onError, onReplaced })   // -> {changed(), flush(), stop(), status, error, stopReason, name}
- *   const notes = store.collection("notes/", { meta?, index? })   // load, refresh, items, has, get, getAll, add(value, {id, meta, mime, created}), set(id, value, {meta, mime, created}), remove, autosave, flush, rebuild, onChange
+ *   store.autosave(name, () => state, { delayMs, onStatus, onError, onSaved, onResolved })   // -> {changed(), flush(), stop(), status, error}
+ *   const notes = store.collection("notes/", { meta?, index? })   // load, refresh, items, has, get, getAll, add(value, {meta, mime, created}), set(id, value, {meta, mime, created}), remove, autosave, flush, rebuild, onChange
  *   store.onConflict(c => c.keepMine() | c.keepTheirs() | c.merge(fn) | await c.ask())   // global
  *   store.onConflict("notes/", handler) / store.onConflict("settings", handler)           // prefix or exact name -> unsubscribe
  *   await store.history(name) / restore(name, version) / showHistory(name, { title })
  *   await store.share(); await store.exportAll(); store.lock(); store.status() (with sandbox: boolean)
- *   await store.migrateLocal({ id, indexedDB?, localStorage?, tagged?, map(old, h), texts? })   // the data an earlier, local-only version left in this browser
- *       -> { status: nothing | busy | skipped | declined | discarded | failed | partial | migrated, deleted?: deleted | kept | changed, copied?, total?, tooLarge?, differs?, why?, again?, sandbox,
- *            downloadBackup() }   // it resolves for every wrong option only; everything map or the old data cause is { status: "failed", why }
- *       map gets copies of the old rows (it may change them; the old rows are never touched). h.skip(row) deletes the row with the old data: only for rows that are no user data.
- *       old: rows(storeName) -> [{ key, value }], local, keys(prefix?), json(key); h: id(oldKey, ending?), ref(storeName, oldKey, ending?), blob(value, field?), created(x), skip(row, why), fail(row, why)
- *       map returns { items: [{ col, id, value, meta?, created?, mime?, from }], records: [{ name, value, mime?, from }], settings: { record, value, from } }; "from" is the old row
- *       (or localStorage key) an entry comes from: every old row must be claimed by an entry or skipped, or nothing is deleted. WDS.fillGaps(current, old).
- * Typed errors: WDS.errors.{ConflictError, OfflineError, QuotaError, AuthError, IntegrityError, VersionError}. An index write of a collection that
- * failed after the item was stored rejects with err.stored = true, err.id and err.record (the record name).
+ *   await store.migrateLocal({ id, indexedDB?, localStorage?, map(old, h) })   // the data an earlier, local-only version left in this browser
+ *       -> { status: nothing | busy | skipped | declined | partial | failed | migrated, deleted?: deleted | kept | changed, copies?: [names], why? }
+ *       It REJECTS (UsageError) for every wrong option; everything map or the old data cause is { status: "failed", why }.
+ *       old: rows(storeName) -> [{ key, value }], local, json(key); h: id(oldKey, ending?), ref(storeName, oldKey, ending?), blob(value, field?), created(x), skip(row, why)
+ *       map returns { items: [{ col, id, value, meta?, created?, mime?, from }], records: [{ name, value, mime?, from }] }
+ * Typed errors: WDS.errors.{ConflictError, OfflineError, QuotaError, AuthError, IntegrityError, VersionError, UsageError}.
  *
- * Stable attributes: every button, input, select, textarea and summary inside .wds-root has data-wds="<name>", every dialog (a modal <dialog class="wds-root wds-dialog">
- * in the top layer, above modal dialogs of the app) has data-wds-view="<view>", set when the view is rendered, and aria-busy="true" while it waits (loading, progress, a
- * submit in flight): view present and no aria-busy = ready. A dialog is never without a view (it opens as "loading"), and one that cannot go on shows "error" with a retry. Toasts have data-wds-toast="<key>" with buttons toast-action and toast-dismiss.
- *   all dialogs: close, form-error, sandbox-banner (sandbox only); page: sandbox-bar (sandbox only)
- *   loading: (none);  error: retry, reload (it reloads the page and stands in for retry after a view failed to build twice)
- *   unlock: access-id-input, keyfile, keyfile-button, passphrase, show-passphrase, unlock-submit, to-create, to-redeem
- *   create: join-code, passphrase, passphrase-repeat, show-passphrase, recovery-contact-toggle, recovery-contact, create-submit, back
- *   redeem: invite-code-input, passphrase, passphrase-repeat, show-passphrase, redeem-submit, back
- *   sheet: access-id, recovery-code, sheet-keyfile, sheet-print, sheet-download, sheet-confirm, sheet-continue
- *   conflict: conflict-theirs, conflict-mine, conflict-download
- *   history: history-version (data-wds-version), history-preview, history-restore
- *   share: person, person-escrow, member-role, cancel-invite, revoke, invite-role, invite-expiry, invite-label, invite-create, invite-code, invite-copy,
- *          invite-another, me-keyfile, me-renew, me-lock, me-passphrase-toggle, passphrase, passphrase-repeat, show-passphrase, me-passphrase-submit,
- *          recovery-cancel, recovery-keep, recovered-ack, rekey-continue
- *   revoke: revoke-confirm, revoke-cancel, revoke-id;  notice: recovery-cancel, recovery-keep, recovered-ack
- *   migrate: migrate-yes, migrate-backup, migrate-no, migrate-skip-ack (only with skipped rows), migrate-discard, close;  migrate-discard: migrate-discard-confirm, migrate-discard-back, close;  progress: (none);  migrate-differs: migrate-differs-keep-vault, migrate-differs-keep-both, migrate-differs-later, close
- *   migrate-large: migrate-large-download (data-wds-index), migrate-large-ack, migrate-delete, migrate-keep, close;  toast key "migration" (toast-action: backup, on every notice that leaves the old data in place)
- * Dialogs use the class prefix "wds-" and CSS custom properties "--wds-*"; no Shadow DOM; nothing hands the passphrase
- * to app code. Never use innerHTML here: all text goes through textContent.
+ * The views, their data-wds controls and aria-busy: docs/site/integration.md section 12 (views and controls). Every dialog is a modal
+ * <dialog class="wds-root wds-dialog"> with data-wds-view; toasts have data-wds-toast. Class prefix "wds-", custom properties
+ * "--wds-*", no Shadow DOM; nothing hands the passphrase to app code. Never use innerHTML here: all text goes through textContent.
  */
 (function (root, factory) {
   'use strict';
@@ -2112,6 +2092,7 @@ return module.exports.argon2id;
   'use strict';
 
   var UI_VERSION = '1.0.0';
+  var Err = Core.errors;
   var HIBP_URL = 'https://api.pwnedpasswords.com/range/';
   var INTERNAL_PREFIX = '.wds/';          // record names reserved for the library (member labels)
   var LABELS_RECORD = INTERNAL_PREFIX + 'labels';
@@ -2193,7 +2174,7 @@ return module.exports.argon2id;
   var TEXT = {
     en: {
       'common.close': 'Close', 'common.cancel': 'Cancel', 'common.continue': 'Continue', 'common.copy': 'Copy',
-      'common.copied': 'Copied', 'common.dismiss': 'Dismiss', 'common.retry': 'Try again', 'common.reload': 'Reload the page',
+      'common.copied': 'Copied', 'common.dismiss': 'Dismiss', 'common.retry': 'Try again',
       'err.build': 'This dialog could not be built. Reload the page; if it happens again, tell the developer of this app.',
       'common.loading': 'Connecting to the storage service…',
       'common.notifications': 'Notifications',
@@ -2358,23 +2339,20 @@ return module.exports.argon2id;
       'share.status.expired': 'Invite expired',
       'share.status.redeemed': 'Joined {time}',
       'share.status.renewal': 'New keys waiting for approval',
-      'share.status.new': 'New: invite redeemed',
       'share.addedByFaculty': 'Added by the faculty during a recovery',
       'share.revoke': 'Revoke', 'share.cancelInvite': 'Cancel invite', 'share.role': 'Access of {label}',
       'share.status.opened': 'Invite opened with its code, not redeemed yet, valid until {time}',
       'share.revoke.invite.text': 'The code for {label} has already been used to open the invite, so it can no longer be withdrawn quietly. To make the code worthless, all stored data, including the history, is re-encrypted with a new key. This can take a while: keep this window open. If it is interrupted, it continues the next time you unlock.',
       'share.invite.title': 'Invite someone',
-      'share.invite.role': 'Access', 'share.invite.expiry': 'Valid for', 'share.invite.label': 'Label (optional)',
+      'share.invite.role': 'Access', 'share.invite.label': 'Label (optional)',
       'share.invite.label.hint': 'A note for you, for example a first name. It is stored encrypted in this vault.',
       'share.invite.create': 'Create invite code',
-      'share.expiry.sandbox': 'Until tonight ({time})',
       'share.invite.sandboxLate': 'The sandbox is emptied at {time}. An invite must be valid for at least one hour, so none can be created now.',
       'share.invite.busy': 'Creating the invite…',
       'share.invite.result': 'Invite code',
       'share.invite.until': 'Valid until {time}.',
       'share.invite.hint': 'Hand the code over in person, or through a different channel than the one the data of this app is about. Whoever holds the code can join once. You can cancel it until it is used.',
       'share.invite.another': 'Create another invite',
-      'share.expiry.1': '1 day', 'share.expiry.2': '2 days (default)', 'share.expiry.7': '7 days', 'share.expiry.14': '14 days',
       'share.revoke.title': 'Revoke access?',
       'share.revoke.text': '{label} loses access immediately. All stored data, including the history, is then re-encrypted with a new key. This can take a while: keep this window open. If it is interrupted, it continues the next time you unlock.',
       'share.revoke.confirm': 'Revoke access',
@@ -2429,16 +2407,6 @@ return module.exports.argon2id;
       'migrate.question.skipped': '{n} entries are not taken over because the app does not use them. They are deleted with the rest of the old data; the backup contains them.',
       'migrate.skip.ack': 'I do not need these {n} entries (or I have downloaded the backup).',
       'migrate.question.none': 'This browser holds data of an earlier version of this app, but nothing in it can be taken over: this app does not use {n} of the entries.',
-      'migrate.discard': 'Do not take over; delete the old data',
-      'migrate.discard.title': 'Delete the old data?',
-      'migrate.discard.text': 'The old data is deleted from this browser without being copied into your vault. This cannot be undone. Download the backup first if you may need it.',
-      'migrate.discard.text.sandbox': 'The old data would be deleted from this browser without being copied into your vault. Sandbox: it stays in this browser.',
-      'migrate.discard.back': 'Go back', 'migrate.discard.confirm': 'Delete the old data',
-      'migrate.done.discarded': 'The old data was deleted from this browser.',
-      'migrate.done.discarded.kept': 'Sandbox: the old data stays in this browser.',
-      'migrate.done.settings': 'The settings of the earlier version were taken over and its old data was deleted from this browser.',
-      'migrate.done.settings.kept': 'The settings of the earlier version were taken over. Sandbox: the old data stays in this browser.',
-      'migrate.backup.nofiles': 'The {n} files do not fit into one ZIP file. They were saved as separate downloads next to the data file.',
       'migrate.backup.failed': 'The backup could not be created: {why}',
       'migrate.backup.none': 'There is no old data left in this browser.',
       'migrate.question.later': 'If you choose "Not now", the old data stays unencrypted in this browser and you are asked again next time.',
@@ -2448,23 +2416,16 @@ return module.exports.argon2id;
       'migrate.yes': 'Take over', 'migrate.no': 'Not now',
       'migrate.progress': 'Taking over: {done} of {total}',
       'migrate.progress.check': 'Checking the copy: {done} of {total}',
-      'migrate.differs.title': 'Entries that differ',
-      'migrate.differs.text': '{n} entries already exist in your vault with other content (for example because you changed them in the new version). The old versions were not copied. What should happen?',
-      'migrate.differs.keepVault': 'Keep the versions in the vault',
-      'migrate.differs.keepBoth': 'Keep both (old versions as copies)',
-      'migrate.differs.later': 'Decide later',
-      'migrate.differs.hint': 'The old versions are deleted from this browser with the rest of the old data. Download the backup first if you may need them.',
       'migrate.large.title': 'Some entries cannot be copied',
       'migrate.large.text': '{n} entries do not fit into your vault. They exist only in this browser: download them now. Entries that referred to them lose that link.',
-      'migrate.large.download': 'Download',
-      'migrate.large.ack': 'I have saved the files or do not need them',
+      'migrate.large.download': 'Download these files',
       'migrate.large.delete': 'Delete the old data anyway', 'migrate.large.keep': 'Keep the old data',
       'migrate.done.deleted': '{n} entries are now in your vault and were deleted from this browser.',
       'migrate.done.kept': '{n} entries were copied into your vault. Sandbox: the old data stays in this browser.',
       'migrate.done.changed': 'The old data was used again in the meantime and is still here. Open the app again; the rest is taken over then.',
       'migrate.done.again': 'The old data that was already copied has now been deleted from this browser.',
-      'migrate.partial': 'The old data was taken over, except entries that did not fit. The old data stays in this browser; you are asked again at the next start.',
-      'migrate.partial.differs': 'Some old entries differ from the vault and were not decided yet. The old data stays in this browser; you are asked again at the next start.',
+      'migrate.partial': 'The old data was not taken over completely. The old data stays in this browser; you are asked again at the next start.',
+      'migrate.done.copies': 'Entries that already existed in your vault with other content: {n}. The old versions were saved next to them as copies.',
       'migrate.failed': 'Taking over the old data failed. Nothing was deleted: it stays in this browser. You can download a backup of it. If this happens again, tell the person who runs this app.',
       'migrate.skipped': 'This browser still holds data of an earlier version of this app. It can only be taken over into a vault of your own; in this vault you are a member.',
       'err.sandboxDisabled': 'The sandbox is not available at the moment.',
@@ -2472,7 +2433,7 @@ return module.exports.argon2id;
     },
     de: {
       'common.close': 'Schließen', 'common.cancel': 'Abbrechen', 'common.continue': 'Weiter', 'common.copy': 'Kopieren',
-      'common.copied': 'Kopiert', 'common.dismiss': 'Ausblenden', 'common.retry': 'Erneut versuchen', 'common.reload': 'Seite neu laden',
+      'common.copied': 'Kopiert', 'common.dismiss': 'Ausblenden', 'common.retry': 'Erneut versuchen',
       'err.build': 'Dieses Fenster konnte nicht aufgebaut werden. Lade die Seite neu; passiert es wieder, sag den Entwicklern dieser App Bescheid.',
       'common.loading': 'Verbindung zum Speicherdienst wird aufgebaut …',
       'common.notifications': 'Hinweise',
@@ -2637,23 +2598,20 @@ return module.exports.argon2id;
       'share.status.expired': 'Einladung abgelaufen',
       'share.status.redeemed': 'Beigetreten {time}',
       'share.status.renewal': 'Neue Schlüssel warten auf Bestätigung',
-      'share.status.new': 'Neu: Einladung eingelöst',
       'share.addedByFaculty': 'Von der Fakultät bei einer Wiederherstellung hinzugefügt',
       'share.revoke': 'Entziehen', 'share.cancelInvite': 'Einladung zurückziehen', 'share.role': 'Zugriff von {label}',
       'share.status.opened': 'Einladung mit ihrem Code geöffnet, noch nicht eingelöst, gültig bis {time}',
       'share.revoke.invite.text': 'Der Code für {label} wurde bereits benutzt, um die Einladung zu öffnen. Deshalb lässt sie sich nicht mehr unbemerkt zurückziehen. Damit der Code wertlos wird, werden alle gespeicherten Daten samt Verlauf mit einem neuen Schlüssel neu verschlüsselt. Das kann dauern: Lassen Sie dieses Fenster geöffnet. Bei einer Unterbrechung läuft es beim nächsten Entsperren weiter.',
       'share.invite.title': 'Jemanden einladen',
-      'share.invite.role': 'Zugriff', 'share.invite.expiry': 'Gültig für', 'share.invite.label': 'Bezeichnung (optional)',
+      'share.invite.role': 'Zugriff', 'share.invite.label': 'Bezeichnung (optional)',
       'share.invite.label.hint': 'Eine Notiz für Sie, zum Beispiel ein Vorname. Sie wird verschlüsselt in diesem Tresor gespeichert.',
       'share.invite.create': 'Einladungscode erzeugen',
-      'share.expiry.sandbox': 'Bis heute Nacht ({time})',
       'share.invite.sandboxLate': 'Die Testumgebung wird um {time} geleert. Eine Einladung muss mindestens eine Stunde gültig sein, deshalb kann jetzt keine erzeugt werden.',
       'share.invite.busy': 'Die Einladung wird erzeugt …',
       'share.invite.result': 'Einladungscode',
       'share.invite.until': 'Gültig bis {time}.',
       'share.invite.hint': 'Geben Sie den Code persönlich weiter oder über einen anderen Kanal als den, um dessen Daten es in dieser App geht. Wer den Code hat, kann einmal beitreten. Sie können ihn zurückziehen, solange er nicht benutzt wurde.',
       'share.invite.another': 'Weitere Einladung erzeugen',
-      'share.expiry.1': '1 Tag', 'share.expiry.2': '2 Tage (Standard)', 'share.expiry.7': '7 Tage', 'share.expiry.14': '14 Tage',
       'share.revoke.title': 'Zugriff entziehen?',
       'share.revoke.text': '{label} verliert sofort den Zugriff. Alle gespeicherten Daten samt Verlauf werden danach mit einem neuen Schlüssel neu verschlüsselt. Das kann dauern: Lassen Sie dieses Fenster geöffnet. Bei einer Unterbrechung läuft es beim nächsten Entsperren weiter.',
       'share.revoke.confirm': 'Zugriff entziehen',
@@ -2708,16 +2666,6 @@ return module.exports.argon2id;
       'migrate.question.skipped': '{n} Einträge werden nicht übernommen, weil die App sie nicht verwendet. Sie werden mit den übrigen alten Daten gelöscht; die Sicherung enthält sie.',
       'migrate.skip.ack': 'Ich brauche diese {n} Einträge nicht (oder habe die Sicherung heruntergeladen).',
       'migrate.question.none': 'In diesem Browser liegen Daten einer früheren Version dieser App, von denen sich nichts übernehmen lässt: {n} der Einträge verwendet diese App nicht.',
-      'migrate.discard': 'Nicht übernehmen, alte Daten löschen',
-      'migrate.discard.title': 'Alte Daten löschen?',
-      'migrate.discard.text': 'Die alten Daten werden aus diesem Browser gelöscht, ohne in Ihren Tresor kopiert zu werden. Das lässt sich nicht rückgängig machen. Laden Sie vorher die Sicherung herunter, falls Sie sie brauchen könnten.',
-      'migrate.discard.text.sandbox': 'Die alten Daten würden aus diesem Browser gelöscht, ohne in Ihren Tresor kopiert zu werden. Testumgebung: Sie bleiben in diesem Browser.',
-      'migrate.discard.back': 'Zurück', 'migrate.discard.confirm': 'Alte Daten löschen',
-      'migrate.done.discarded': 'Die alten Daten wurden aus diesem Browser gelöscht.',
-      'migrate.done.discarded.kept': 'Testumgebung: Die alten Daten bleiben in diesem Browser.',
-      'migrate.done.settings': 'Die Einstellungen der früheren Version wurden übernommen, die alten Daten aus diesem Browser gelöscht.',
-      'migrate.done.settings.kept': 'Die Einstellungen der früheren Version wurden übernommen. Testumgebung: Die alten Daten bleiben in diesem Browser.',
-      'migrate.backup.nofiles': 'Die {n} Dateien passen nicht in eine ZIP-Datei. Sie wurden neben der Datendatei einzeln heruntergeladen.',
       'migrate.backup.failed': 'Die Sicherung konnte nicht erstellt werden: {why}',
       'migrate.backup.none': 'In diesem Browser liegen keine alten Daten mehr.',
       'migrate.question.later': 'Wenn Sie „Später“ wählen, bleiben die alten Daten unverschlüsselt in diesem Browser und Sie werden beim nächsten Start wieder gefragt.',
@@ -2727,23 +2675,16 @@ return module.exports.argon2id;
       'migrate.yes': 'Übernehmen', 'migrate.no': 'Später',
       'migrate.progress': 'Wird übernommen: {done} von {total}',
       'migrate.progress.check': 'Kopie wird geprüft: {done} von {total}',
-      'migrate.differs.title': 'Abweichende Einträge',
-      'migrate.differs.text': '{n} Einträge gibt es in Ihrem Tresor schon mit anderem Inhalt (zum Beispiel, weil Sie sie in der neuen Version geändert haben). Die alten Versionen wurden nicht kopiert. Was soll geschehen?',
-      'migrate.differs.keepVault': 'Versionen im Tresor behalten',
-      'migrate.differs.keepBoth': 'Beide behalten (alte Versionen als Kopien)',
-      'migrate.differs.later': 'Später entscheiden',
-      'migrate.differs.hint': 'Die alten Versionen werden mit den übrigen alten Daten aus diesem Browser gelöscht. Laden Sie vorher die Sicherung herunter, falls Sie sie brauchen könnten.',
       'migrate.large.title': 'Einige Einträge lassen sich nicht kopieren',
       'migrate.large.text': '{n} Einträge passen nicht in Ihren Tresor. Sie liegen nur in diesem Browser: Laden Sie sie jetzt herunter. Einträge, die auf sie verwiesen, verlieren diese Verknüpfung.',
-      'migrate.large.download': 'Herunterladen',
-      'migrate.large.ack': 'Ich habe die Dateien gespeichert oder brauche sie nicht',
+      'migrate.large.download': 'Diese Dateien herunterladen',
       'migrate.large.delete': 'Alte Daten trotzdem löschen', 'migrate.large.keep': 'Alte Daten behalten',
       'migrate.done.deleted': '{n} Einträge sind jetzt in Ihrem Tresor und wurden aus diesem Browser gelöscht.',
       'migrate.done.kept': '{n} Einträge wurden in Ihren Tresor kopiert. Testumgebung: Die alten Daten bleiben in diesem Browser.',
       'migrate.done.changed': 'Die alten Daten wurden inzwischen wieder benutzt und sind noch da. Öffnen Sie die App erneut, dann wird der Rest übernommen.',
       'migrate.done.again': 'Die bereits kopierten alten Daten wurden jetzt aus diesem Browser gelöscht.',
-      'migrate.partial': 'Die alten Daten wurden übernommen, außer den Einträgen, die nicht gepasst haben. Die alten Daten bleiben in diesem Browser; beim nächsten Start werden Sie erneut gefragt.',
-      'migrate.partial.differs': 'Einige alte Einträge weichen vom Tresor ab und sind noch nicht entschieden. Die alten Daten bleiben in diesem Browser; beim nächsten Start werden Sie erneut gefragt.',
+      'migrate.partial': 'Die alten Daten wurden nicht vollständig übernommen. Die alten Daten bleiben in diesem Browser; beim nächsten Start werden Sie erneut gefragt.',
+      'migrate.done.copies': 'Einträge, die in Ihrem Tresor schon mit anderem Inhalt existierten: {n}. Die alten Versionen wurden daneben als Kopien gespeichert.',
       'migrate.failed': 'Die Übernahme der alten Daten ist fehlgeschlagen. Es wurde nichts gelöscht: Die Daten bleiben in diesem Browser. Sie können eine Sicherung herunterladen. Wenn das wieder passiert, melden Sie sich bei der Person, die diese App betreibt.',
       'migrate.skipped': 'In diesem Browser liegen noch Daten einer früheren Version dieser App. Sie lassen sich nur in einen eigenen Tresor übernehmen; in diesem Tresor sind Sie Mitglied.',
       'err.sandboxDisabled': 'Die Testumgebung ist im Moment nicht verfügbar.',
@@ -2989,11 +2930,11 @@ return module.exports.argon2id;
     var d = when || new Date();
     var dosTime = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
     var dosDate = (Math.max(0, d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
-    if (entries.length > 65535) throw new Core.WDSError('too many entries for one ZIP file');
+    if (entries.length > 65535) throw new Err.WDSError('too many entries for one ZIP file');
     var parts = [], central = [], offset = 0;
     entries.forEach(function (e) {
       var name = utf8(e.name), data = typeof e.data === 'string' ? utf8(e.data) : e.data;
-      if (name.length > 65535 || data.length > 0xfffffffe) throw new Core.WDSError('entry too large for a ZIP file');
+      if (name.length > 65535 || data.length > 0xfffffffe) throw new Err.WDSError('entry too large for a ZIP file');
       var crc = crc32(data);
       var lh = new DataView(new ArrayBuffer(30));
       lh.setUint32(0, 0x04034b50, true); lh.setUint16(4, 20, true); lh.setUint16(6, 0x0800, true); lh.setUint16(8, 0, true);
@@ -3008,7 +2949,7 @@ return module.exports.argon2id;
       parts.push(new Uint8Array(lh.buffer), name, data);
       central.push(new Uint8Array(ch.buffer), name);
       offset += 30 + name.length + data.length;
-      if (offset > 0xfffffff0) throw new Core.WDSError('archive too large for a ZIP file (4 GiB limit)');
+      if (offset > 0xfffffff0) throw new Err.WDSError('archive too large for a ZIP file (4 GiB limit)');
     });
     var cdSize = 0;
     central.forEach(function (c) { cdSize += c.length; });
@@ -3129,7 +3070,6 @@ return module.exports.argon2id;
     '.wds-root.wds-dialog:not([open]){display:none!important}',
     '.wds-root.wds-dialog.wds-dialog-wide{width:min(46rem,calc(100vw - 2rem))!important}',
     '.wds-root.wds-dialog::backdrop{background:var(--_backdrop,rgba(15,20,30,.55))!important;opacity:1!important;visibility:visible!important;display:block!important}',
-    '.wds-root.wds-dialog.wds-dragover{outline:3px dashed var(--_accent);outline-offset:3px}',
     '.wds-head{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;padding:1.15rem 1.4rem .3rem}',
     '.wds-title{margin:0;font-size:1.25rem;line-height:1.3;font-weight:650;color:inherit}',
     '.wds-sub{margin:.15rem 0 0;color:var(--_muted);font-size:.9rem}',
@@ -3177,7 +3117,6 @@ return module.exports.argon2id;
     '.wds-people{list-style:none;margin:.4rem 0;padding:0}',
     '.wds-person{display:flex;flex-wrap:wrap;gap:.5rem .9rem;align-items:center;border:1px solid var(--_border);border-radius:calc(var(--_radius) - 2px);padding:.65rem .8rem;margin:.5rem 0}',
     '.wds-person-main{flex:1 1 13rem;min-width:0}.wds-person-name{font-weight:600}.wds-person-info{color:var(--_muted);font-size:.875rem}',
-    '.wds-person-new{border-color:var(--_accent)}',
     '.wds-badge{display:inline-block;font-size:.75rem;font-weight:500;padding:.05rem .5rem;margin-left:.4rem;border-radius:99px;border:1px solid var(--_border);background:var(--_soft);color:var(--_muted);vertical-align:.1em}',
     '.wds-compare{display:grid;grid-template-columns:1fr 1fr;gap:.8rem;margin:1rem 0}',
     '@media (max-width:36rem){.wds-compare{grid-template-columns:1fr}.wds-dl{grid-template-columns:1fr}.wds-code{font-size:.875rem;letter-spacing:.02em}}',
@@ -3540,16 +3479,14 @@ return module.exports.argon2id;
   // A dialog that cannot go on (a request failed, a view could not be built): the "error" view with the reason and a retry. A dialog always ends
   // in a view that a person (or a test) can act on, never in a loading view that nothing will finish.
   // An error that is not one of the library's own (a view that could not be built) shows a fixed sentence, not the exception text, which is
-  // for the console; "reload" (a button that reloads the page instead of "retry") is for a view that failed again after a retry.
-  function showErrorView(S, dlg, title, e, where, retry, reload) {
+  // for the console.
+  function showErrorView(S, dlg, title, e, where, retry) {
     var text;
-    try { text = e instanceof Core.WDSError ? explainError(S, e, where) : S.t('err.build'); } catch (e2) { text = S.t('err.build'); }
+    try { text = e instanceof Err.WDSError ? explainError(S, e, where) : S.t('err.build'); } catch (e2) { text = S.t('err.build'); }
     clear(dlg.body); dlg.setTitle(title);
     append(dlg.body, [
       el('div', { 'data-wds': 'form-error', 'aria-live': 'polite' }, msg('error', text)),
-      el('div', { class: 'wds-actions' }, [reload
-        ? btn(S.t('common.reload'), { primary: true, wds: 'reload', onClick: function () { try { location.reload(); } catch (e3) { /* no reload */ } } })
-        : btn(S.t('common.retry'), { primary: true, wds: 'retry', onClick: retry })]),
+      el('div', { class: 'wds-actions' }, [btn(S.t('common.retry'), { primary: true, wds: 'retry', onClick: retry })]),
     ]);
     dlg.setView('error');
     dlg.focusFirst();
@@ -3559,10 +3496,10 @@ return module.exports.argon2id;
 
   function explainError(S, e, where) {
     var t = S.t;
-    if (e instanceof Core.OfflineError) return t('err.offline');
-    if (e instanceof Core.VersionError) return t('note.version', { message: e.message });
-    if (e instanceof Core.IntegrityError) return e.code === 'rollback' ? t('err.rollback') : t('err.integrity', { code: e.code || 'integrity' });
-    if (e instanceof Core.AuthError) {
+    if (e instanceof Err.OfflineError) return t('err.offline');
+    if (e instanceof Err.VersionError) return t('note.version', { message: e.message });
+    if (e instanceof Err.IntegrityError) return e.code === 'rollback' ? t('err.rollback') : t('err.integrity', { code: e.code || 'integrity' });
+    if (e instanceof Err.AuthError) {
       if (e.code === 'revoked') return t('err.revoked');
       if (e.code === 'vault_deleted') return t('err.vaultDeleted');
       if (e.code === 'invite_expired' || e.status === 410) return t('err.expired');
@@ -3737,40 +3674,29 @@ return module.exports.argon2id;
       function done(result) { if (settled) return; settled = true; dlg.close(); resolve(result); }
       dlg = dialogFor(S, {
         title: t('unlock.title'), view: 'loading', cancelable: !!o.cancelable, closeLabel: t('common.close'),
-        onClose: function () { if (!settled) { settled = true; reject(new Core.UsageError('unlock was cancelled', { code: 'cancelled' })); } },
+        onClose: function () { if (!settled) { settled = true; reject(new Err.UsageError('unlock was cancelled', { code: 'cancelled' })); } },
       });
       function appLine() { return el('p', { class: 'wds-sub', text: t('unlock.app', { name: appLabel(S, S.info ? S.info.name : client.scope) }) }); }
 
-      // ---- key files: anywhere on the dialog ----
-      // A key file is taken only while the unlock form is shown and idle: never over the access sheet (the recovery code would vanish
-      // unconfirmed), over a form that is being submitted, or over a view that still loads.
-      function takesKeyFile() { return !dlg.closed && dlg.dialog.getAttribute('data-wds-view') === 'unlock' && !dlg.dialog.hasAttribute('aria-busy'); }
+      // ---- key file (the button of the unlock form) ----
+      function onUnlockView() { return !dlg.closed && dlg.dialog.getAttribute('data-wds-view') === 'unlock'; }
       async function loadKeyFile(file, afterLoad) {
-        if (!takesKeyFile()) return;
         try {
-          if (file.size > 20000) throw new Core.UsageError('not a key file', { code: 'invalid_keyfile' });
+          if (file.size > 20000) throw new Err.UsageError('not a key file', { code: 'invalid_keyfile' });
           var kf = await Core.parseKeyFile(await file.text(), { scope: client.scope, service: client.service });
-          if (!takesKeyFile()) return;   // the view changed while the file was read
+          if (!onUnlockView()) return;   // the view changed while the file was read
           st.accessId = kf.accessId; st.vaultId = kf.vaultId; st.notice = { kind: 'ok', text: t('unlock.keyfile.loaded') };
           viewUnlock();
         } catch (e) {
-          if (!takesKeyFile()) return;
+          if (!onUnlockView()) return;
           if (afterLoad) afterLoad(explainError(S, e, 'unlock'));
           else { st.notice = { kind: 'error', text: explainError(S, e, 'unlock') }; viewUnlock(); }
         }
       }
-      dlg.dialog.addEventListener('dragover', function (ev) { ev.preventDefault(); dlg.dialog.classList.add('wds-dragover'); });
-      dlg.dialog.addEventListener('dragleave', function (ev) { if (ev.target === dlg.dialog) dlg.dialog.classList.remove('wds-dragover'); });
-      dlg.dialog.addEventListener('drop', function (ev) {
-        ev.preventDefault(); dlg.dialog.classList.remove('wds-dragover');
-        var files = ev.dataTransfer && ev.dataTransfer.files;
-        if (files && files[0] && takesKeyFile()) loadKeyFile(files[0]);
-      });
 
       var loadGen = 0;   // every view switch bumps it: the answer of an earlier scope request must not replace the view that is shown now
       function frame(view, title, children) {
         loadGen++;
-        if (view !== 'loading' && view !== 'error') buildFailures = 0;
         clear(dlg.body); dlg.setTitle(title);
         append(dlg.body, children);
         dlg.setView(view);   // set when the controls are in place
@@ -3791,13 +3717,11 @@ return module.exports.argon2id;
       // ---- loading and fatal errors ----
       // A view that fails to build (an exception, not only a failed request) must not leave the dialog loading for ever: it ends in the
       // "error" view with a retry, which starts again at the scope information.
-      var buildFailures = 0;   // consecutive views that could not be built: the second one offers a page reload instead of a retry that fails the same way
       function fatal(e) {
         if (typeof console !== 'undefined' && console.error) console.error('wds: unlock dialog: ' + ((e && e.message) || e));
         if (dlg.closed) return;
         loadGen++;
-        if (e instanceof Core.WDSError) buildFailures = 0; else buildFailures++;
-        try { showErrorView(S, dlg, t('unlock.title'), e, 'scope', function () { viewLoading(); }, buildFailures >= 2); }
+        try { showErrorView(S, dlg, t('unlock.title'), e, 'scope', function () { viewLoading(); }); }
         catch (e2) { dlg.setView('error'); }   // even then the dialog is no longer loading
       }
       function guarded(fn) { return function () { try { return fn.apply(this, arguments); } catch (e) { fatal(e); return undefined; } }; }
@@ -3850,17 +3774,8 @@ return module.exports.argon2id;
           } catch (e) {
             fs.disabled = false; dlg.setBusy(false); showBusy(busy, '');
             if (e && e.code === 'invite_not_redeemed') { st.inviteCode = raw; viewRedeem(); return; }
-            // The error comes first: the form is usable again and must not wait for the check below.
             append(formErr, msg('error', explainError(S, e, 'unlock')));
-            if (e instanceof Core.AuthError && e.code !== 'revoked' && e.status !== 410) { pw.input.select(); pw.focus(); } else idInput.focus();
-            // The dialog may have been open across a nightly wipe of a sandbox: ask again (for at most 5 s) whether the remembered vault is gone.
-            // Only a form that is still there and idle is replaced.
-            if (isSandbox(S) && client.rememberedAccessId() === accessId && !(e instanceof Core.OfflineError)) {
-              try {
-                await Promise.race([S.getInfo(true), new Promise(function (_, no) { setTimeout(function () { no(new Error('slow')); }, 5000); })]);
-                if (!dlg.closed && form.isConnected && !dlg.dialog.hasAttribute('aria-busy')) sandboxEmptied();
-              } catch (e3) { /* the error above stays */ }
-            }
+            if (e instanceof Err.AuthError && e.code !== 'revoked' && e.status !== 410) { pw.input.select(); pw.focus(); } else idInput.focus();
           }
         } }, fs);
         var links = el('div', { class: 'wds-actions' }, [linkBtn(t('unlock.toCreate'), viewCreate, 'to-create'), el('span', { class: 'wds-spacer' }), linkBtn(t('unlock.toRedeem'), function () { viewRedeem(); }, 'to-redeem')]);
@@ -4015,7 +3930,7 @@ return module.exports.argon2id;
       var chosen = false;
       // A lock (the session ended while the question was open) closes the dialog: the write that asked fails like any write after a lock.
       var dlg = dialogFor(S, { title: t(isDelete ? 'conflict.delete.title' : 'conflict.title'), view: 'conflict', wide: true,
-        onClose: function () { if (!chosen) reject(new Core.UsageError('the session ended while a conflict was waiting for a decision', { code: 'locked' })); } });
+        onClose: function () { if (!chosen) reject(new Err.UsageError('the session ended while a conflict was waiting for a decision', { code: 'locked' })); } });
       function choose(which) { chosen = true; dlg.close(); resolve(which); }
       var theirs = c.theirs ? Object.assign({ who: 'theirs' }, c.theirs) : null;
       var mine = Object.assign({ who: 'mine' }, c.mine);
@@ -4127,9 +4042,9 @@ return module.exports.argon2id;
     var t = S.t, client = S.client;
     return new Promise(function (resolve) {
       var dlg = dialogFor(S, { title: t('share.title'), view: 'share', wide: true, cancelable: true, closeLabel: t('common.close'), onClose: function () { resolve(); } });
-      var st = { view: 'main', invite: null, flash: null, revokeSlot: null, error: null };
-      var locked = false;
-      var seenAtOpen = api.seen.get(); // what counts as "new" stays fixed while the dialog is open
+      // inviteRole and inviteLabel are what the person chose in the invite form: any re-render (the roster refresh, a flash, a failed attempt) shows them again.
+      var st = { view: 'main', invite: null, flash: null, revokeSlot: null, inviteRole: 'write', inviteLabel: '' };
+      var locked = false, maintaining = false;
 
       function setFlash(kind, text) { st.flash = text ? { kind: kind, text: text } : null; }
       function explain(e) {
@@ -4138,7 +4053,7 @@ return module.exports.argon2id;
       }
       async function guard(fn) {
         try { return await fn(); } catch (e) {
-          if (e instanceof Core.AuthError && (e.code === 'revoked' || e.status === 401)) { api.onRevoked(); dlg.close(); return undefined; }
+          if (e instanceof Err.AuthError && (e.code === 'revoked' || e.status === 401)) { api.onRevoked(); dlg.close(); return undefined; }
           setFlash('error', explain(e)); st.view = 'main'; render(); return undefined;
         }
       }
@@ -4167,7 +4082,7 @@ return module.exports.argon2id;
           st.view = 'main'; render('close');
         }, function (e) {
           dlg.setCancelable(true);
-          if (e instanceof Core.AuthError && (e.code === 'revoked' || e.status === 401)) { api.onRevoked(); dlg.close(); return; }
+          if (e instanceof Err.AuthError && (e.code === 'revoked' || e.status === 401)) { api.onRevoked(); dlg.close(); return; }
           setFlash('error', explain(e) + ' ' + t('share.revoke.partial')); st.view = 'main'; render();
         });
       }
@@ -4212,32 +4127,25 @@ return module.exports.argon2id;
             el('p', { class: 'wds-hint', text: t('share.invite.hint') }),
           ]);
         }
-        var role = el('select', { class: 'wds-select', id: uid('wds-role'), 'data-wds': 'invite-role' }, [
+        var role = el('select', { class: 'wds-select', id: uid('wds-role'), 'data-wds': 'invite-role', onchange: function () { st.inviteRole = role.value; } }, [
           el('option', { value: 'write', text: t('role.write') }), el('option', { value: 'read', text: t('role.read') }),
         ]);
-        var expiry;
+        role.value = st.inviteRole;
+        // Valid for 2 days. The server refuses an invite that outlives the next nightly wipe of a sandbox: there it is valid until then (with a margin for clock differences).
+        var expiresIn = 172800;
         if (isSandbox(S)) {
-          // The server refuses an invite that outlives the next nightly wipe: the only choice is "until then" (with a margin for clock differences).
           var wipeAt = S.info.sandbox.next_wipe, left = Math.floor(wipeAt - S.now() / 1000) - 300;
           if (left < 3600) {
             return el('div', { class: 'wds-section' }, [el('h3', { text: t('share.invite.title') }), msg('warn', t('share.invite.sandboxLate', { time: formatTime(wipeAt, S.lang) }))]);
           }
-          expiry = el('select', { class: 'wds-select', id: uid('wds-exp'), 'data-wds': 'invite-expiry' }, [
-            el('option', { value: String(Math.min(left, 14 * 86400)), text: t('share.expiry.sandbox', { time: formatTime(wipeAt, S.lang) }) }),
-          ]);
-        } else {
-          expiry = el('select', { class: 'wds-select', id: uid('wds-exp'), 'data-wds': 'invite-expiry' }, [
-            el('option', { value: '86400', text: t('share.expiry.1') }), el('option', { value: '172800', selected: 'selected', text: t('share.expiry.2') }),
-            el('option', { value: '604800', text: t('share.expiry.7') }), el('option', { value: '1209600', text: t('share.expiry.14') }),
-          ]);
-          expiry.value = '172800';
+          expiresIn = Math.min(left, expiresIn);
         }
-        var labelInput = inp({ maxlength: 60, wds: 'invite-label' });
+        var labelInput = inp({ maxlength: 60, wds: 'invite-label', value: st.inviteLabel });
+        labelInput.addEventListener('input', function () { st.inviteLabel = labelInput.value; });
         var fLabel = field({ label: t('share.invite.label'), input: labelInput, hint: t('share.invite.label.hint') });
         var busy = busyLine();
         var fs = el('fieldset', { class: 'wds-fs' }, [
           el('div', { class: 'wds-field' }, [el('label', { class: 'wds-label', for: role.id, text: t('share.invite.role') }), role]),
-          el('div', { class: 'wds-field' }, [el('label', { class: 'wds-label', for: expiry.id, text: t('share.invite.expiry') }), expiry]),
           fLabel.wrap,
           el('div', { class: 'wds-actions' }, [btn(t('share.invite.create'), { type: 'submit', primary: true, wds: 'invite-create' })]), busy,
         ]);
@@ -4245,27 +4153,26 @@ return module.exports.argon2id;
           el('h3', { text: t('share.invite.title') }),
           el('form', { novalidate: 'novalidate', onsubmit: async function (ev) {
             ev.preventDefault();
-            fs.disabled = true; showBusy(busy, t('share.invite.busy'));
+            fs.disabled = true; st.submitting = true; showBusy(busy, t('share.invite.busy'));
             try {
-              var res = await client.createInvite({ role: role.value, expiresIn: Number(expiry.value) });
+              var res = await client.createInvite({ role: role.value, expiresIn: expiresIn });
               var label = labelInput.value.trim();
               if (label) { try { await api.labels.set(res.slotId, label); } catch (e) { /* label is a convenience */ } }
-              st.invite = res; setFlash(null); render('invite-code');
+              st.submitting = false; st.invite = res; st.inviteRole = 'write'; st.inviteLabel = ''; setFlash(null); render('invite-code');
             } catch (e) {
-              fs.disabled = false; showBusy(busy, '');
-              if (e instanceof Core.AuthError && (e.code === 'revoked' || e.status === 401)) { api.onRevoked(); dlg.close(); return; }
+              st.submitting = false; fs.disabled = false; showBusy(busy, '');
+              if (e instanceof Err.AuthError && (e.code === 'revoked' || e.status === 401)) { api.onRevoked(); dlg.close(); return; }
               setFlash('error', explain(e)); render();
             }
           } }, fs),
         ]);
       }
 
-      function peopleSection(members, seen) {
+      function peopleSection(members) {
         var idx = 0;
         var items = members.map(function (m) {
           if (!m.self && !m.escrow) idx++;
           var label = labelOf(m, idx);
-          var isNew = !!m.redeemed && !m.self && seen.indexOf(m.slotId) < 0;
           var badges = [];
           if (m.escrow) badges.push(el('span', { class: 'wds-badge', text: t('share.escrow.badge') }));   // not "owner": the faculty does not own the vault
           else if (m.role === 'owner' || m.self) badges.push(el('span', { class: 'wds-badge', text: t('role.' + m.role) }));
@@ -4279,7 +4186,6 @@ return module.exports.argon2id;
           if (m.renewalPending && !m.escrow) info.push(t('share.status.renewal'));
           if (m.addedByEscrow) info.push(t('share.addedByFaculty'));
           if (!m.self && !m.escrow) info.push(t('share.slotId', { id: shortId(m.slotId) }));
-          if (isNew) badges.push(el('span', { class: 'wds-badge', text: t('share.status.new') }));
           var actions = [];
           if (!m.self && !m.escrow && m.role !== 'owner') {
             var sel = el('select', { class: 'wds-select', style: 'width:auto', 'data-wds': 'member-role', 'aria-label': t('share.role', { label: label }), onchange: function () {
@@ -4308,7 +4214,7 @@ return module.exports.argon2id;
           if (!m.self && !m.escrow && m.role === 'owner' && m.revocable) {
             actions.push(btn(t('share.revoke'), { small: true, danger: true, wds: 'revoke', onClick: function () { st.revokeSlot = { slotId: m.slotId, label: label, owner: true }; st.view = 'revoke'; render(); } }));
           }
-          return el('li', { class: 'wds-person' + (isNew ? ' wds-person-new' : ''), 'data-wds': m.escrow ? 'person-escrow' : 'person' }, [
+          return el('li', { class: 'wds-person', 'data-wds': m.escrow ? 'person-escrow' : 'person' }, [
             el('div', { class: 'wds-person-main' }, [el('div', { class: 'wds-person-name' }, [label, badges]), el('div', { class: 'wds-person-info', text: info.join(' · ') })]),
             actions,
           ]);
@@ -4343,11 +4249,11 @@ return module.exports.argon2id;
             ev.preventDefault(); clear(out);
             var checked = await pw.validate();
             if (!checked) return;
-            fs.disabled = true; dlg.setBusy(true); showBusy(busy, t('unlock.busy'));
+            fs.disabled = true; st.submitting = true; dlg.setBusy(true); showBusy(busy, t('unlock.busy'));
             await nextPaint();
             try { await client.changePassphrase(checked.passphrase); pw.reset(); out.appendChild(msg('ok', t('share.me.passphrase.done'))); }
             catch (e) { out.appendChild(msg('error', explain(e))); }
-            fs.disabled = false; dlg.setBusy(false); showBusy(busy, '');
+            fs.disabled = false; st.submitting = false; dlg.setBusy(false); showBusy(busy, '');
           } }, fs), out]));
         return el('div', { class: 'wds-section' }, parts);
       }
@@ -4366,6 +4272,7 @@ return module.exports.argon2id;
         var status = client.status();
         if (!status.unlocked) { dlg.close(); return; }
         clear(dlg.body); dlg.setTitle(t('share.title')); dlg.setView('share');
+        if (maintaining) dlg.setBusy(true);   // the roster is being refreshed: ready when aria-busy is gone
         var owner = status.role === 'owner';
         var banners = [];
         banners.push(el('div', { 'data-wds': 'form-error', 'aria-live': 'polite' }, st.flash ? msg(st.flash.kind, st.flash.text) : null));
@@ -4386,23 +4293,31 @@ return module.exports.argon2id;
             } })]),
           ]));
         }
-        var seen = seenAtOpen, members = [], newOnes = [];
-        if (owner) {
-          members = client.members().sort(function (a, b) { return (b.self ? 1 : 0) - (a.self ? 1 : 0) || (a.escrow ? 1 : 0) - (b.escrow ? 1 : 0); });
-          newOnes = members.filter(function (m) { return m.redeemed && !m.self && seen.indexOf(m.slotId) < 0; });
-          if (newOnes.length) banners.push(msg('ok', newOnes.length === 1 ? t('note.redeemed.one') : t('note.redeemed.other', { n: newOnes.length }), 'status'));
-        }
+        var members = [];
+        if (owner) members = client.members().sort(function (a, b) { return (b.self ? 1 : 0) - (a.self ? 1 : 0) || (a.escrow ? 1 : 0) - (b.escrow ? 1 : 0); });
         append(dlg.body, banners);
-        if (owner) { append(dlg.body, [peopleSection(members, seen), inviteSection()]); api.seen.add(members.filter(function (m) { return m.redeemed; }).map(function (m) { return m.slotId; })); }
+        // Looking at the roster answers the "someone joined" notice that follows an unlock.
+        if (owner) { append(dlg.body, [peopleSection(members), inviteSection()]); api.seen.add(members.filter(function (m) { return m.redeemed; }).map(function (m) { return m.slotId; })); }
         append(dlg.body, mySection(status));
         var target = focusKey && dlg.body.querySelector('[data-wds="' + focusKey + '"],[data-focus="' + focusKey + '"]');
         if (target) target.focus(); else dlg.dialog.focus();
       }
 
+      // Bring the roster up to date (redemptions, key renewals) without blocking the first paint; aria-busy stays until that is done.
+      maintaining = client.status().role === 'owner';
       render();
-      // Bring the roster up to date (redemptions, key renewals) without blocking the first paint.
-      if (client.status().role === 'owner') {
-        client.maintain().then(function () { if (!dlg.closed && !locked && st.view === 'main' && !st.invite) render(); }, function () { /* the banners explain what is needed */ });
+      if (maintaining) {
+        var snapshot = function () { try { var s = client.status(); return JSON.stringify([client.members(), s.recovery, s.rekeyPending]); } catch (e) { return ''; } };
+        var before = snapshot();
+        // Draw the dialog again only when the roster changed and the person is not typing in a form or has one in flight.
+        var settle = function (ok) {
+          maintaining = false;
+          if (dlg.closed || locked || st.view !== 'main') return;   // the other views set aria-busy themselves
+          var f = document.activeElement, inBody = f && dlg.body.contains(f);
+          if (ok && snapshot() !== before && !st.submitting && !(inBody && f.closest('form'))) render(inBody ? f.getAttribute('data-wds') : null);
+          else if (!st.submitting) dlg.setBusy(false);
+        };
+        client.maintain().then(function () { settle(true); }, function () { settle(false); /* the banners explain what is needed */ });
       }
     });
   }
@@ -4412,7 +4327,7 @@ return module.exports.argon2id;
   // ------------------------------------------------------------------------------------------------------------
   var MIGRATE_ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
   var MIGRATE_ENDING_RE = /^(\.[A-Za-z0-9]{1,8})?$/;
-  var MIGRATE_OPTIONS = ['id', 'indexedDB', 'localStorage', 'tagged', 'map', 'texts'];
+  var MIGRATE_OPTIONS = ['id', 'indexedDB', 'localStorage', 'map'];
   var MIGRATION_RECORD = INTERNAL_PREFIX + 'migration/';
 
   // A run that ends without an exception but not as a success: { stopStatus, why }. Thrown inside the run, turned into the result.
@@ -4427,7 +4342,6 @@ return module.exports.argon2id;
   function isBlobValue(v) { return typeof Blob !== 'undefined' && v instanceof Blob; }
   function isBinaryValue(v) { return v instanceof ArrayBuffer || ArrayBuffer.isView(v); }
   function bytesOf(v) { return v instanceof ArrayBuffer ? new Uint8Array(v) : new Uint8Array(v.buffer, v.byteOffset, v.byteLength); }
-  function isPlainLike(v) { return v !== null && typeof v === 'object' && !isBlobValue(v) && !isBinaryValue(v) && !(v instanceof Date) && !(v instanceof Map) && !(v instanceof Set); }
 
   // The id part for an old key: "s" + the string, "b" + hex for binary keys, "j" + the JSON text for everything else (numbers, arrays, dates).
   // Different keys never give the same token (1 and "1" differ), and a token never contains "/".
@@ -4440,11 +4354,11 @@ return module.exports.argon2id;
       return 'j' + encodeURIComponent(text);
     } catch (e) { throw MigrateStop('this key cannot be turned into an id: ' + String(key).slice(0, 60)); }
   }
-  // tag: the browser's tag (tagged ids) or null. Same input, same id, on every side: a reference computes its target's id with the same call.
+  // tag: the tag of this browser. Same input, same id, on every side: a reference computes its target's id with the same call.
   function migrateBuildId(tag, key, ending) {
     ending = ending === undefined || ending === null ? '' : ending;
-    if (typeof ending !== 'string' || !MIGRATE_ENDING_RE.test(ending)) throw new Core.UsageError('h.id: the ending must look like ".pdf" (a dot and 1 to 8 letters or digits)');
-    var id = (tag ? tag + '-' : '') + migrateKeyToken(key);
+    if (typeof ending !== 'string' || !MIGRATE_ENDING_RE.test(ending)) throw new Err.UsageError('h.id: the ending must look like ".pdf" (a dot and 1 to 8 letters or digits)');
+    var id = tag + '-' + migrateKeyToken(key);
     if (id.length + ending.length > 200) id = id.slice(0, 180) + '~' + fnv1a(id);
     return id + ending;
   }
@@ -4480,15 +4394,6 @@ return module.exports.argon2id;
     if (typeof x === 'string') { var t1 = Date.parse(x); return Number.isFinite(t1) ? t1 : undefined; }
     return undefined;
   }
-  // Fills the keys the old settings have and the current ones lack. Only absent keys (undefined) count as gaps: a setting that was cleared
-  // (null, "", false, 0) stays as it is.
-  function fillGaps(current, old) {
-    var out = {};
-    if (current && typeof current === 'object') Object.keys(current).forEach(function (k) { out[k] = current[k]; });
-    if (old && typeof old === 'object') Object.keys(old).forEach(function (k) { if (out[k] === undefined && old[k] !== undefined) out[k] = old[k]; });
-    return out;
-  }
-
   // A JSON-able, key-sorted picture of an old value; blobs and binary data by size, type, name and (with bytes) their SHA-256, which
   // shaOf(). Same picture = same data. Throws for what cannot be copied (functions, cycles).
   function canonValue(v, st, depth) {
@@ -4544,10 +4449,10 @@ return module.exports.argon2id;
     return stored.kind === 'json' && JSON.stringify(stored.value) === JSON.stringify(value);
   }
 
-  // The helpers h of a map call. ctx: { tag, tagged, hasRow(storeName, key) -> bool, refs: Set, skipped: Map(row or key -> why), unknownRow(x) }.
+  // The helpers h of a map call. ctx: { tag, hasRow(storeName, key) -> bool, refs: Set, skipped: Map(row or key -> why), unknownRow(x) }.
   function makeMigrateHelpers(ctx) {
     var h = {
-      id: function (oldKey, ending) { return migrateBuildId(ctx.tagged ? ctx.tag : null, oldKey, ending); },
+      id: function (oldKey, ending) { return migrateBuildId(ctx.tag, oldKey, ending); },
       // The id of the row with this key in another store, or null (a reference to a row that does not exist any more).
       ref: function (storeName, oldKey, ending) {
         if (oldKey === null || oldKey === undefined) return null;
@@ -4561,50 +4466,46 @@ return module.exports.argon2id;
       // Leaves out a row on purpose: it is deleted with the rest of the old data, so only for a row that is no user data (a cache). The person is told how many rows
       // are left out and must confirm (or download the backup) before anything is copied.
       skip: function (rowOrKey, why) { var id = ctx.unknownRow(rowOrKey); if (id !== null) ctx.skipped.set(id, String(why || 'skipped')); },
-      // Stops the run: nothing is written, the old data stays.
-      fail: function (rowOrKey, why) { var r = ctx.describe ? ctx.describe(rowOrKey) : ''; throw MigrateStop((r ? r + ': ' : '') + String(why || 'cannot be mapped')); },
     };
     return h;
   }
 
   // The options of migrateLocal (UsageError for anything that is wrong before the run starts).
   function migrateParse(o) {
-    if (!o || typeof o !== 'object') throw new Core.UsageError('migrateLocal needs an options object { id, indexedDB?, localStorage?, map }');
+    if (!o || typeof o !== 'object') throw new Err.UsageError('migrateLocal needs an options object { id, indexedDB?, localStorage?, map }');
     Object.keys(o).forEach(function (k) {
-      if (MIGRATE_OPTIONS.indexOf(k) < 0) throw new Core.UsageError('migrateLocal: unknown option "' + k + '"' + (k === 'applySettings' ? ' (settings are returned by map as settings: { record, value, from }; the library writes them)' : '') + '; known options: ' + MIGRATE_OPTIONS.join(', '));
+      if (MIGRATE_OPTIONS.indexOf(k) < 0) throw new Err.UsageError('migrateLocal: unknown option "' + k + '"; known options: ' + MIGRATE_OPTIONS.join(', '));
     });
-    if (typeof o.id !== 'string' || !MIGRATE_ID_RE.test(o.id)) throw new Core.UsageError('migrateLocal: id must be 1 to 40 characters: lowercase letters, digits and "-", starting with a letter or digit');
-    if (typeof o.map !== 'function') throw new Core.UsageError('migrateLocal: map must be a function (old, h) => ({ items, records, settings })');
-    if (o.tagged !== undefined && typeof o.tagged !== 'boolean') throw new Core.UsageError('migrateLocal: tagged must be true or false');
-    if (o.texts !== undefined && (o.texts === null || typeof o.texts !== 'object')) throw new Core.UsageError('migrateLocal: texts must be an object');
-    var cfg = { id: o.id, map: o.map, tagged: o.tagged !== false, texts: o.texts, dbs: [], localKeys: [], localPrefixes: [] };
+    if (typeof o.id !== 'string' || !MIGRATE_ID_RE.test(o.id)) throw new Err.UsageError('migrateLocal: id must be 1 to 40 characters: lowercase letters, digits and "-", starting with a letter or digit');
+    if (typeof o.map !== 'function') throw new Err.UsageError('migrateLocal: map must be a function (old, h) => ({ items, records })');
+    var cfg = { id: o.id, map: o.map, dbs: [], localKeys: [], localPrefixes: [] };
     var idb = o.indexedDB === undefined || o.indexedDB === null ? [] : Array.isArray(o.indexedDB) ? o.indexedDB : [o.indexedDB];
     var dbNames = {};
     idb.forEach(function (d) {
-      if (!d || typeof d.name !== 'string' || !d.name) throw new Core.UsageError('migrateLocal: every indexedDB entry needs a name');
-      if (!Array.isArray(d.stores) || !d.stores.length || d.stores.some(function (s) { return typeof s !== 'string' || !s; })) throw new Core.UsageError('migrateLocal: indexedDB "' + d.name + '" needs stores: ["storeName", ...]');
-      if (dbNames[d.name]) throw new Core.UsageError('migrateLocal: the database "' + d.name + '" is listed twice');
+      if (!d || typeof d.name !== 'string' || !d.name) throw new Err.UsageError('migrateLocal: every indexedDB entry needs a name');
+      if (!Array.isArray(d.stores) || !d.stores.length || d.stores.some(function (s) { return typeof s !== 'string' || !s; })) throw new Err.UsageError('migrateLocal: indexedDB "' + d.name + '" needs stores: ["storeName", ...]');
+      if (dbNames[d.name]) throw new Err.UsageError('migrateLocal: the database "' + d.name + '" is listed twice');
       dbNames[d.name] = true;
       var seen = {};
-      d.stores.forEach(function (s) { if (seen[s]) throw new Core.UsageError('migrateLocal: the store "' + s + '" of "' + d.name + '" is listed twice'); seen[s] = true; });
+      d.stores.forEach(function (s) { if (seen[s]) throw new Err.UsageError('migrateLocal: the store "' + s + '" of "' + d.name + '" is listed twice'); seen[s] = true; });
       cfg.dbs.push({ name: d.name, stores: d.stores.slice() });
     });
     var ls = o.localStorage;
     if (ls !== undefined && ls !== null) {
-      if (typeof ls !== 'object') throw new Core.UsageError('migrateLocal: localStorage must be { keys: [...], prefixes: [...] }');
-      Object.keys(ls).forEach(function (k) { if (k !== 'keys' && k !== 'prefixes') throw new Core.UsageError('migrateLocal: unknown localStorage option "' + k + '"'); });
+      if (typeof ls !== 'object') throw new Err.UsageError('migrateLocal: localStorage must be { keys: [...], prefixes: [...] }');
+      Object.keys(ls).forEach(function (k) { if (k !== 'keys' && k !== 'prefixes') throw new Err.UsageError('migrateLocal: unknown localStorage option "' + k + '"'); });
       (ls.keys || []).forEach(function (k) {
-        if (typeof k !== 'string' || !k) throw new Core.UsageError('migrateLocal: localStorage keys are non-empty strings');
-        if (k.indexOf('wds:') === 0) throw new Core.UsageError('migrateLocal: localStorage keys starting with "wds:" belong to the library');
+        if (typeof k !== 'string' || !k) throw new Err.UsageError('migrateLocal: localStorage keys are non-empty strings');
+        if (k.indexOf('wds:') === 0) throw new Err.UsageError('migrateLocal: localStorage keys starting with "wds:" belong to the library');
         cfg.localKeys.push(k);
       });
       (ls.prefixes || []).forEach(function (p) {
-        if (typeof p !== 'string' || !p) throw new Core.UsageError('migrateLocal: a localStorage prefix must not be empty (it would match every key)');
-        if (p.indexOf('wds:') === 0) throw new Core.UsageError('migrateLocal: localStorage prefixes starting with "wds:" belong to the library');
+        if (typeof p !== 'string' || !p) throw new Err.UsageError('migrateLocal: a localStorage prefix must not be empty (it would match every key)');
+        if (p.indexOf('wds:') === 0) throw new Err.UsageError('migrateLocal: localStorage prefixes starting with "wds:" belong to the library');
         cfg.localPrefixes.push(p);
       });
     }
-    if (!cfg.dbs.length && !cfg.localKeys.length && !cfg.localPrefixes.length) throw new Core.UsageError('migrateLocal: name a source: indexedDB: { name, stores: [...] } and/or localStorage: { keys: [...] }');
+    if (!cfg.dbs.length && !cfg.localKeys.length && !cfg.localPrefixes.length) throw new Err.UsageError('migrateLocal: name a source: indexedDB: { name, stores: [...] } and/or localStorage: { keys: [...] }');
     return cfg;
   }
 
@@ -4725,8 +4626,8 @@ return module.exports.argon2id;
   // ------------------------------------------------------------------------------------------------------------
   function isInternalName(name) { return typeof name === 'string' && name.indexOf(INTERNAL_PREFIX) === 0; }
   function checkAppName(name) {
-    if (typeof name !== 'string' || name.length === 0) throw new Core.UsageError('record name must be a non-empty string');
-    if (isInternalName(name)) throw new Core.UsageError('record names starting with "' + INTERNAL_PREFIX + '" are reserved for the library');
+    if (typeof name !== 'string' || name.length === 0) throw new Err.UsageError('record name must be a non-empty string');
+    if (isInternalName(name)) throw new Err.UsageError('record names starting with "' + INTERNAL_PREFIX + '" are reserved for the library');
     return name;
   }
   async function snapshotValue(value) { // detached copy for backups: JSON text round trip, Blobs to bytes
@@ -4773,9 +4674,8 @@ return module.exports.argon2id;
     var lang = detectLang(opts.locale);
     // Deliberately few options: no injected fetch, storage or Argon2 function, so nothing in the API can see the passphrase.
     var client = new Core.Client({ scope: opts.scope, service: opts.baseUrl, escrowPins: opts.escrowPins, retiredEscrow: opts.retiredEscrow });
-    var notify = opts.notify !== false;
     var S = {
-      opts: opts, lang: lang, t: makeT(lang), client: client, info: null, recoveryAcked: false, sandboxWipe: null,
+      opts: opts, lang: lang, t: makeT(lang), client: client, info: null, sandboxWipe: null,
       now: function () { return Date.now(); },
       getInfo: function (force) { return client.getScopeInfo(force).then(function (i) { S.info = i; return i; }); },
       // What a person sees instead of a record name ("books/179249e9"): the app's label function, or the name itself.
@@ -4794,7 +4694,6 @@ return module.exports.argon2id;
     var rekeyRunning = false, watchInstalled = false, lastCheck = 0, checking = false, notifiedStale = {}, unloadInstalled = false, sandboxBar = null, barPad = null;
 
     function toast(kind, text, o) {
-      if (!notify) return null;
       o = o || {};
       return showToast({ lang: lang, kind: kind, text: text, actions: o.actions, sticky: o.sticky, key: o.key, regionLabel: t('common.notifications'), dismissLabel: t('common.dismiss'), timeoutMs: o.timeoutMs, onDismiss: o.onDismiss });
     }
@@ -4805,7 +4704,7 @@ return module.exports.argon2id;
       try { client.storage.setItem('wds:' + client.scope + ':' + client.status().accessId + ':' + suffix, v); } catch (e) { /* storage unavailable */ }
     }
     function logError(what, e) { if (typeof console !== 'undefined' && console.error) console.error('wds: ' + what + ': ' + ((e && e.message) || e)); }
-    function addOnce(list, fn) { if (typeof fn !== 'function') throw new Core.UsageError('a function is required'); if (list.indexOf(fn) < 0) list.push(fn); return function () { var i = list.indexOf(fn); if (i >= 0) list.splice(i, 1); }; }
+    function addOnce(list, fn) { if (typeof fn !== 'function') throw new Err.UsageError('a function is required'); if (list.indexOf(fn) < 0) list.push(fn); return function () { var i = list.indexOf(fn); if (i >= 0) list.splice(i, 1); }; }
     function canWrite() { var r = client.status().role; return r === 'owner' || r === 'write'; }
     function sameJson(a, b) { try { return JSON.stringify(a) === JSON.stringify(b); } catch (e) { return false; } }
 
@@ -4838,28 +4737,25 @@ return module.exports.argon2id;
     // The session ended with an auth failure or an unknown vault after the nightly wipe of a sandbox: the vault is gone.
     function sandboxWiped(e) {
       if (!isSandbox(S) || !S.sandboxWipe || Date.now() / 1000 < S.sandboxWipe) return false;
-      return !!e && ((e instanceof Core.AuthError && e.code !== 'forbidden') || e.status === 404);
+      return !!e && ((e instanceof Err.AuthError && e.code !== 'forbidden') || e.status === 404);
     }
 
     // ---- errors and the end of a session ----
-    function attachBackup(e) { e.downloadBackup = downloadBackup; return e; }
     function endSession(reason, emptied) {
       lockSession(reason, emptied).catch(function (e) { logError('lock failed', e); });
     }
     function reportError(e) {
       if (sandboxWiped(e)) endSession('expired', true);
-      else if (e instanceof Core.OfflineError) {
-        attachBackup(e);
+      else if (e instanceof Err.OfflineError) {
         toast('warn', t('note.offline'), { key: 'offline', actions: [{ label: t('note.backup'), close: false, onClick: function () { downloadBackup(); } }] });
-      } else if (e instanceof Core.QuotaError) toast('warn', t('note.quota', { message: e.message }), { key: 'quota' });
-      else if (e instanceof Core.AuthError && (e.code === 'revoked' || e.status === 401)) endSession(e.code === 'revoked' ? 'revoked' : 'expired', false);
-      else if (e instanceof Core.AuthError && e.code === 'forbidden') toast('warn', t('note.forbidden'), { key: 'forbidden' });
-      else if (e instanceof Core.IntegrityError) toast('error', t('note.integrity', { code: e.code || 'integrity' }), { key: 'integrity' });
-      else if (e instanceof Core.VersionError) toast('error', t('note.version', { message: e.message }), { key: 'version' });
+      } else if (e instanceof Err.QuotaError) toast('warn', t('note.quota', { message: e.message }), { key: 'quota' });
+      else if (e instanceof Err.AuthError && (e.code === 'revoked' || e.status === 401)) endSession(e.code === 'revoked' ? 'revoked' : 'expired', false);
+      else if (e instanceof Err.AuthError && e.code === 'forbidden') toast('warn', t('note.forbidden'), { key: 'forbidden' });
+      else if (e instanceof Err.IntegrityError) toast('error', t('note.integrity', { code: e.code || 'integrity' }), { key: 'integrity' });
+      else if (e instanceof Err.VersionError) toast('error', t('note.version', { message: e.message }), { key: 'version' });
     }
     async function guarded(fn) {
       try { return await fn(); } catch (e) {
-        if (e instanceof Core.OfflineError) attachBackup(e);
         reportError(e);
         throw e;
       }
@@ -4910,15 +4806,15 @@ return module.exports.argon2id;
       return conflictGlobal;
     }
     function registerConflict(pattern, fn) {
-      if (typeof pattern !== 'string' || !pattern) throw new Core.UsageError('onConflict: the pattern must be a record name or a prefix ending in "/"');
-      if (isInternalName(pattern)) throw new Core.UsageError('onConflict: names starting with "' + INTERNAL_PREFIX + '" are reserved for the library');
+      if (typeof pattern !== 'string' || !pattern) throw new Err.UsageError('onConflict: the pattern must be a record name or a prefix ending in "/"');
+      if (isInternalName(pattern)) throw new Err.UsageError('onConflict: names starting with "' + INTERNAL_PREFIX + '" are reserved for the library');
       var isPrefix = pattern.slice(-1) === '/';
       if (fn === null || fn === undefined) { conflictByName.delete(pattern); conflictPrefixes = conflictPrefixes.filter(function (p) { return p.prefix !== pattern; }); return function () {}; }
-      if (typeof fn !== 'function') throw new Core.UsageError('onConflict: a function is required');
+      if (typeof fn !== 'function') throw new Err.UsageError('onConflict: a function is required');
       if (!isPrefix) { conflictByName.set(pattern, fn); return function () { if (conflictByName.get(pattern) === fn) conflictByName.delete(pattern); }; }
       conflictPrefixes.forEach(function (p) {
         if (p.prefix !== pattern && (p.prefix.indexOf(pattern) === 0 || pattern.indexOf(p.prefix) === 0)) {
-          throw new Core.UsageError('onConflict: the prefix "' + pattern + '" overlaps the prefix "' + p.prefix + '", which has a handler already');
+          throw new Err.UsageError('onConflict: the prefix "' + pattern + '" overlaps the prefix "' + p.prefix + '", which has a handler already');
         }
       });
       conflictPrefixes = conflictPrefixes.filter(function (p) { return p.prefix !== pattern; });
@@ -4937,8 +4833,8 @@ return module.exports.argon2id;
         keepMine: function () { choice = { type: 'mine' }; },
         keepTheirs: function () { choice = { type: 'theirs' }; },
         merge: function (fn) {
-          if (op === 'remove') throw new Core.UsageError('merge() is not available when a record is being removed');
-          if (typeof fn !== 'function') throw new Core.UsageError('merge() needs a function');
+          if (op === 'remove') throw new Err.UsageError('merge() is not available when a record is being removed');
+          if (typeof fn !== 'function') throw new Err.UsageError('merge() needs a function');
           choice = { type: 'merge', fn: fn };
         },
         ask: function () { return conflictDialog(S, c).then(function (which) { choice = { type: which }; return which; }); },
@@ -4968,8 +4864,8 @@ return module.exports.argon2id;
           if (resolution === 'merged') out.value = value;
           return out;
         } catch (e) {
-          if (!(e instanceof Core.ConflictError)) {
-            if (e instanceof Core.OfflineError) {
+          if (!(e instanceof Err.ConflictError)) {
+            if (e instanceof Err.OfflineError) {
               try { var snap = await snapshotValue(value); pending.set(name, { kind: snap.kind, mime: (o && o.mime) || snap.mime, value: snap.value, time: S.now() }); } catch (e2) { /* not backed up */ }
             }
             throw e;
@@ -5008,7 +4904,7 @@ return module.exports.argon2id;
           cache.delete(name); pending.delete(name);
           return { name: name, deleted: done, resolution: !done ? 'absent' : mineChosen ? 'mine' : 'deleted' };
         } catch (e) {
-          if (!(e instanceof Core.ConflictError)) throw e;
+          if (!(e instanceof Err.ConflictError)) throw e;
           lastErr = e;
           if (!e.theirs || e.theirs.deleted) { cache.delete(name); return { name: name, deleted: false, resolution: 'absent' }; }
           var d = await decide(e, name, 'remove');
@@ -5016,16 +4912,17 @@ return module.exports.argon2id;
           mineChosen = true;
         }
       }
-      throw lastErr || new Core.ConflictError('could not delete "' + name + '" because it keeps changing', { code: 'precondition_failed', record: name });
+      throw lastErr || new Err.ConflictError('could not delete "' + name + '" because it keeps changing', { code: 'precondition_failed', record: name });
     }
 
     // ---- autosave (1.5) ----
     // hooks (collections): prepare(state) -> ctx (may throw, nothing is written then), afterSave(result, state, ctx).
     function makeAutosave(name, getState, o, hooks) {
       o = o || {};
-      if (typeof getState !== 'function') throw new Core.UsageError('autosave needs a function that returns the state');
+      if (o.onReplaced) throw new Err.UsageError('autosave: onReplaced is called onResolved (it gets the result; res.value is the other side\'s version)');
+      if (typeof getState !== 'function') throw new Err.UsageError('autosave needs a function that returns the state');
       var delay = o.delayMs === undefined ? 2000 : o.delayMs;
-      var timer = null, dirty = false, running = null, status = 'idle', prevClean = 'idle', failures = 0, paused = 0, stopReason = null, lastError = null, warnedReplaced = false;
+      var timer = null, dirty = false, running = null, status = 'idle', prevClean = 'idle', failures = 0, paused = 0, stopReason = null, lastError = null;
       var handle;
       var old = handlesByName.get(name);
       if (old) old._i.supersede();
@@ -5041,7 +4938,7 @@ return module.exports.argon2id;
       function run() {
         clearTimeout(timer); timer = null;
         if (stopReason || paused || running || !dirty) return running || Promise.resolve();
-        if (!client.status().unlocked) { setStatus('error', new Core.UsageError('locked: unlock the vault first', { code: 'locked' })); return Promise.resolve(); }
+        if (!client.status().unlocked) { setStatus('error', new Err.UsageError('locked: unlock the vault first', { code: 'locked' })); return Promise.resolve(); }
         dirty = false;
         var state, ctx;
         try { state = getState(); if (state !== undefined && hooks && hooks.prepare) ctx = hooks.prepare(state); } catch (e) { dirty = true; setStatus('error', e); fail(e); return Promise.resolve(); }
@@ -5055,7 +4952,7 @@ return module.exports.argon2id;
           if (hooks && hooks.afterSave) { try { hooks.afterSave(res, state, ctx); } catch (e) { logError('afterSave failed', e); } }
         }, function (err) {
           dirty = true; setStatus('error', err); fail(err);
-          if (err instanceof Core.OfflineError) { failures++; schedule(Math.min(60000, 5000 * failures)); }
+          if (err instanceof Err.OfflineError) { failures++; schedule(Math.min(60000, 5000 * failures)); }
         }).then(function () { running = null; if (dirty && status !== 'error') schedule(); });
         return running;
       }
@@ -5078,9 +4975,8 @@ return module.exports.argon2id;
         setStatus('stopped');
       }
       handle = {
-        name: name,
         changed: function () {
-          if (stopReason) { var e = new Core.UsageError('autosave handle stopped (' + stopReason + ')', { code: 'stopped' }); fail(e); return; }
+          if (stopReason) { var e = new Err.UsageError('autosave handle stopped (' + stopReason + ')', { code: 'stopped' }); fail(e); return; }
           dirty = true;
           if (status !== 'saving' && status !== 'dirty') { prevClean = status; }
           if (status !== 'saving') setStatus('dirty');
@@ -5089,11 +4985,11 @@ return module.exports.argon2id;
         flush: flush,
         stop: function () { stopInternal('stop'); },
         get status() { return status; },
-        get dirty() { return dirty || !!running; },
         get error() { return lastError; },
-        get stopReason() { return stopReason; },
       };
       Object.defineProperty(handle, '_i', { value: {
+        name: name,
+        dirty: function () { return dirty || !!running; },
         // A remove() of this name is running: no save meanwhile. done(result) with the outcome, or done(null) when the request failed.
         pause: function () {
           paused++; clearTimeout(timer); timer = null;
@@ -5101,13 +4997,8 @@ return module.exports.argon2id;
             paused = Math.max(0, paused - 1);
             if (stopReason) return;
             if (result && (result.resolution === 'deleted' || result.resolution === 'absent' || result.resolution === 'mine')) { stopInternal('removed'); return; }
-            if (result && result.resolution === 'theirs') {
-              setStatus('replaced');   // an edit made meanwhile stays dirty and is saved: the person chose to keep the entry
-              if (o.onReplaced) { try { o.onReplaced(result.value); } catch (e) { logError('onReplaced failed', e); } }
-              else if (!warnedReplaced) { warnedReplaced = true; if (typeof console !== 'undefined' && console.warn) console.warn('wds: "' + name + '" was not removed, the other side\'s newer version was kept; pass onReplaced to autosave() to show it'); }
-              if (dirty && !running) schedule();
-              return;
-            }
+            // The other side's newer version was kept: onResolved gets it (res.value); an edit made meanwhile stays dirty and is saved.
+            if (result && result.resolution === 'theirs' && o.onResolved) { try { o.onResolved(result); } catch (e) { logError('onResolved failed', e); } }
             if (dirty && !running) schedule();
           };
         },
@@ -5133,7 +5024,7 @@ return module.exports.argon2id;
       installUnloadGuards();
       return handle;
     }
-    function handlesNamed(name) { var out = []; allHandles.forEach(function (h) { if (h.name === name) out.push(h); }); return out; }
+    function handlesNamed(name) { var out = []; allHandles.forEach(function (h) { if (h._i.name === name) out.push(h); }); return out; }
 
     // ---- lock snapshots and lock (1.5) ----
     async function writeSnapshot(entry) {
@@ -5196,13 +5087,12 @@ return module.exports.argon2id;
     }
     function hasUnsaved() {
       var any = held.size > 0;
-      allHandles.forEach(function (a) { if (a.dirty) any = true; });
+      allHandles.forEach(function (a) { if (a._i.dirty()) any = true; });
       collections.forEach(function (c) { if (c._hasOps(true)) any = true; });
       return any;
     }
 
     // ---- collections (1.2) ----
-    function collectionApply(items, ops) { return applyCollectionOps(items, ops); }
     function makeCollection(prefix, options) {
       var col = {}, opt = {}, loaded = false, base = null, ops = [], opsVault = null, writing = null, failed = false, lastWrite = 0, debounceTimer = null, loading = null, warnedBig = false;
       var listeners = [], gate = Promise.resolve();
@@ -5211,16 +5101,16 @@ return module.exports.argon2id;
       function exclusive(fn) { var p = gate.then(fn, fn); gate = p.then(function () {}, function () {}); return p; }
       function setOptions(o) {
         o = o || {};
-        if (o.meta !== undefined && typeof o.meta !== 'function') throw new Core.UsageError('collection: meta must be a function (value, id) => object');
+        if (o.meta !== undefined && typeof o.meta !== 'function') throw new Err.UsageError('collection: meta must be a function (value, id) => object');
         var idx = o.index === undefined ? prefix.slice(0, -1) + '.index' : o.index;
         checkAppName(idx);
-        if (idx.indexOf(prefix) === 0) throw new Core.UsageError('collection: the index record "' + idx + '" must lie outside the prefix "' + prefix + '"');
-        if (col.indexName && col.indexName !== idx) { if (ops.length) throw new Core.UsageError('collection: the index name cannot change while changes are waiting to be written'); loaded = false; base = null; }
+        if (idx.indexOf(prefix) === 0) throw new Err.UsageError('collection: the index record "' + idx + '" must lie outside the prefix "' + prefix + '"');
+        if (col.indexName && col.indexName !== idx) { if (ops.length) throw new Err.UsageError('collection: the index name cannot change while changes are waiting to be written'); loaded = false; base = null; }
         opt = { meta: o.meta };
         col.indexName = idx;
       }
       function checkId(id) {
-        if (typeof id !== 'string' || id.length < 1 || id.length > 200 || id.indexOf('/') >= 0) throw new Core.UsageError('collection: an id is 1 to 200 characters without "/"');
+        if (typeof id !== 'string' || id.length < 1 || id.length > 200 || id.indexOf('/') >= 0) throw new Err.UsageError('collection: an id is 1 to 200 characters without "/"');
         return id;
       }
       function newId() {
@@ -5232,14 +5122,14 @@ return module.exports.argon2id;
       function metaFor(value, id, explicit) {
         var m = explicit !== undefined ? explicit : (opt.meta ? opt.meta(value, id) : undefined);
         if (m === undefined || m === null) return {};
-        if (typeof m !== 'object' || Array.isArray(m)) throw new Core.UsageError('collection: meta must be a plain object');
+        if (typeof m !== 'object' || Array.isArray(m)) throw new Err.UsageError('collection: meta must be a plain object');
         var text = JSON.stringify(m);
-        if (utf8(text).length > 512) throw new Core.UsageError('collection: the meta of "' + id + '" is larger than 512 bytes; keep only what a list needs');
+        if (utf8(text).length > 512) throw new Err.UsageError('collection: the meta of "' + id + '" is larger than 512 bytes; keep only what a list needs');
         return JSON.parse(text);
       }
       function parseIndex(v) {
         if (!v || typeof v !== 'object' || v.wds !== 'collection/1' || !v.items || typeof v.items !== 'object' || Array.isArray(v.items)) {
-          throw new Core.UsageError('the record "' + col.indexName + '" is not a collection index', { code: 'bad_index' });
+          throw new Err.UsageError('the record "' + col.indexName + '" is not a collection index', { code: 'bad_index' });
         }
         var out = {};
         Object.keys(v.items).forEach(function (id) {
@@ -5270,7 +5160,7 @@ return module.exports.argon2id;
       async function readBase(fresh) {
         var vault = client.status().vaultId;
         var r = await guarded(function () { return client.getRecord(col.indexName, fresh ? { fresh: true } : undefined); });
-        if (client.status().vaultId !== vault) throw new Core.UsageError('collection: the vault changed while the index was being read', { code: 'vault_changed' });
+        if (client.status().vaultId !== vault) throw new Err.UsageError('collection: the vault changed while the index was being read', { code: 'vault_changed' });
         // A read that was slower than a write of this page returns an older version: it must not replace the newer base.
         if (r && base && base.version !== undefined && r.version < base.version) { loaded = true; return; }
         base = r ? { version: r.version, items: parseIndex(r.value) } : { version: undefined, items: {} };
@@ -5286,7 +5176,7 @@ return module.exports.argon2id;
         var lastErr = null, vault = client.status().vaultId;
         // A batch belongs to the vault it started in: after a lock (or another unlock) it must not touch the index of another vault.
         function sameVault() { return client.status().vaultId === vault; }
-        function vaultChanged() { return new Core.UsageError('collection: the vault changed while the index was being written', { code: 'vault_changed' }); }
+        function vaultChanged() { return new Err.UsageError('collection: the vault changed while the index was being written', { code: 'vault_changed' }); }
         if (!base) await readBase(false);
         for (var round = 0; round < 10; round++) {
           if (!sameVault()) throw vaultChanged();
@@ -5302,7 +5192,7 @@ return module.exports.argon2id;
             batch.forEach(function (op) { if (op.resolve) op.resolve(); });
             return;
           } catch (e) {
-            if (!(e instanceof Core.ConflictError)) throw e;
+            if (!(e instanceof Err.ConflictError)) throw e;
             lastErr = e;
             var th = e.theirs;   // theirs is the new base; the pending changes are replayed on it
             if (!sameVault()) throw vaultChanged();
@@ -5361,7 +5251,7 @@ return module.exports.argon2id;
         await loading;
       }
       async function softLoad() { try { await ensureUnlocked(); await loadNow(); } catch (e) { /* the index is repaired by the next write */ } }
-      function needLoaded() { if (!loaded) throw new Core.UsageError('call await ' + prefix.slice(0, -1) + '.load() first: the list of "' + prefix + '" is not loaded'); }
+      function needLoaded() { if (!loaded) throw new Err.UsageError('call await ' + prefix.slice(0, -1) + '.load() first: the list of "' + prefix + '" is not loaded'); }
 
       col.prefix = prefix;
       col.load = async function () {
@@ -5395,11 +5285,12 @@ return module.exports.argon2id;
         return out;
       };
       function checkCreated(o) {
-        if (o.created !== undefined && !Number.isFinite(o.created)) throw new Core.UsageError('collection: created must be a number (milliseconds since 1970), it only decides the order of the list');
+        if (o.created !== undefined && !Number.isFinite(o.created)) throw new Err.UsageError('collection: created must be a number (milliseconds since 1970), it only decides the order of the list');
       }
       col.add = async function (value, o) {
         o = o || {};
-        var id = o.id !== undefined ? checkId(o.id) : newId(), name = prefix + id;
+        if (o.id !== undefined) throw new Err.UsageError('add makes its own id; use set(id, value) for an id of your own');
+        var id = newId(), name = prefix + id;
         checkAppName(name);
         var meta = metaFor(value, id, o.meta);
         checkCreated(o);
@@ -5455,7 +5346,7 @@ return module.exports.argon2id;
         var rows = await guarded(function () { return client.list(prefix); });
         var found = {}, names = [];
         rows.forEach(function (r) { var rest = r.name.slice(prefix.length); if (rest && rest.indexOf('/') < 0 && !isInternalName(r.name)) { found[rest] = r; names.push(r.name); } });
-        var vals = await store.getMany(names, { concurrency: 4 });
+        var vals = await store.getMany(names);
         var mem = view(), ps = [];
         names.forEach(function (name, i) {
           var id = name.slice(prefix.length), m = mem[id], meta;
@@ -5518,15 +5409,8 @@ return module.exports.argon2id;
 
     // ---- store.migrateLocal: take over what an earlier, local-only version left in this browser ----
     var migrateSkippedShown = {}, migrateInformed = {}, migrateWarnedTest = false;
-    function migrateTexts(cfg) {
-      return function (key, params) {
-        var o = cfg.texts, s;
-        if (o) { var per = o[S.lang]; if (per && typeof per === 'object' && typeof per[key] === 'string') s = per[key]; else if (typeof o[key] === 'string') s = o[key]; }
-        return s !== undefined ? fmt(s, params) : S.t(key, params);
-      };
-    }
     function migrateNeedUnlocked() { if (!client.status().unlocked) throw MigrateStop('locked: the session ended during the run; the next start continues'); }
-    function migrateGuarded(fn) { return fn().catch(function (e) { if (e instanceof Core.AuthError) reportError(e); throw e; }); }
+    function migrateGuarded(fn) { return fn().catch(function (e) { if (e instanceof Err.AuthError) reportError(e); throw e; }); }
     function migrateFresh(name) { migrateNeedUnlocked(); return migrateGuarded(function () { return client.getRecord(name, { fresh: true }); }); }
     async function migratePool(list, n, fn) {
       var next = 0, firstErr = null;
@@ -5542,33 +5426,16 @@ return module.exports.argon2id;
           migrateNeedUnlocked();
           try { var r = await migrateGuarded(function () { return client.put(name, value, { base: null, mime: mime }); }); return { state: 'written', version: r.version }; }
           catch (e) {
-            if (!(e instanceof Core.ConflictError)) throw e;
+            if (!(e instanceof Err.ConflictError)) throw e;
             var th = e.theirs;
             if (th && th.deleted) {   // a deleted record: the name is free again
               try { var r2 = await migrateGuarded(function () { return client.put(name, value, { base: th.version, mime: mime }); }); return { state: 'written', version: r2.version }; }
-              catch (e2) { if (e2 instanceof Core.ConflictError) continue; throw e2; }
+              catch (e2) { if (e2 instanceof Err.ConflictError) continue; throw e2; }
             }
             return { state: 'exists', stored: th };
           }
         }
         throw MigrateStop('"' + name + '" keeps changing');
-      });
-    }
-    // The settings: keys the vault's record lacks are filled in from the old settings (never overwritten), with retries instead of any dialog.
-    function migrateApplySettings(e) {
-      return enqueue(e.name, async function () {
-        for (var round = 0; round < 6; round++) {
-          var rec = await migrateFresh(e.name);
-          try {
-            if (!rec) { await migrateGuarded(function () { return client.put(e.name, e.value, { base: null }); }); return 'ok'; }
-            if (rec.kind !== 'json' || !rec.value || typeof rec.value !== 'object' || Array.isArray(rec.value)) return 'differs';
-            var merged = fillGaps(rec.value, e.value);
-            if (JSON.stringify(merged) === JSON.stringify(rec.value)) return 'ok';
-            await migrateGuarded(function () { return client.put(e.name, merged, { base: rec.version }); });
-            return 'ok';
-          } catch (x) { if (!(x instanceof Core.ConflictError)) throw x; }
-        }
-        throw MigrateStop('"' + e.name + '" keeps changing');
       });
     }
     async function migrateReadMarker(name) {
@@ -5585,7 +5452,7 @@ return module.exports.argon2id;
         Object.keys(skippedOk).forEach(function (k) { mSkipped[k] = skippedOk[k]; });
         var value = { v: 2, id: cfg.id, tag: tag, date: new Date().toISOString(), entries: mEntries, skipped: mSkipped, items: info.items, skippedCount: info.skipped };
         try { await migrateGuarded(function () { return client.put(name, value, { base: cur ? cur.version : null }); }); return; }
-        catch (e) { if (!(e instanceof Core.ConflictError)) throw e; }
+        catch (e) { if (!(e instanceof Err.ConflictError)) throw e; }
       }
       throw MigrateStop('could not write the migration marker "' + name + '"');
     }
@@ -5624,36 +5491,22 @@ return module.exports.argon2id;
         for (var b = 0; b < src.rows[names[a]].length; b++) { var r = src.rows[names[a]][b]; arr.push({ key: await conv(r.key, []), value: await conv(r.value, []) }); }
         doc.indexedDB[dbn][sn] = arr;
       }
-      var entries = [{ name: 'data.json', data: JSON.stringify(doc, null, 1) }].concat(files);
-      try { return { blob: makeZip(entries), files: [], name: '.zip' }; }
-      catch (e) { return { blob: new Blob([JSON.stringify(doc, null, 1)], { type: 'application/json' }), files: files, name: '.json' }; }   // beyond what a ZIP file holds: the data file, then every file on its own
+      return makeZip([{ name: 'data.json', data: JSON.stringify(doc, null, 1) }].concat(files));   // beyond what a ZIP file holds (4 GiB) this throws: the notice says that the backup failed
     }
-    // Saves the backup; the person is told when it does not contain the files (errEl: the dialog's message line, else a toast).
-    async function migrateDownloadBackup(cfg, tt, src, errEl) {
-      var b = await migrateBackupBlob(cfg, src);
-      downloadBlob(b.blob, cfg.id + '-old-data-' + new Date().toISOString().slice(0, 10) + b.name);
-      if (b.files.length) {
-        b.files.forEach(function (f) { downloadBlob(new Blob([f.data]), f.name.replace(/^files\//, '')); });
-        var msg = tt('migrate.backup.nofiles', { n: b.files.length });
-        if (errEl) errEl.textContent = msg; else toast('warn', msg, { key: 'migration-backup', sticky: true });
-      } else if (errEl) errEl.textContent = '';
-      return b;
+    // Saves the backup (errEl: the dialog's message line).
+    async function migrateDownloadBackup(cfg, src, errEl) {
+      downloadBlob(await migrateBackupBlob(cfg, src), cfg.id + '-old-data-' + new Date().toISOString().slice(0, 10) + '.zip');
+      if (errEl) errEl.textContent = '';
     }
-    // The backup from a fresh read (the old data as it is now): for toasts and for result.downloadBackup().
-    function migrateBackupNow(cfg, tt) {
+    // The backup from a fresh read (the old data as it is now): the "Download a backup" button of the notices.
+    function migrateBackupNow(cfg) {
       return migrateRead(cfg).then(function (src) {
-        if (!src.list.length) { toast('info', tt('migrate.backup.none'), { key: 'migration-backup' }); return null; }
-        return migrateDownloadBackup(cfg, tt, src, null);
-      }).catch(function (e) { logError('backup failed', e); toast('warn', tt('migrate.backup.failed', { why: (e && e.message) || String(e) }), { key: 'migration-backup', sticky: true }); return null; });
+        if (!src.list.length) { toast('info', t('migrate.backup.none'), { key: 'migration-backup' }); return null; }
+        return migrateDownloadBackup(cfg, src, null);
+      }).catch(function (e) { logError('backup failed', e); toast('warn', t('migrate.backup.failed', { why: (e && e.message) || String(e) }), { key: 'migration-backup', sticky: true }); return null; });
     }
-    function migrateBackupActions(cfg, tt) { return [{ label: tt('migrate.backup.short'), close: false, onClick: function () { migrateBackupNow(cfg, tt); } }]; }
-    function migrateWithBackup(out, cfg, tt) { Object.defineProperty(out, 'downloadBackup', { value: function () { return migrateBackupNow(cfg, tt); }, enumerable: false }); return out; }
-    function leftBlob(e) { return isBlobValue(e.value) ? e.value : isBinaryValue(e.value) ? new Blob([e.value]) : new Blob([JSON.stringify(e.value, null, 1)], { type: 'application/json' }); }
+    function migrateBackupActions(cfg) { return [{ label: t('migrate.backup.short'), close: false, onClick: function () { migrateBackupNow(cfg); } }]; }
     function leftLabel(e) { return e.meta && typeof e.meta.name === 'string' && e.meta.name ? e.meta.name : isBlobValue(e.value) && e.value.name ? e.value.name : S.label(e.name); }
-    function leftFileName(e) {
-      var base = fileSafe(leftLabel(e) === S.label(e.name) ? String(e.name).split('/').pop() || 'file' : leftLabel(e));
-      return /\.[A-Za-z0-9]{1,8}$/.test(base) ? base : base + (isBlobValue(e.value) ? extForMime(e.value.type) : '.json');
-    }
 
     // One dialog for the whole run; each view is a promise that the buttons (or closing) settle.
     function migrateView(run, view, title, build, fallback) {
@@ -5667,15 +5520,15 @@ return module.exports.argon2id;
         dlg.focusFirst();
       });
     }
-    function migrateProgressView(run, tt) {
+    function migrateProgressView(run) {
       var dlg = run.dlg;
       if (!dlg || dlg.closed) return function () {};
       run.onClose = null;
-      clear(dlg.body); dlg.setTitle(tt('migrate.title')); dlg.setCancelable(false);
-      var bar = el('progress', { class: 'wds-progress', 'aria-label': tt('migrate.title') }), line = el('p', { role: 'status', 'aria-live': 'polite', text: '' });
+      clear(dlg.body); dlg.setTitle(t('migrate.title')); dlg.setCancelable(false);
+      var bar = el('progress', { class: 'wds-progress', 'aria-label': t('migrate.title') }), line = el('p', { role: 'status', 'aria-live': 'polite', text: '' });
       append(dlg.body, [bar, line]);
       dlg.setView('progress');
-      return function (key, done, total) { bar.max = total || 1; bar.value = done; line.textContent = tt(key, { done: done, total: total }); };
+      return function (key, done, total) { bar.max = total || 1; bar.value = done; line.textContent = t(key, { done: done, total: total }); };
     }
 
     // A copy of an old value for map: containers (objects, arrays, Maps, Sets, Dates) are copied, files and binary buffers are shared. map may change what
@@ -5698,26 +5551,34 @@ return module.exports.argon2id;
       if (isBinaryValue(e.value)) text += ':' + await sha256Hex(bytesOf(e.value));
       return (await sha256Hex(text)).slice(0, 16);
     }
-    var MEMBER_NOTICE_KEY = function (id) { return 'wds:migrate:' + id + ':member'; };
+    // One ZIP with exactly the entries that did not fit into the vault (the person gets them before anything is deleted).
+    async function migrateLeftZip(list) {
+      var used = {}, files = [];
+      for (var i = 0; i < list.length; i++) {
+        var e = list[i], name = fileSafe(leftLabel(e));
+        if (!/\.[A-Za-z0-9]{1,8}$/.test(name)) name += isBlobValue(e.value) ? extForMime(e.value.type) : '.json';
+        if (used[name]) name = (i + 1) + '-' + name;
+        used[name] = true;
+        files.push({ name: name, data: isBlobValue(e.value) ? new Uint8Array(await e.value.arrayBuffer()) : isBinaryValue(e.value) ? bytesOf(e.value) : JSON.stringify(e.value, null, 1) });
+      }
+      return makeZip(files);
+    }
 
-    async function migrateBody(cfg, tt, run) {
-      var sbx = function () { return isSandbox(S); };
-      if (!(await migrateAnyData(cfg))) return { status: 'nothing', sandbox: sbx() };
+    async function migrateBody(cfg, run) {
+      if (!(await migrateAnyData(cfg))) return { status: 'nothing' };
       await ensureUnlocked();
-      var sandbox = sbx();
-      function res(o) { return migrateWithBackup(Object.assign({ sandbox: sandbox }, o), cfg, tt); }
+      var sandbox = isSandbox(S);
       if (client.status().role !== 'owner') {
-        var dismissed = false;
-        try { dismissed = localStorage.getItem(MEMBER_NOTICE_KEY(cfg.id)) === 'dismissed'; } catch (e) { dismissed = false; }
-        if (!migrateSkippedShown[cfg.id] && !dismissed) {
+        // Once per page: a member can only be told, the data can only be taken over into a vault of the person's own.
+        if (!migrateSkippedShown[cfg.id]) {
           migrateSkippedShown[cfg.id] = true;
-          toast('warn', tt('migrate.skipped'), { key: 'migration', sticky: true, actions: migrateBackupActions(cfg, tt), onDismiss: function () { try { localStorage.setItem(MEMBER_NOTICE_KEY(cfg.id), 'dismissed'); } catch (e) { /* ignore */ } } });
+          toast('warn', t('migrate.skipped'), { key: 'migration', sticky: true, actions: migrateBackupActions(cfg) });
         }
-        return res({ status: 'skipped', why: 'not-owner' });
+        return { status: 'skipped', why: 'not-owner' };
       }
       // The snapshot of the old data is taken now (after the unlock, which can take minutes), the marker comes from the vault.
       var src = await migrateRead(cfg);
-      if (!src.list.length) return { status: 'nothing', sandbox: sandbox };
+      if (!src.list.length) return { status: 'nothing' };
       await migrateRowIds(src.list);
       var rowById = {};
       src.list.forEach(function (r) { rowById[r.id] = r; });
@@ -5743,8 +5604,8 @@ return module.exports.argon2id;
         if (src.rows[name]) return name;
         var hits = storeKeys.filter(function (k) { return k.slice(k.indexOf('/') + 1) === name; });
         if (hits.length === 1) return hits[0];
-        if (hits.length > 1) throw new Core.UsageError('old.rows("' + name + '") is ambiguous: ' + hits.join(', ') + '; write "database/store"');
-        throw new Core.UsageError('old.rows("' + name + '"): not a configured store; configured: ' + (storeKeys.join(', ') || 'none'));
+        if (hits.length > 1) throw new Err.UsageError('old.rows("' + name + '") is ambiguous: ' + hits.join(', ') + '; write "database/store"');
+        throw new Err.UsageError('old.rows("' + name + '"): not a configured store; configured: ' + (storeKeys.join(', ') || 'none'));
       }
       var keySets = {};
       function hasRow(storeName, key) {
@@ -5758,12 +5619,12 @@ return module.exports.argon2id;
         if (typeof x === 'string' && src.local.has(x)) { var lr = src.list.filter(function (r) { return r.local && r.key === x; })[0]; return lr.id; }
         // a configured key that does not exist in this browser: nothing to claim
         if (typeof x === 'string' && (cfg.localKeys.indexOf(x) >= 0 || cfg.localPrefixes.some(function (p) { return x.indexOf(p) === 0; }))) return null;
-        throw new Core.UsageError('from/skip/fail: expected a row of old.rows(...) or a localStorage key that was read (old.local), got ' + (typeof x === 'string' ? '"' + x + '"' : typeof x));
+        throw new Err.UsageError('from/skip/fail: expected a row of old.rows(...) or a localStorage key that was read (old.local), got ' + (typeof x === 'string' ? '"' + x + '"' : typeof x));
       }
       function fromRows(from, where) {
-        if (from === undefined || from === null) throw new Core.UsageError(where + ': "from" is missing: name the old row (or localStorage key) this entry comes from, so that nothing is deleted that was not copied');
+        if (from === undefined || from === null) throw new Err.UsageError(where + ': "from" is missing: name the old row (or localStorage key) this entry comes from, so that nothing is deleted that was not copied');
         var arr = Array.isArray(from) ? from : [from], ids = [];
-        if (!arr.length) throw new Core.UsageError(where + ': "from" is empty');
+        if (!arr.length) throw new Err.UsageError(where + ': "from" is empty');
         arr.forEach(function (x) { var id = rowId(x); if (id !== null && ids.indexOf(id) < 0) ids.push(id); });
         return ids;   // empty when every key is absent: such an entry has no old data behind it and is not processed
       }
@@ -5771,11 +5632,10 @@ return module.exports.argon2id;
         rowOf = new Map();
         var views = {};
         storeKeys.forEach(function (k) { views[k] = src.rows[k].map(function (r) { var c = { key: migrateClone(r.key, new Map()), value: migrateClone(r.value, new Map()) }; rowOf.set(c, r.id); return c; }); });
-        var ctx = { tag: tag, tagged: cfg.tagged, refs: new Set(), skipped: new Map(), hasRow: hasRow, unknownRow: rowId, describe: function (x) { try { var id = rowId(x); return id === null ? '' : migrateRowLabel(rowById[id]); } catch (e) { return ''; } } };
+        var ctx = { tag: tag, refs: new Set(), skipped: new Map(), hasRow: hasRow, unknownRow: rowId };
         var old = {
           rows: function (name) { return views[resolveStore(name)]; },
           local: (function () { var o = {}; src.local.forEach(function (v, k) { o[k] = v; }); return Object.freeze(o); })(),
-          keys: function (prefix) { return Array.from(src.local.keys()).filter(function (k) { return !prefix || k.indexOf(prefix) === 0; }); },
           json: function (key) {
             if (!src.local.has(key)) return undefined;
             try { return JSON.parse(src.local.get(key)); } catch (e) { throw MigrateStop('localStorage "' + key + '" is not JSON: ' + ((e && e.message) || e)); }
@@ -5783,10 +5643,11 @@ return module.exports.argon2id;
         };
         var h = makeMigrateHelpers(ctx), ret;
         try { ret = await cfg.map(old, h); }
-        catch (e) { if (e && (e.isMigrateStop || e instanceof Core.UsageError)) throw e; throw MigrateStop('map threw: ' + ((e && e.message) || e)); }
+        catch (e) { if (e && (e.isMigrateStop || e instanceof Err.UsageError)) throw e; throw MigrateStop('map threw: ' + ((e && e.message) || e)); }
         if (ret === undefined || ret === null) ret = {};
-        if (typeof ret !== 'object' || Array.isArray(ret)) throw new Core.UsageError('map must return { items, records, settings }');
-        Object.keys(ret).forEach(function (k) { if (k !== 'items' && k !== 'records' && k !== 'settings') throw new Core.UsageError('map returned an unknown field "' + k + '"; known: items, records, settings'); });
+        if (typeof ret !== 'object' || Array.isArray(ret)) throw new Err.UsageError('map must return { items, records }');
+        if (ret.settings !== undefined) throw new Err.UsageError('map returned "settings": personal preferences stay in localStorage and are not named in migrateLocal; shared values are a record');
+        Object.keys(ret).forEach(function (k) { if (k !== 'items' && k !== 'records') throw new Err.UsageError('map returned an unknown field "' + k + '"; known: items, records'); });
         var entries = [], names = {};
         function add(e) {
           e.rowsText = e.rows.map(function (id) { return migrateRowLabel(rowById[id]); }).join(', ');
@@ -5797,41 +5658,32 @@ return module.exports.argon2id;
           if (isBlobValue(v) || isBinaryValue(v)) return v;
           migrateCheckJson(v, where, [], 0);
           var text; try { text = JSON.stringify(v); } catch (e) { throw MigrateStop(where + ' cannot be written as JSON: ' + e.message); }
-          if (text === undefined) throw new Core.UsageError(where + ': the value is undefined');
+          if (text === undefined) throw new Err.UsageError(where + ': the value is undefined');
           return JSON.parse(text);
         }
-        if (ret.items !== undefined && !Array.isArray(ret.items)) throw new Core.UsageError('map: items must be an array');
+        if (ret.items !== undefined && !Array.isArray(ret.items)) throw new Err.UsageError('map: items must be an array');
         (ret.items || []).forEach(function (it, i) {
           var where = 'items[' + i + ']';
-          if (!it || typeof it !== 'object') throw new Core.UsageError(where + ' must be an object { col, id, value, from }');
-          if (colSet.indexOf(it.col) < 0) throw new Core.UsageError(where + ': col must be a collection made with store.collection(...) on this store');
-          if (typeof it.id !== 'string' || it.id.length < 1 || it.id.length > 200 || it.id.indexOf('/') >= 0) throw new Core.UsageError(where + ': id must be a string of 1 to 200 characters without "/" (use h.id(oldKey))');
+          if (!it || typeof it !== 'object') throw new Err.UsageError(where + ' must be an object { col, id, value, from }');
+          if (colSet.indexOf(it.col) < 0) throw new Err.UsageError(where + ': col must be a collection made with store.collection(...) on this store');
+          if (typeof it.id !== 'string' || it.id.length < 1 || it.id.length > 200 || it.id.indexOf('/') >= 0) throw new Err.UsageError(where + ': id must be a string of 1 to 200 characters without "/" (use h.id(oldKey))');
           var name = it.col.prefix + it.id;
           checkAppName(name);
           var created = it.created;
-          if (created !== undefined && created !== null && !Number.isFinite(created)) throw new Core.UsageError(where + ': created must be a number of milliseconds (use h.created(...))');
-          if (it.mime !== undefined && typeof it.mime !== 'string') throw new Core.UsageError(where + ': mime must be a string');
+          if (created !== undefined && created !== null && !Number.isFinite(created)) throw new Err.UsageError(where + ': created must be a number of milliseconds (use h.created(...))');
+          if (it.mime !== undefined && typeof it.mime !== 'string') throw new Err.UsageError(where + ': mime must be a string');
           var value = jsonValue(it.value, where + ' ("' + name + '")');
-          add({ kind: 'item', col: it.col, id: it.id, name: name, value: value, meta: it.col._migrateMeta(value, it.id, it.meta), created: created === null ? undefined : created, mime: it.mime, rows: fromRows(it.from, where + ' ("' + name + '")') });
+          add({ kind: 'item', col: it.col, id: it.id, name: name, value: value, meta: it.col._migrateMeta(value, it.id, it.meta), metaIn: it.meta, created: created === null ? undefined : created, mime: it.mime, rows: fromRows(it.from, where + ' ("' + name + '")') });
         });
-        if (ret.records !== undefined && !Array.isArray(ret.records)) throw new Core.UsageError('map: records must be an array');
-        function checkRecordName(name, where) {
-          checkAppName(name);
-          colSet.forEach(function (c) { if (name.indexOf(c.prefix) === 0 || name === c.indexName) throw new Core.UsageError(where + ': "' + name + '" lies inside the collection "' + c.prefix + '"; use items for entries of a collection'); });
-        }
+        if (ret.records !== undefined && !Array.isArray(ret.records)) throw new Err.UsageError('map: records must be an array');
         (ret.records || []).forEach(function (rc, i) {
           var where = 'records[' + i + ']';
-          if (!rc || typeof rc !== 'object') throw new Core.UsageError(where + ' must be an object { name, value, from }');
-          checkRecordName(rc.name, where);
-          if (rc.mime !== undefined && typeof rc.mime !== 'string') throw new Core.UsageError(where + ': mime must be a string');
+          if (!rc || typeof rc !== 'object') throw new Err.UsageError(where + ' must be an object { name, value, from }');
+          checkAppName(rc.name);
+          colSet.forEach(function (c) { if (rc.name.indexOf(c.prefix) === 0 || rc.name === c.indexName) throw new Err.UsageError(where + ': "' + rc.name + '" lies inside the collection "' + c.prefix + '"; use items for entries of a collection'); });
+          if (rc.mime !== undefined && typeof rc.mime !== 'string') throw new Err.UsageError(where + ': mime must be a string');
           add({ kind: 'record', name: rc.name, value: jsonValue(rc.value, where + ' ("' + rc.name + '")'), mime: rc.mime, rows: fromRows(rc.from, where + ' ("' + rc.name + '")') });
         });
-        if (ret.settings !== undefined && ret.settings !== null) {
-          var s = ret.settings;
-          if (typeof s !== 'object' || typeof s.record !== 'string' || !s.value || typeof s.value !== 'object' || Array.isArray(s.value)) throw new Core.UsageError('map: settings must be { record: "settings", value: { ... }, from: ... } (a JSON object)');
-          checkRecordName(s.record, 'settings');
-          add({ kind: 'settings', name: s.record, value: jsonValue(s.value, 'settings'), rows: fromRows(s.from, 'settings') });
-        }
         // every h.ref result must be the id of an item of this run
         var ids = new Set(entries.filter(function (e) { return e.kind === 'item'; }).map(function (e) { return e.id; }));
         ctx.refs.forEach(function (id) { if (!ids.has(id)) throw MigrateStop('h.ref returned "' + id + '", but no item has this id; the item that is referred to must be built with the same h.id call (same old key, same ending)'); });
@@ -5846,33 +5698,32 @@ return module.exports.argon2id;
         return { entries: entries, skipped: skipped, sig: sig, refs: ctx.refs };
       }
       var m1 = await mapOnce(), m2 = await mapOnce();
-      if (m1.sig !== m2.sig) throw new Core.UsageError('map gave different results when it ran twice. Build ids with h.id(oldKey) and take every value from the old rows: no random ids, no Date.now(), no counters');
+      if (m1.sig !== m2.sig) throw new Err.UsageError('map gave different results when it ran twice. Build ids with h.id(oldKey) and take every value from the old rows: no random ids, no Date.now(), no counters');
       var entries = m1.entries, skippedRows = m1.skipped;
       // An entry is new when map makes something else of it than what the marker holds (a changed row, a changed map). One without rows (absent keys) is never new.
       var isNew = function (e) { return e.rows.length > 0 && doneEntries[e.name] !== e.sig; };
       var todo = entries.filter(isNew);
-      todo.forEach(function (e) { e.state = e.kind === 'settings' ? 'settings' : 'absent'; });
+      todo.forEach(function (e) { e.state = 'absent'; });
       var newSkipped = skippedRows.filter(function (p) { return doneSkipped[p[0]] !== rowById[p[0]].hash; });
-      var dataEntries = todo.filter(function (e) { return e.kind !== 'settings'; });
       // Nothing new since the last verified copy: no question, no comparing with the vault (what the person did since stays as it is).
       if (!todo.length && !newSkipped.length) {
         var gone = await migrateDelete(cfg, src, keep);
-        if (gone === 'deleted') toast('ok', tt('migrate.done.again'), { key: 'migration' });
-        return res({ status: 'migrated', again: true, deleted: gone, copied: 0, total: marker && marker.value.items || 0 });
+        if (gone === 'deleted') toast('ok', t('migrate.done.again'), { key: 'migration' });
+        return { status: 'migrated', deleted: gone };
       }
 
       // ---- what the vault holds already; room for the rest ----
-      if (tagExisted || !cfg.tagged) {
-        await migratePool(dataEntries, 6, async function (e) {
+      if (tagExisted) {   // an earlier run of this browser may have written some of the entries
+        await migratePool(todo, 6, async function (e) {
           var rec = await migrateFresh(e.name);
           if (!rec) e.state = 'absent';
           else if (await storedEquals(rec, e.value)) { e.state = 'equal'; e.version = rec.version; }
-          else { e.state = 'differs'; e.stored = rec; }
+          else e.state = 'differs';
         });
       }
       var usage = await migrateGuarded(function () { return client.usage(); });
       var lim = usage && usage.limits || {}, left = [];
-      var cand = dataEntries.filter(function (e) { return e.state === 'absent'; });
+      var cand = todo.filter(function (e) { return e.state === 'absent'; });
       cand.forEach(function (e) { e.size = migrateSizeOf(e.value); });
       if (Number.isFinite(lim.max_value_bytes)) cand.filter(function (e) { return e.size > lim.max_value_bytes; }).forEach(function (e) { left.push(e); e.left = 'too-large'; });
       if (Number.isFinite(lim.vault_bytes) && Number.isFinite(usage.bytes)) {
@@ -5892,109 +5743,62 @@ return module.exports.argon2id;
       }
 
       // ---- ask ----
-      var count = dataEntries.length, vaultEnd = Core.displayCode(client.status().accessId).slice(-4);
-      run.dlg = dialogFor(S, { title: tt('migrate.title'), view: 'progress', cancelable: true, closeLabel: t('common.close'), onClose: function (r) { if (run.onClose) run.onClose(r); } });
-      var answer = 'yes';
-      while (count || newSkipped.length) {
-        answer = await migrateView(run, 'migrate', tt('migrate.title'), function (resolve) {
-          var err = el('div', { 'data-wds': 'form-error', 'aria-live': 'polite' }), yesBtn = null, ack = null, backedUp = false;
-          function refresh() { if (yesBtn && newSkipped.length) yesBtn.disabled = !(backedUp || (ack && ack.checked)); }
-          if (newSkipped.length) ack = el('input', { type: 'checkbox', id: uid('wds-ack'), 'data-wds': 'migrate-skip-ack', onchange: refresh });
-          yesBtn = btn(tt('migrate.yes'), { primary: true, wds: 'migrate-yes', disabled: newSkipped.length > 0, onClick: function () { resolve('yes'); } });
-          var q = count ? tt(sandbox ? 'migrate.question.sandbox' : 'migrate.question', { count: count, vault: vaultEnd }) : tt('migrate.question.none', { n: newSkipped.length });
-          return [
-            err,
-            el('p', { text: q }),
-            left.length ? el('p', { text: tt('migrate.question.large', { n: left.length }) }) : null,
-            newSkipped.length ? el('p', { text: tt('migrate.question.skipped', { n: newSkipped.length }) }) : null,
-            ack ? el('div', { class: 'wds-check' }, [ack, el('label', { for: ack.id, text: tt('migrate.skip.ack', { n: newSkipped.length }) })]) : null,
-            el('div', { class: 'wds-actions' }, [
-              yesBtn,
-              btn(tt('migrate.backup'), { wds: 'migrate-backup', onClick: function () { migrateDownloadBackup(cfg, tt, src, err).then(function () { backedUp = true; refresh(); }).catch(function (e) { logError('backup failed', e); err.textContent = tt('migrate.backup.failed', { why: (e && e.message) || String(e) }); }); } }),
-              el('span', { class: 'wds-spacer' }),
-              btn(tt('migrate.no'), { wds: 'migrate-no', onClick: function () { resolve('no'); } }),
-            ]),
-            el('p', { class: 'wds-hint', text: tt('migrate.backup.hint') }),
-            el('p', { class: 'wds-hint', text: tt('migrate.question.later') }),
-            el('p', { class: 'wds-hint' }, [btn(tt('migrate.discard'), { small: true, danger: true, wds: 'migrate-discard', onClick: function () { resolve('discard'); } })]),
-          ];
-        }, 'no');
-        if (answer !== 'discard') break;
-        var sure = await migrateView(run, 'migrate-discard', tt('migrate.discard.title'), function (resolve) {
-          return [
-            el('div', { 'data-wds': 'form-error', 'aria-live': 'polite' }),
-            el('p', { text: tt(sandbox ? 'migrate.discard.text.sandbox' : 'migrate.discard.text') }),
-            el('div', { class: 'wds-actions' }, [
-              btn(tt('migrate.discard.back'), { primary: true, wds: 'migrate-discard-back', onClick: function () { resolve('back'); } }),
-              el('span', { class: 'wds-spacer' }),
-              btn(tt('migrate.discard.confirm'), { danger: true, wds: 'migrate-discard-confirm', onClick: function () { resolve('delete'); } }),
-            ]),
-          ];
-        }, 'back');
-        if (sure === 'delete') {
-          migrateProgressView(run, tt);
-          var gone2 = await migrateDelete(cfg, src, keep);
-          closeRunDialog(run);
-          toast(gone2 === 'deleted' ? 'ok' : gone2 === 'kept' ? 'info' : 'warn', tt(gone2 === 'deleted' ? 'migrate.done.discarded' : gone2 === 'kept' ? 'migrate.done.discarded.kept' : 'migrate.done.changed'), { key: 'migration', sticky: gone2 === 'changed', actions: gone2 === 'changed' ? migrateBackupActions(cfg, tt) : undefined });
-          return res({ status: 'discarded', deleted: gone2 });
-        }
-      }
-      if (answer !== 'yes') return res({ status: 'declined' });
+      var count = todo.length, vaultEnd = Core.displayCode(client.status().accessId).slice(-4);
+      run.dlg = dialogFor(S, { title: t('migrate.title'), view: 'progress', cancelable: true, closeLabel: t('common.close'), onClose: function (r) { if (run.onClose) run.onClose(r); } });
+      var answer = await migrateView(run, 'migrate', t('migrate.title'), function (resolve) {
+        var err = el('div', { 'data-wds': 'form-error', 'aria-live': 'polite' }), yesBtn = null, ack = null, backedUp = false;
+        function refresh() { if (yesBtn && newSkipped.length) yesBtn.disabled = !(backedUp || (ack && ack.checked)); }
+        if (newSkipped.length) ack = el('input', { type: 'checkbox', id: uid('wds-ack'), 'data-wds': 'migrate-skip-ack', onchange: refresh });
+        yesBtn = btn(t('migrate.yes'), { primary: true, wds: 'migrate-yes', disabled: newSkipped.length > 0, onClick: function () { resolve('yes'); } });
+        var q = count ? t(sandbox ? 'migrate.question.sandbox' : 'migrate.question', { count: count, vault: vaultEnd }) : t('migrate.question.none', { n: newSkipped.length });
+        return [
+          err,
+          el('p', { text: q }),
+          left.length ? el('p', { text: t('migrate.question.large', { n: left.length }) }) : null,
+          newSkipped.length ? el('p', { text: t('migrate.question.skipped', { n: newSkipped.length }) }) : null,
+          ack ? el('div', { class: 'wds-check' }, [ack, el('label', { for: ack.id, text: t('migrate.skip.ack', { n: newSkipped.length }) })]) : null,
+          el('div', { class: 'wds-actions' }, [
+            yesBtn,
+            btn(t('migrate.backup'), { wds: 'migrate-backup', onClick: function () { migrateDownloadBackup(cfg, src, err).then(function () { backedUp = true; refresh(); }).catch(function (e) { logError('backup failed', e); err.textContent = t('migrate.backup.failed', { why: (e && e.message) || String(e) }); }); } }),
+            el('span', { class: 'wds-spacer' }),
+            btn(t('migrate.no'), { wds: 'migrate-no', onClick: function () { resolve('no'); } }),
+          ]),
+          el('p', { class: 'wds-hint', text: t('migrate.backup.hint') }),
+          el('p', { class: 'wds-hint', text: t('migrate.question.later') }),
+        ];
+      }, 'no');
+      if (answer !== 'yes') return { status: 'declined' };
 
       // ---- copy ----
-      var progress = migrateProgressView(run, tt);
-      var work = todo.filter(function (e) { return e.kind !== 'settings' && e.state === 'absent' && !e.left; });
+      var progress = migrateProgressView(run);
+      var work = todo.filter(function (e) { return e.state === 'absent' && !e.left; });
       var finished = 0;
       progress('migrate.progress', 0, work.length);
       await migratePool(work, 4, async function (e) {
         var r = await migratePutNew(e.name, e.value, e.mime);
         if (r.state === 'written') { e.state = 'written'; e.version = r.version; }
         else if (await storedEquals(r.stored, e.value)) { e.state = 'equal'; e.version = r.stored.version; }
-        else { e.state = 'differs'; e.stored = r.stored; }
+        else e.state = 'differs';
         finished++; progress('migrate.progress', finished, work.length);
       });
-      for (var si = 0; si < todo.length; si++) {
-        if (todo[si].kind !== 'settings') continue;
-        var sres = await migrateApplySettings(todo[si]);
-        todo[si].state = sres === 'ok' ? 'written' : 'differs';
-      }
 
-      // ---- entries that differ from what the vault holds ----
-      var differs = todo.filter(function (e) { return e.state === 'differs'; }), copiedBoth = [];
-      if (differs.length) {
-        var choice = await migrateView(run, 'migrate-differs', tt('migrate.differs.title'), function (resolve) {
-          return [
-            el('div', { 'data-wds': 'form-error', 'aria-live': 'polite' }),
-            el('p', { text: tt('migrate.differs.text', { n: differs.length }) }),
-            el('ul', null, differs.slice(0, 8).map(function (e) { return el('li', { text: S.label(e.name) }); }).concat(differs.length > 8 ? [el('li', { text: '…' })] : [])),
-            el('div', { class: 'wds-actions' }, [
-              btn(tt('migrate.differs.keepVault'), { primary: true, wds: 'migrate-differs-keep-vault', onClick: function () { resolve('vault'); } }),
-              btn(tt('migrate.differs.keepBoth'), { wds: 'migrate-differs-keep-both', onClick: function () { resolve('both'); } }),
-              el('span', { class: 'wds-spacer' }),
-              btn(tt('migrate.differs.later'), { wds: 'migrate-differs-later', onClick: function () { resolve('later'); } }),
-            ]),
-            el('p', { class: 'wds-hint', text: tt('migrate.differs.hint') }),
-          ];
-        }, 'later');
-        progress = migrateProgressView(run, tt);
-        if (choice === 'vault') differs.forEach(function (e) { e.state = 'vault'; });
-        else if (choice === 'both') {
-          for (var di = 0; di < differs.length; di++) {
-            var e0 = differs[di], tail = '~' + tag, copy;
-            if (e0.kind === 'item') { var id2 = e0.id.slice(0, 190) + tail; copy = Object.assign({}, e0, { id: id2, name: e0.col.prefix + id2, state: 'absent', meta: e0.col._migrateMeta(e0.value, id2, undefined) || e0.meta }); }
-            else copy = Object.assign({}, e0, { name: e0.name.slice(0, 900) + tail, state: 'absent' });
-            var w2 = await migratePutNew(copy.name, copy.value, copy.mime);
-            if (w2.state === 'written') { copy.state = 'written'; copy.version = w2.version; }
-            else if (await storedEquals(w2.stored, copy.value)) { copy.state = 'equal'; copy.version = w2.stored.version; }
-            else throw MigrateStop('could not keep both versions of "' + e0.name + '": "' + copy.name + '" exists with other content');
-            copiedBoth.push(copy); e0.state = 'both';
-          }
-        }
+      // ---- entries whose name holds other content in the vault: the old version is written next to it as "<id>~<tag>" (create-only, checked like the rest) ----
+      // The name carries the start of the entry's hash, so it can only ever hold this content (a second change makes a second copy).
+      var copies = [];
+      var differs = todo.filter(function (e) { return e.state === 'differs'; });
+      for (var di = 0; di < differs.length; di++) {
+        var e0 = differs[di], tail = '~' + tag + '-' + e0.sig.slice(0, 6), copy;
+        if (e0.kind === 'item') { var id2 = e0.id.slice(0, 180) + tail; copy = Object.assign({}, e0, { id: id2, name: e0.col.prefix + id2, meta: e0.col._migrateMeta(e0.value, id2, e0.metaIn) }); }
+        else copy = Object.assign({}, e0, { name: e0.name.slice(0, 900) + tail });
+        var w2 = await migratePutNew(copy.name, copy.value, copy.mime);
+        if (w2.state === 'written') { copy.state = 'written'; copy.version = w2.version; }
+        else if (await storedEquals(w2.stored, copy.value)) { copy.state = 'equal'; copy.version = w2.stored.version; }
+        else throw MigrateStop('the name "' + copy.name + '" holds other content');
+        copies.push(copy); e0.state = 'copied';
       }
-      var unsettled = todo.some(function (e) { return e.state === 'differs'; });
 
       // ---- index, then check everything that was copied ----
-      var verifyList = todo.concat(copiedBoth).filter(function (e) { return e.kind !== 'settings' && (e.state === 'written' || e.state === 'equal'); });
+      var verifyList = todo.concat(copies).filter(function (e) { return e.state === 'written' || e.state === 'equal'; });
       var byCol = new Map();
       verifyList.forEach(function (e) { if (e.kind === 'item') { if (!byCol.has(e.col)) byCol.set(e.col, []); byCol.get(e.col).push(e); } });
       var cols = Array.from(byCol.keys());
@@ -6012,63 +5816,52 @@ return module.exports.argon2id;
         if (!(await storedEquals(rec, e.value))) throw MigrateStop('the copy of "' + e.name + '" differs from the old entry after writing');
         checked++; progress('migrate.progress.check', checked, verifyList.length);
       });
-      for (var vi = 0; vi < todo.length; vi++) {
-        if (todo[vi].kind !== 'settings' || todo[vi].state !== 'written') continue;
-        var fin = await migrateFresh(todo[vi].name);
-        Object.keys(todo[vi].value).forEach(function (k) { if (todo[vi].value[k] !== undefined && (!fin || !fin.value || fin.value[k] === undefined)) throw MigrateStop('the setting "' + k + '" is missing in "' + todo[vi].name + '" after writing'); });
-      }
 
-      // ---- the marker: which entries are in the vault (an entry that is left out or unsettled is not) ----
+      // ---- the marker: which entries are in the vault (an entry that is left out is not) ----
       var entriesOk = {}, skippedOk = {};
-      entries.forEach(function (e) { if (!isNew(e) || e.state === 'written' || e.state === 'equal' || e.state === 'vault' || e.state === 'both') { if (e.rows.length) entriesOk[e.name] = e.sig; } });
+      entries.forEach(function (e) { if (!isNew(e) || e.state === 'written' || e.state === 'equal' || e.state === 'copied') { if (e.rows.length) entriesOk[e.name] = e.sig; } });
       skippedRows.forEach(function (p) { skippedOk[p[0]] = rowById[p[0]].hash; });
-      var copied = todo.concat(copiedBoth).filter(function (e) { return e.kind !== 'settings' && e.state === 'written'; }).length;
-      var total = entries.filter(function (e) { return e.kind !== 'settings'; }).length;
+      var total = entries.length;
       await migrateWriteMarker(markerName, cfg, tag, entriesOk, skippedOk, { items: total, skipped: skippedRows.length });
-      var leftInfo = left.map(function (e) { return { name: e.name, size: e.size, why: e.left }; });
 
-      if (unsettled) {
-        closeRunDialog(run);
-        toast('warn', tt('migrate.partial.differs'), { key: 'migration', sticky: true, actions: migrateBackupActions(cfg, tt) });
-        return res({ status: 'partial', why: 'differs', differs: differs.map(function (e) { return e.name; }), copied: copied, total: total, deleted: 'kept' });
-      }
       // ---- entries that did not fit ----
       if (left.length) {
-        var fate = await migrateView(run, 'migrate-large', tt('migrate.large.title'), function (resolve) {
-          var downloaded = {}, ack = null, del = null;
-          function refresh() { if (del) del.disabled = !(ack.checked || left.every(function (e, i) { return downloaded[i]; })); }
-          ack = el('input', { type: 'checkbox', id: uid('wds-ack'), 'data-wds': 'migrate-large-ack', onchange: refresh });
-          del = btn(tt('migrate.large.delete'), { danger: true, wds: 'migrate-delete', disabled: true, onClick: function () { resolve('delete'); } });
-          var rows = left.map(function (e, i) {
-            return el('li', { class: 'wds-person' }, [
-              el('div', { class: 'wds-person-main' }, [el('div', { class: 'wds-person-name', text: leftLabel(e) }), el('div', { class: 'wds-person-info', text: formatBytes(e.size) })]),
-              btn(tt('migrate.large.download'), { small: true, wds: 'migrate-large-download', onClick: function () { downloadBlob(leftBlob(e), leftFileName(e)); downloaded[i] = true; refresh(); } }),
-            ]);
-          });
-          rows.forEach(function (li, i) { li.querySelector('[data-wds="migrate-large-download"]').setAttribute('data-wds-index', String(i)); });
+        var fate = await migrateView(run, 'migrate-large', t('migrate.large.title'), function (resolve) {
+          var err = el('div', { 'data-wds': 'form-error', 'aria-live': 'polite' }), del;
+          del = btn(t('migrate.large.delete'), { danger: true, wds: 'migrate-delete', disabled: true, onClick: function () { resolve('delete'); } });
           return [
-            el('div', { 'data-wds': 'form-error', 'aria-live': 'polite' }),
-            el('p', { text: tt('migrate.large.text', { n: left.length }) }),
-            el('ul', { class: 'wds-people' }, rows),
-            el('div', { class: 'wds-check' }, [ack, el('label', { for: ack.id, text: tt('migrate.large.ack') })]),
-            el('div', { class: 'wds-actions' }, [btn(tt('migrate.large.keep'), { primary: true, wds: 'migrate-keep', onClick: function () { resolve('keep'); } }), del]),
+            err,
+            el('p', { text: t('migrate.large.text', { n: left.length }) }),
+            el('ul', { class: 'wds-people' }, left.map(function (e) {
+              return el('li', { class: 'wds-person' }, [el('div', { class: 'wds-person-main' }, [el('div', { class: 'wds-person-name', text: leftLabel(e) }), el('div', { class: 'wds-person-info', text: formatBytes(e.size) })])]);
+            })),
+            el('div', { class: 'wds-actions' }, [
+              btn(t('migrate.large.keep'), { primary: true, wds: 'migrate-keep', onClick: function () { resolve('keep'); } }),
+              btn(t('migrate.large.download'), { wds: 'migrate-large-download', onClick: function () {
+                migrateLeftZip(left).then(function (zip) { downloadBlob(zip, cfg.id + '-too-large.zip'); del.disabled = false; err.textContent = ''; },
+                  function (e) { logError('download failed', e); err.textContent = t('migrate.backup.failed', { why: (e && e.message) || String(e) }); });
+              } }),
+              del,
+            ]),
           ];
         }, 'keep');
         if (fate !== 'delete') {
           closeRunDialog(run);
-          toast('warn', tt('migrate.partial'), { key: 'migration', sticky: true, actions: migrateBackupActions(cfg, tt) });
-          return res({ status: 'partial', tooLarge: leftInfo, copied: copied, total: total, deleted: 'kept' });
+          toast('warn', t('migrate.partial'), { key: 'migration', sticky: true, actions: migrateBackupActions(cfg) });
+          return { status: 'partial', why: 'too-large' };
         }
-        migrateProgressView(run, tt);
+        migrateProgressView(run);
       }
 
       // ---- delete the old data (never in the sandbox) ----
       var deleted = await migrateDelete(cfg, src, keep);
       closeRunDialog(run);
-      toast(deleted === 'deleted' ? 'ok' : deleted === 'kept' ? 'info' : 'warn', tt(deleted === 'deleted' ? (total ? 'migrate.done.deleted' : 'migrate.done.settings') : deleted === 'kept' ? (total ? 'migrate.done.kept' : 'migrate.done.settings.kept') : 'migrate.done.changed', { n: total }), { key: 'migration', sticky: deleted === 'changed', actions: deleted === 'changed' ? migrateBackupActions(cfg, tt) : undefined });
-      var out = { status: 'migrated', deleted: deleted, copied: copied, total: total };
-      if (leftInfo.length) out.tooLarge = leftInfo;
-      return res(out);
+      var doneText = t(deleted === 'deleted' ? 'migrate.done.deleted' : deleted === 'kept' ? 'migrate.done.kept' : 'migrate.done.changed', { n: total });
+      if (copies.length && deleted !== 'changed') doneText += ' ' + t('migrate.done.copies', { n: copies.length });
+      toast(deleted === 'deleted' ? 'ok' : deleted === 'kept' ? 'info' : 'warn', doneText, { key: 'migration', sticky: deleted === 'changed' || copies.some(function (c) { return c.kind === 'record'; }), actions: deleted === 'changed' ? migrateBackupActions(cfg) : undefined });
+      var res = { status: 'migrated', deleted: deleted };
+      if (copies.length) res.copies = copies.map(function (c) { return c.name; });
+      return res;
     }
     function closeRunDialog(run) { if (run.dlg && !run.dlg.closed) { run.onClose = null; run.dlg.close(); } }
 
@@ -6127,26 +5920,26 @@ return module.exports.argon2id;
     }
     function migrateWhy(e) {
       if (e && e.isMigrateStop) return e.why;
-      if (e instanceof Core.OfflineError) return 'offline: ' + e.message;
-      if (e instanceof Core.QuotaError) return 'quota: ' + e.message;
-      if (e instanceof Core.AuthError) return 'locked: ' + e.message;
-      if (e instanceof Core.UsageError && e.code === 'locked') return 'locked';
+      if (e instanceof Err.OfflineError) return 'offline: ' + e.message;
+      if (e instanceof Err.QuotaError) return 'quota: ' + e.message;
+      if (e instanceof Err.AuthError) return 'locked: ' + e.message;
+      if (e instanceof Err.UsageError && e.code === 'locked') return 'locked';
       if (typeof DOMException !== 'undefined' && e instanceof DOMException) return 'the old browser storage changed or could not be read while it was copied (' + (e.name || 'DOMException') + ')';
       return String((e && e.message) || e);
     }
     async function migrateRun(cfg) {
-      var tt = migrateTexts(cfg), run = { dlg: null, onClose: null };
-      try { return await migrateBody(cfg, tt, run); }
+      var run = { dlg: null, onClose: null };
+      try { return await migrateBody(cfg, run); }
       catch (e) {
         closeRunDialog(run);
         // Only wrong options reject (before anything is read). Everything that map or the old data cause is a result: a mistake in one user's data must not
         // stop the page from starting for that user, so the developer's message goes to the console and the person gets the notice with the backup.
-        var mistake = !(e && e.isMigrateStop) && e instanceof Core.UsageError && e.code !== 'locked';
+        var mistake = !(e && e.isMigrateStop) && e instanceof Err.UsageError && e.code !== 'locked';
         var why = migrateWhy(e);
         if (!/^locked/.test(why) && !client.status().unlocked) why = 'locked: ' + why;   // a request that was in flight when the session ended fails in odd ways
         if (typeof console !== 'undefined') { if (mistake && console.error) console.error('wds: migrateLocal "' + cfg.id + '" stopped (a mistake in map or in the old data; nothing was deleted): ' + why); else if (console.warn) console.warn('wds: migrateLocal "' + cfg.id + '" stopped: ' + why); }
-        if (!/^locked/.test(why)) toast('warn', tt('migrate.failed'), { key: 'migration', sticky: true, actions: migrateBackupActions(cfg, tt) });
-        return migrateWithBackup({ status: 'failed', why: why, deleted: 'kept', sandbox: isSandbox(S) }, cfg, tt);
+        if (!/^locked/.test(why)) toast('warn', t('migrate.failed'), { key: 'migration', sticky: true, actions: migrateBackupActions(cfg) });
+        return { status: 'failed', why: why };
       } finally { closeRunDialog(run); }
     }
     async function migrateLocal(opts) {
@@ -6154,7 +5947,7 @@ return module.exports.argon2id;
       var locks = typeof navigator !== 'undefined' && navigator.locks;
       if (!locks || typeof locks.request !== 'function') return migrateRun(cfg);
       return locks.request('wds:migrate:' + cfg.id, { ifAvailable: true }, function (lock) {
-        if (!lock) return { status: 'busy', sandbox: isSandbox(S) };
+        if (!lock) return { status: 'busy' };
         return migrateRun(cfg);
       });
     }
@@ -6193,7 +5986,7 @@ return module.exports.argon2id;
       // onConflict(fn) for every record, onConflict(pattern, fn) for a name or a prefix ending in "/"; a handler that decides nothing hands over to the dialog.
       onConflict: function (a, b) {
         if (typeof a === 'string') return registerConflict(a, b);
-        if (a !== null && a !== undefined && typeof a !== 'function') throw new Core.UsageError('onConflict: a function or a pattern and a function');
+        if (a !== null && a !== undefined && typeof a !== 'function') throw new Err.UsageError('onConflict: a function or a pattern and a function');
         conflictGlobal = a || null;
         return function () { if (conflictGlobal === a) conflictGlobal = null; };
       },
@@ -6210,10 +6003,8 @@ return module.exports.argon2id;
         return guarded(function () { return client.getRecord(name, o && o.fresh ? { fresh: true } : undefined); });
       },
       getMany: async function (names, o) {
-        if (!Array.isArray(names)) throw new Core.UsageError('getMany needs an array of record names');
+        if (!Array.isArray(names)) throw new Err.UsageError('getMany needs an array of record names');
         o = o || {};
-        var conc = o.concurrency === undefined ? 6 : o.concurrency;
-        if (!Number.isInteger(conc) || conc < 1 || conc > 16) throw new Core.UsageError('getMany: concurrency is a whole number from 1 to 16');
         names.forEach(checkAppName);
         await ensureUnlocked();
         var out = new Array(names.length), next = 0, firstErr = null, fresh = o.fresh ? { fresh: true } : undefined;
@@ -6226,7 +6017,7 @@ return module.exports.argon2id;
           }
         }
         var workers = [];
-        for (var k = 0; k < Math.min(conc, names.length); k++) workers.push(worker());
+        for (var k = 0; k < Math.min(6, names.length); k++) workers.push(worker());
         await Promise.all(workers);
         if (firstErr) throw firstErr;
         return out;
@@ -6278,13 +6069,13 @@ return module.exports.argon2id;
       // Takes over the data an earlier, local-only version of the app left in this browser (IndexedDB, localStorage): see the header comment and docs/site/porting.md.
       migrateLocal: migrateLocal,
 
-      // Statuses: idle, dirty, saving, saved, error, replaced, stopped. One live handle per name: a new one flushes and stops the old one.
+      // Statuses: idle, dirty, saving, saved, error, stopped. One live handle per name: a new one flushes and stops the old one.
       autosave: function (name, getState, o) { checkAppName(name); return makeAutosave(name, getState, o, null); },
 
       // A list of items "<prefix><id>" with an index record that several devices can extend without losing each other's items (1.2).
       collection: function (prefix, o) {
-        if (typeof prefix !== 'string' || prefix.length < 2 || prefix.slice(-1) !== '/') throw new Core.UsageError('collection: the prefix must end with "/", for example "notes/"');
-        if (isInternalName(prefix)) throw new Core.UsageError('collection: prefixes starting with "' + INTERNAL_PREFIX + '" are reserved for the library');
+        if (typeof prefix !== 'string' || prefix.length < 2 || prefix.slice(-1) !== '/') throw new Err.UsageError('collection: the prefix must end with "/", for example "notes/"');
+        if (isInternalName(prefix)) throw new Err.UsageError('collection: prefixes starting with "' + INTERNAL_PREFIX + '" are reserved for the library');
         var c = collections.get(prefix);
         if (c) { c._setOptions(o); return c; }   // the options of the latest call win
         c = makeCollection(prefix, o);
@@ -6334,7 +6125,7 @@ return module.exports.argon2id;
         var next = Object.assign({}, labels);
         fn(next);
         try { await client.put(LABELS_RECORD, next); labels = next; return; }
-        catch (e) { if (!(e instanceof Core.ConflictError)) throw e; }
+        catch (e) { if (!(e instanceof Err.ConflictError)) throw e; }
       }
     }
     var shareApi = {
@@ -6356,10 +6147,10 @@ return module.exports.argon2id;
         pending: function (status) {
           var foreign = foreignRecoverySlots(status), done = shareApi.acked.get();
           var fresh = foreign.filter(function (id) { return done.indexOf(id) < 0; });
-          if (!fresh.length && foreign.length) { client.acknowledgeRecovery(); S.recoveryAcked = true; }
+          if (!fresh.length && foreign.length) client.acknowledgeRecovery();
           return fresh;
         },
-        confirm: function (ids) { client.acknowledgeRecovery(); S.recoveryAcked = true; shareApi.acked.add(ids); },
+        confirm: function (ids) { client.acknowledgeRecovery(); shareApi.acked.add(ids); },
       },
       seen: {
         get: function () { try { var v = JSON.parse(storageGet('seen') || '[]'); return Array.isArray(v) ? v : []; } catch (e) { return []; } },
@@ -6427,7 +6218,7 @@ return module.exports.argon2id;
         if (r.done) toast('ok', t('note.rekey.done'), { key: 'rekeydone' });
       }, function (e) {
         if (h) h.close();
-        if (e instanceof Core.AuthError || e instanceof Core.IntegrityError) reportError(e);
+        if (e instanceof Err.AuthError || e instanceof Err.IntegrityError) reportError(e);
         else toast('warn', t('note.rekey.failed'), { key: 'rekeyfail' });
       }).then(function () { rekeyRunning = false; });
     }
@@ -6454,7 +6245,7 @@ return module.exports.argon2id;
       } catch (e) { /* checking is best effort */ } finally { checking = false; }
     }
     function installWatcher() {
-      if (watchInstalled || opts.watch === false || typeof window === 'undefined') return;
+      if (watchInstalled || typeof window === 'undefined') return;
       watchInstalled = true;
       window.addEventListener('focus', checkStale);
       document.addEventListener('visibilitychange', function () { if (!document.hidden) checkStale(); });
@@ -6464,7 +6255,7 @@ return module.exports.argon2id;
       if (unloadInstalled || typeof window === 'undefined') return;
       unloadInstalled = true;
       function flushAll() {
-        allHandles.forEach(function (a) { if (a.dirty) a.flush(); });
+        allHandles.forEach(function (a) { if (a._i.dirty()) a.flush(); });
         collections.forEach(function (c) { c._flushNow(); });
       }
       document.addEventListener('visibilitychange', function () { if (document.hidden) flushAll(); });
@@ -6483,9 +6274,6 @@ return module.exports.argon2id;
     version: UI_VERSION,
     connect: connect,
     errors: Core.errors,
-    fillGaps: fillGaps,
-    ConflictError: Core.ConflictError, OfflineError: Core.OfflineError, QuotaError: Core.QuotaError, AuthError: Core.AuthError,
-    IntegrityError: Core.IntegrityError, VersionError: Core.VersionError, UsageError: Core.UsageError,
     // pure helpers and texts; used by the unit tests and tools, not part of the app API
     internals: {
       TEXT: TEXT, makeT: makeT, detectLang: detectLang, estimate: estimate, checkLocal: checkLocal, checkPassphrase: checkPassphrase, hibpCheck: hibpCheck,

@@ -339,16 +339,17 @@ class RepositoryDocuments(unittest.TestCase):
         guide = self.c.get("/datastore/docs/integration.md").text
         self.assertIn(PRIVACY_EN, guide)
         self.assertIn(PRIVACY_DE, guide)
-        self.assertGreaterEqual(guide.count(PRIVACY_EN), 2)  # the top of the guide and the text for users (section 13)
-        self.assertGreaterEqual(guide.count(PRIVACY_DE), 2)
+        self.assertEqual(guide.count(PRIVACY_EN), 1)  # stated once in full: the template of section 13 (the top of the guide points there)
+        self.assertEqual(guide.count(PRIVACY_DE), 1)
         llms = self.c.get("/datastore/llms.txt").text
         self.assertIn(PRIVACY_EN, llms)
         self.assertIn(PRIVACY_DE, llms)
         self.assertIn(PRIVACY_EN, self.c.get("/datastore/docs/users.en.md").text)
         self.assertIn(PRIVACY_DE, self.c.get("/datastore/docs/users.de.md").text)
-        porting = self.c.get("/datastore/docs/porting.md").text  # a ported app replaces "your data stays on this device" with the official sentence
-        self.assertIn(PRIVACY_EN, porting)
-        self.assertIn(PRIVACY_DE, porting)
+        porting = self.c.get("/datastore/docs/porting.md").text  # a ported app replaces "your data stays on this device": porting.md only points to section 13
+        self.assertNotIn(PRIVACY_EN, porting)
+        self.assertNotIn(PRIVACY_DE, porting)
+        self.assertIn("integration.md, section 13", porting)
 
     def test_the_breach_check_sentence_is_the_same_everywhere(self):
         from wds_server.prompt import HIBP_DE, HIBP_EN
@@ -358,15 +359,15 @@ class RepositoryDocuments(unittest.TestCase):
         self.assertIn("Prüfsumme", HIBP_DE)
         self.assertNotIn("Hash", HIBP_DE)
         guide = self.c.get("/datastore/docs/integration.md").text
-        self.assertGreaterEqual(guide.count(HIBP_EN), 2)  # the top of the guide and the text for users (section 13)
-        self.assertGreaterEqual(guide.count(HIBP_DE), 2)
+        self.assertEqual(guide.count(HIBP_EN), 1)  # stated once in full: the template of section 13
+        self.assertEqual(guide.count(HIBP_DE), 1)
         self.assertIn(HIBP_EN, self.c.get("/datastore/llms.txt").text)
         self.assertIn(HIBP_DE, self.c.get("/datastore/llms.txt").text)
         self.assertIn(HIBP_EN, self.c.get("/datastore/docs/users.en.md").text)
         self.assertIn(HIBP_DE, self.c.get("/datastore/docs/users.de.md").text)
         porting = self.c.get("/datastore/docs/porting.md").text
-        self.assertIn(HIBP_EN, porting)
-        self.assertIn(HIBP_DE, porting)
+        self.assertNotIn(HIBP_EN, porting)
+        self.assertNotIn(HIBP_DE, porting)
         # the example app of the repository carries both sentences in its privacy text
         app = (REPO_DOCS.parents[1] / "examples" / "zeit-notizen" / "index.html").read_text(encoding="utf-8")
         self.assertIn(HIBP_EN, app)
@@ -375,7 +376,7 @@ class RepositoryDocuments(unittest.TestCase):
     def test_integration_guide_documents_set_created_dialogs_and_the_new_views(self):
         text = self.c.get("/datastore/docs/integration.md").text
         for part in ("**`set` and `created`.**", "upsert", "### Driving the library's dialogs in your own end-to-end tests", "tools/lib/drive-library.mjs",
-                     "| `migrate` |", "| `migrate-differs` |", "| `migrate-large` |", "migrate-large-ack", "migrate-differs-keep-both", "aria-busy",
+                     "| `migrate` |", "| `migrate-large` |", "migrate-large-download", "until the roster is refreshed",
                      "### The library's dialogs and your own modal dialogs", "dialog:not(.wds-dialog)", "store.setLocale(\"de\")", "get(id, { fresh })", "window.open(\"\", \"_blank\")",
                      "redeemInvite", "1 MB = 1,048,576 bytes"):
             self.assertIn(part, text, part)
@@ -398,7 +399,7 @@ class RepositoryDocuments(unittest.TestCase):
             if path.suffix not in (".md", ".txt", ".html"):
                 continue
             body = path.read_text(encoding="utf-8")
-            for gone in ("openOldDb", "keepInSandbox", "migratedSettings", "settingsDone", "toNewRecords", "migrateOldData", "WDS_JOIN_CODE=", "export WDS_JOIN_CODE", "MiB", "GiB", "Hashwert"):
+            for gone in ("openOldDb", "keepInSandbox", "migratedSettings", "settingsDone", "toNewRecords", "migrateOldData", "WDS_JOIN_CODE=", "export WDS_JOIN_CODE", "MiB", "GiB", "Hashwert", "fillGaps", "migrate-differs", "migrate-discard", "tagged: false", "invite-expiry", "onReplaced", "notify: false", "downloadBackup"):
                 self.assertNotIn(gone, body, path.name + " still has " + gone)
 
     def test_porting_guide_has_the_load_bearing_parts(self):
@@ -410,18 +411,18 @@ class RepositoryDocuments(unittest.TestCase):
         self.assertEqual(page.status, 200)
         self.assertIn("<title>Porting an existing app to WIAI Datastore - WIAI Datastore</title>", page.text)
         self.assertIn("/docs/porting.md", page.text)  # the Markdown link in the header
-        for part in ("store.migrateLocal", "from", "h.skip", "h.fail", "h.ref", "h.id", "h.blob", "h.created", "WDS.fillGaps", "tagged: false", "**The new ids contain `-` and `%`**",
-                     "**Do you need the tag in the item ids? Decide by the old ids.**", "### Example 1:", "### Example 2:", "### What your app does with the result",
-                     "migrate-differs", "migrate-large", "Entries that differ", "The join code for tests", "(umask 077; cat > ~/.wds/join-code)", "mkdir -p ~/.wds && chmod 700 ~/.wds",
+        for part in ("store.migrateLocal", "from", "h.skip", "h.ref", "h.id", "h.blob", "h.created", "<id>~<tag>", "**The new ids contain `-` and `%`**",
+                     "### Example 1:", "### Example 2:", "### What your app does with the result",
+                     "migrate-large", "The join code for tests", "(umask 077; cat > ~/.wds/join-code)", "mkdir -p ~/.wds && chmod 700 ~/.wds",
                      "WDS_JOIN_CODE_FILE", "never read, print, copy or list that file", "redeemInvite", "deleteVault", "--migration-delete", "context.addInitScript", "__WDS_MIGRATION_TEST__",
-                     "## 7. Checklist for apps with forms and modal dialogs", "dialog:not(.wds-dialog)", "CSS.escape", "window.open(\"\", \"_blank\")", "setLocale(\"de\")",
-                     "same folder, same file name", "sessionStorage", "fresh browser profile", "1 MB = 1,048,576 bytes", "nothing", "busy", "skipped", "declined", "partial", "failed", "migrated"):
+                     "## 7. Checklist for apps with forms and modal dialogs", "dialog:not(.wds-dialog)", "CSS.escape", "setLocale(\"de\")",
+                     "same folder, same file name", "sessionStorage", "fresh browser profile", "nothing", "busy", "skipped", "declined", "partial", "failed", "migrated"):
             self.assertIn(part, text, part)
         # the seed run is described in its order: old app, new app, dialogs, steps, filling, reload
         order = [text.index(x) for x in ("1. **The old app.**", "2. **The new app**", "3. **The library's dialogs.**", "4. **The steps**", "5. **Automatic filling", "6. **The reload**")]
         self.assertEqual(order, sorted(order))
-        # the guide has to say what no code can: units once, and that the file with the join code is the person's own
-        self.assertIn("Units: 1 MB = 1,048,576 bytes", text)
+        # the units are defined once, in integration.md (section 4); this guide points there
+        self.assertIn("Sizes in MB are defined in integration.md, section 4", text)
         self.assertNotIn("{{", text)
 
     def test_llms_txt_indexes_the_two_guides_with_the_line_ranges_of_the_served_text(self):
@@ -472,15 +473,14 @@ class RepositoryDocuments(unittest.TestCase):
         self.assertIn("for a member it is their own access dialog", guide)
         # 7: the heading level of the report, and how to paste it
         self.assertIn("--heading-level 3 --out report.md", guide)
-        # 8: the notice's box, with numbers that client/src/wds-ui.js makes true (examples/docs-recipes.spec.mjs measures them in a browser)
-        self.assertIn("26rem wide (416 px at the default font size", guide)
-        self.assertIn("1rem from the right and from the bottom edge of the window", guide)
+        # 8: the notice sits at the bottom right (the box itself is measured in a browser by examples/docs-recipes.spec.mjs); no rem numbers in the text
         ui = (REPO_DOCS.parents[1] / "client" / "src" / "wds-ui.js").read_text(encoding="utf-8")
-        self.assertIn(".wds-toasts{position:fixed;right:1rem;bottom:1rem;", ui)
-        self.assertIn("width:min(26rem,calc(100vw - 2rem))", ui)
+        self.assertIn("at the bottom right of the window", guide)
+        self.assertIn("on the **left** or in the middle", guide)
+        self.assertNotIn("26rem", guide)
         # 9, 10: what the mock checks that the sandbox cannot; --wds-sandbox-bar in the checklist and in section 4
-        self.assertIn("**What the mock checks that the sandbox cannot**", guide)
-        self.assertIn("so a file over that size is a quota error there", guide)
+        self.assertIn("**Mock or sandbox.**", guide)
+        self.assertIn("takes the \"too large\" path of a migration there", guide)
         checklist = guide[guide.index("## Checklist for Claude"):guide.index("## 1. Register a scope")]
         self.assertIn("top: var(--wds-sandbox-bar, 0px)", checklist)
         section4 = guide[guide.index("### The library's dialogs and your own modal dialogs"):guide.index("## 5. Where data lives")]
@@ -491,7 +491,6 @@ class RepositoryDocuments(unittest.TestCase):
         # 4: the write order of a save that creates or replaces a file and an entry
         self.assertIn("Save a note that gets a new or replaced attachment", guide)
         self.assertIn("async function saveNoteWithFile(", guide)
-        self.assertIn("Save a note that gets a new or replaced attachment", porting)
         # 3: the type of a Blob in migrateLocal items
         self.assertIn("Without `mime`, the `type` of the Blob or File is stored", porting)
         # the examples are not the Literaturliste any more (the first trial's app)
@@ -500,12 +499,16 @@ class RepositoryDocuments(unittest.TestCase):
             self.assertNotIn(word, (REPO_DOCS.parents[1] / "client" / "README.md").read_text(encoding="utf-8"))
         # the recipe leaves the new file in place when the note may be stored, and no clean-up of "unreferenced" files is advised
         self.assertIn("!err.stored && !(err instanceof WDS.errors.OfflineError)", guide)
-        self.assertIn("Do not write a clean-up that removes the files no note names", guide)
+        self.assertIn("Never write a clean-up of files that no note names", guide)
+        self.assertIn("**Never reload an item that is open in a form**", guide)
         self.assertNotIn("can be removed at a quiet moment", guide)
-        # the toast box in a narrow window: the window width minus 1rem (the media query below 36rem), in both documents
-        self.assertIn("narrower than 36rem it spans the window width minus 1rem", guide)
-        self.assertNotIn("28rem", guide)
-        self.assertNotIn("minus 2rem", porting)
+        # one rule for settings: a personal preference stays in localStorage, a shared value is a record
+        self.assertIn("never names it in `migrateLocal`", guide)
+        self.assertIn("do not name it in `migrateLocal`", porting)
+        self.assertIn("A unique index", porting)
+        self.assertIn("**The ZIP is a way out, not an import format:**", guide)
+        self.assertIn("An import that replaces everything writes the new items first", porting)
+        self.assertIn("{{sandbox_creation}}", (REPO_DOCS / "integration.md").read_text(encoding="utf-8"))
 
     def test_users_documents_explain_the_old_data_question(self):
         en = self.c.get("/datastore/docs/users.en.md").text

@@ -19,7 +19,7 @@ Source code, PROTOCOL.md and the verifier wds-verify (public): {{repo_url}}
 
 ## Reading the guides in parts
 
-integration.md and porting.md are long, more than one read of a file tool returns. These are their sections with the line ranges of the files as the service serves them (the Read tool takes `offset` and `limit`; a "###" subsection is listed when it is 20 lines or longer).
+integration.md is longer than one read of a file tool returns, and porting.md is long too. These are their sections with the line ranges of the files as the service serves them (the Read tool takes `offset` and `limit`; a "###" subsection is listed when it is 20 lines or longer).
 A new app needs the checklist and sections 2 to 8 and 14 of integration.md; an existing app also porting.md, sections 1 to 4 and 7; before you hand an app over, sections 12 and 13 of integration.md. Read a section whole: the rules sit inside it.
 
 {{index_integration}}
@@ -31,7 +31,7 @@ A new app needs the checklist and sections 2 to 8 and 14 of integration.md; an e
 1. Load the library with exactly one script tag from integration.md (URL, integrity hash, crossorigin). Never copy,
    inline, modify or self-host the library, and load no other third-party script.
 2. All user data goes through the object from WDS.connect(). No own cryptography, no fetch/XHR/WebSocket to the
-   datastore, no user data in localStorage, sessionStorage, IndexedDB or cookies. The library has no unencrypted path.
+   datastore, no user data in localStorage, sessionStorage, IndexedDB or cookies (a personal preference chosen from a fixed list, such as theme, language, sort or last tab, may stay in localStorage under the app's own key). The library has no unencrypted path.
 3. Never build your own passphrase, login or key dialogs and never ask for a passphrase or access ID. Call
    store.unlock() (or any store method; each one unlocks first) and let the library's dialogs do it. The dialogs follow the browser language;
    an app in one language calls store.setLocale("de") (or "en") once right after WDS.connect, and an app with its own language switch calls it at start and on every change.

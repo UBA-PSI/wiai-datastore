@@ -8,7 +8,8 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { tmpDir } from './helpers.mjs';
 import { startMock } from '../lib/wds-mock.mjs';
-import { createVault, redeemInvite, deleteVault, answerMigration, enableMigrationDelete, unlock, confirmSheet, viewOf, waitForView, dialog, dialogState, formError, describeDialog, fillWhenReady, briefError, readJoinCode, joinCodeFile, DriveError } from '../lib/drive-library.mjs';
+import { createVault, redeemInvite, deleteVault, answerMigration, unlock, confirmSheet, readJoinCode, DriveError } from '../lib/drive-library.mjs';
+import { viewOf, waitForView, dialog, dialogState, formError, describeDialog, fillWhenReady, briefError, joinCodeFile } from '../lib/dialog-internals.mjs';
 
 let mock, browser, scope, appUrl;
 before(async () => {
@@ -36,7 +37,8 @@ test('createVault, unlock and confirmSheet drive the library dialogs', { timeout
   const page = await open(context);
   assert.equal(await viewOf(page), null);
   await page.evaluate(() => { window.p = store.unlock(); });
-  const { accessId, passphrase } = await createVault(page);
+  const { accessId, passphrase, next } = await createVault(page);
+  assert.equal(next, null);   // the dialog is gone: the app asks nothing more
   assert.match(accessId, /^[0-9A-Z-]{20,}$/);
   assert.ok(passphrase.length >= 20);
   await page.evaluate(() => window.p);
@@ -47,7 +49,7 @@ test('createVault, unlock and confirmSheet drive the library dialogs', { timeout
   const other = await open(await browser.newContext());
   await other.evaluate(() => { window.p = store.unlock(); });
   await assert.rejects(unlock(other, { accessId, passphrase: 'not the passphrase of this vault' , timeout: 20000 }), (e) => e instanceof DriveError && /unlocking failed/.test(e.message));
-  await unlock(other, { accessId, passphrase }).catch(() => {});   // the dialog is still open after the failed try: try again with the right one
+  assert.deepEqual(await unlock(other, { accessId, passphrase }), { next: null });   // the dialog is still open after the failed try: try again with the right one
   await other.evaluate(() => window.p);
   assert.deepEqual(await other.evaluate(() => store.get('note')), { t: 'kept' });
   await context.close();
@@ -56,7 +58,8 @@ test('createVault, unlock and confirmSheet drive the library dialogs', { timeout
 test('confirm: false leaves the access sheet open for confirmSheet(); waitForView times out with the view it saw', { timeout: 120000 }, async () => {
   const page = await open(await browser.newContext());
   await page.evaluate(() => { window.p = store.unlock(); });
-  const { accessId } = await createVault(page, { confirm: false });
+  const { accessId, next } = await createVault(page, { confirm: false });
+  assert.equal(next, 'sheet');
   assert.equal(await viewOf(page), 'sheet');
   assert.equal(await confirmSheet(page), accessId);
   await page.evaluate(() => window.p);
@@ -288,12 +291,29 @@ test('confirmSheet: a sheet that cannot be confirmed is a DriveError with the te
   await assert.rejects(confirmSheet(page), (e) => e instanceof DriveError && /the access sheet could not be confirmed/.test(e.message) && /the dialog says/.test(e.message));
 });
 
-test('answerMigration: the backup is downloaded, "Take over" pressed; migrate-large: every file downloaded one by one, then "delete anyway"; enableMigrationDelete sets the global', { timeout: 60000 }, async () => {
+// An app that calls migrateLocal after the unlock: unlock() and createVault() end on the question (next: 'migrate') instead of waiting for a dialog that is gone.
+const MIG = { id: 'drive', localStorage: { keys: ['old.key'] } };
+test('createVault and unlock resolve with next "migrate" when the app calls migrateLocal after the unlock; answerMigration then answers the question', { timeout: 180000 }, async () => {
   const context = await browser.newContext({ acceptDownloads: true });
-  await enableMigrationDelete(context);
+  const page = await open(context);
+  await page.evaluate((m) => { localStorage.setItem('old.key', '{"a":1}'); window.p = store.unlock().then(() => store.migrateLocal({ id: m.id, localStorage: m.localStorage, map: (old) => ({ records: [{ name: 'moved-1', value: { t: 1 }, from: 'old.key' }] }) })); }, MIG);
+  const made = await createVault(page);
+  assert.equal(made.next, 'migrate');
+  assert.equal((await answerMigration(page)).backup !== null, true);
+  assert.equal((await page.evaluate(() => window.p)).status, 'migrated');
+  assert.deepEqual(await page.evaluate(() => store.get('moved-1')), { t: 1 });
+  const other = await open(await browser.newContext({ acceptDownloads: true }));
+  await other.evaluate((m) => { localStorage.setItem('old.key', '{"a":1}'); window.p = store.unlock().then(() => store.migrateLocal({ id: m.id, localStorage: m.localStorage, map: (old) => ({ records: [{ name: 'moved-2', value: { t: 2 }, from: 'old.key' }] }) })); }, MIG);
+  assert.deepEqual(await unlock(other, { accessId: made.accessId, passphrase: made.passphrase }), { next: 'migrate' });
+  await answerMigration(other, { backup: false });
+  assert.equal((await other.evaluate(() => window.p)).status, 'migrated');
+  await context.close();
+});
+
+test('answerMigration: the backup is downloaded, "Take over" pressed; migrate-large: the files are downloaded (one ZIP), then "delete anyway"', { timeout: 60000 }, async () => {
+  const context = await browser.newContext({ acceptDownloads: true });
   const page = await context.newPage();
   await page.goto(appUrl);
-  assert.equal(await page.evaluate(() => window.__WDS_MIGRATION_TEST__ === true), true);
   await page.evaluate(() => {
     const dl = (name) => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['x'])); a.download = name; document.body.appendChild(a); a.click(); a.remove(); };
     const dialog = (view, html) => { const d = document.createElement('div'); d.className = 'wds-root'; d.setAttribute('data-wds-view', view); d.innerHTML = html; document.body.appendChild(d); return d; };
@@ -302,24 +322,24 @@ test('answerMigration: the backup is downloaded, "Take over" pressed; migrate-la
     q.querySelector('[data-wds=migrate-backup]').onclick = () => { window.log.push('backup'); dl('old-data.json'); };
     q.querySelector('[data-wds=migrate-yes]').onclick = () => {
       window.log.push('yes'); q.remove();
-      const big = dialog('migrate-large', '<button data-wds="migrate-large-download">1</button><button data-wds="migrate-large-download">2</button><button data-wds="migrate-delete" disabled>d</button>');
-      let left = 2; const del = big.querySelector('[data-wds=migrate-delete]');
-      big.querySelectorAll('[data-wds=migrate-large-download]').forEach((b, i) => { b.onclick = () => { window.log.push('file' + i); dl('large-' + i + '.bin'); if (--left === 0) del.disabled = false; }; });
+      const big = dialog('migrate-large', '<button data-wds="migrate-large-download">z</button><button data-wds="migrate-delete" disabled>d</button>');
+      const del = big.querySelector('[data-wds=migrate-delete]');
+      big.querySelector('[data-wds=migrate-large-download]').onclick = () => { window.log.push('files'); dl('too-large.zip'); del.disabled = false; };
       del.onclick = () => { window.log.push('delete'); big.remove(); };
     };
   });
   const files = [];
   const res = await answerMigration(page, { downloads: files });
-  assert.deepEqual(res, { backup: 'old-data.json', large: 2 });
-  assert.deepEqual(files, ['old-data.json', 'large-0.bin', 'large-1.bin']);
-  assert.deepEqual(await page.evaluate(() => window.log), ['backup', 'yes', 'file0', 'file1', 'delete']);
+  assert.deepEqual(res, { backup: 'old-data.json', large: 'too-large.zip' });
+  assert.deepEqual(files, ['old-data.json', 'too-large.zip']);
+  assert.deepEqual(await page.evaluate(() => window.log), ['backup', 'yes', 'files', 'delete']);
   // without the backup
   await page.evaluate(() => {
     const d = document.createElement('div'); d.className = 'wds-root'; d.setAttribute('data-wds-view', 'migrate');
     d.innerHTML = '<button data-wds="migrate-backup">b</button><button data-wds="migrate-yes">y</button>'; document.body.appendChild(d);
     d.querySelector('[data-wds=migrate-yes]').onclick = () => { window.log.push('yes2'); d.remove(); };
   });
-  assert.deepEqual(await answerMigration(page, { backup: false }), { backup: null, large: 0 });
+  assert.deepEqual(await answerMigration(page, { backup: false }), { backup: null, large: null });
   assert.equal((await page.evaluate(() => window.log)).slice(-1)[0], 'yes2');
   await context.close();
 });

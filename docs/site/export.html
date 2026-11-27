@@ -144,7 +144,7 @@
     var go = $("go");
     go.disabled = true;
     say("", t("working"));
-    var store = WDS.connect({ scope: scope, baseUrl: BASE, watch: false, notify: false });   // this page reports in its own message line; stacked notices would cover it
+    var store = WDS.connect({ scope: scope, baseUrl: BASE });
     store.setLocale(lang);
     try {
       await store.unlock({ cancelable: true });

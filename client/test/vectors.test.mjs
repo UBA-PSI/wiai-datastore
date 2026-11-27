@@ -24,8 +24,8 @@ test('cjson valid, invalid, strict parser', () => {
     assert.equal(I.cjson(c.value), c.canonical);
     assert.deepEqual(I.cjsonParse(c.canonical), c.value);
   }
-  for (const c of V.cjson.invalid) assert.throws(() => I.cjson(JSON.parse(c.json)), core.UsageError, c.reason);
-  for (const c of V.cjson.invalid_parse) assert.throws(() => I.cjsonParse(c.text), core.IntegrityError, c.reason);
+  for (const c of V.cjson.invalid) assert.throws(() => I.cjson(JSON.parse(c.json)), core.errors.UsageError, c.reason);
+  for (const c of V.cjson.invalid_parse) assert.throws(() => I.cjsonParse(c.text), core.errors.IntegrityError, c.reason);
 });
 
 test('padme table', () => {
@@ -94,7 +94,7 @@ for (const name of ['record_json', 'record_bytes']) {
     const rec = I.parseRecordPlaintext(opened.plaintext, r.name);
     assert.equal(hex(rec.body), r.body_hex);
     // wrong version in the AAD must fail
-    await rejects(I.openRecord({ key: await I.aesKey(kEnc), envelope: unhex(r.envelope_hex), scope: r.scope, vault: r.vault, rid: r.record_id, version: r.version + 1 }), core.IntegrityError);
+    await rejects(I.openRecord({ key: await I.aesKey(kEnc), envelope: unhex(r.envelope_hex), scope: r.scope, vault: r.vault, rid: r.record_id, version: r.version + 1 }), core.errors.IntegrityError);
   });
 }
 
@@ -111,7 +111,7 @@ for (const name of ['passphrase', 'invite']) {
     assert.equal(back.slot, w.slot_id); assert.equal(back.keySets.length, 1);
     // a different KDF descriptor (for example a weaker salt) must not decrypt
     const other = w.kdf.alg === 'invite' ? { alg: 'argon2id', m: 65536, p: 1, salt: b64u(seq(16, 1)), t: 3, v: 19 } : Object.assign({}, w.kdf, { salt: b64u(seq(16, 1)) });
-    await rejects(I.unwrapSlot({ kWrapRaw: unhex(w.k_wrap_hex), scope: w.scope, vault: w.vault, accessId: w.access_id, kdf: other, envelope: unhex(w.envelope_hex) }), core.IntegrityError);
+    await rejects(I.unwrapSlot({ kWrapRaw: unhex(w.k_wrap_hex), scope: w.scope, vault: w.vault, accessId: w.access_id, kdf: other, envelope: unhex(w.envelope_hex) }), core.errors.IntegrityError);
   });
 }
 
@@ -136,7 +136,7 @@ test('keyring_entry (ECIES)', async () => {
   assert.equal(hex(parsed.epochs[0].k), V.vault_keys.vmk1_hex);
   assert.equal(hex(parsed.nk), V.vault_keys.nk_hex);
   // another roster version or recipient key in the AAD must fail
-  await rejects(I.eciesOpen({ recipientPriv, recipientPub: recipient, envelope: unhex(k.envelope_hex), aadTail: I.aadKeyring(k.scope, k.vault, k.slot_id, 2, recipient) }), core.IntegrityError);
+  await rejects(I.eciesOpen({ recipientPriv, recipientPub: recipient, envelope: unhex(k.envelope_hex), aadTail: I.aadKeyring(k.scope, k.vault, k.slot_id, 2, recipient) }), core.errors.IntegrityError);
 });
 
 test('ecdsa', async () => {
@@ -157,9 +157,9 @@ test('roster v1 and v2: bodies, hashes, signatures, chain verification', async (
   assert.equal(chain.length, 2); assert.equal(chain[1].hash, r.v2.hash);
   // a tampered body must be rejected
   const bad = JSON.parse(JSON.stringify(r.v2.body)); bad.slots[0].role = bad.slots[0].role === 'owner' ? 'write' : 'owner';
-  await rejects(I.verifyRosterChain({ scope: SCOPE, vault: V.keys.founder_vault_id, escrowPins: pins, docs: [{ body: r.v1.body, sig: r.v1.sig }, { body: bad, sig: r.v2.sig }], prior: null }), core.IntegrityError);
+  await rejects(I.verifyRosterChain({ scope: SCOPE, vault: V.keys.founder_vault_id, escrowPins: pins, docs: [{ body: r.v1.body, sig: r.v1.sig }, { body: bad, sig: r.v2.sig }], prior: null }), core.errors.IntegrityError);
   // unpinned escrow keys
-  await rejects(I.verifyRosterChain({ scope: SCOPE, vault: V.keys.founder_vault_id, escrowPins: [V.keys.escrow_ids.spare], docs: [{ body: r.v1.body, sig: r.v1.sig }], prior: null }), core.IntegrityError, /pinned/);
+  await rejects(I.verifyRosterChain({ scope: SCOPE, vault: V.keys.founder_vault_id, escrowPins: [V.keys.escrow_ids.spare], docs: [{ body: r.v1.body, sig: r.v1.sig }], prior: null }), core.errors.IntegrityError, /pinned/);
 });
 
 test('renewal statement verifies against the invite slot key', async () => {
@@ -188,6 +188,6 @@ test('codes and key file', async () => {
   assert.equal(kf.text, c.key_file.text); assert.equal(kf.filename, c.key_file.filename);
   const back = await core.parseKeyFile(kf.text, { scope: c.key_file.scope });
   assert.equal(back.accessId, c.key_file.access_id); assert.equal(back.vaultId, c.key_file.vault);
-  await rejects(core.parseKeyFile(kf.text, { scope: 'other-aaaaaa' }), core.UsageError);
-  await rejects(core.parseKeyFile(kf.text, { scope: c.key_file.scope, service: 'https://evil.example/datastore/' }), core.UsageError);
+  await rejects(core.parseKeyFile(kf.text, { scope: 'other-aaaaaa' }), core.errors.UsageError);
+  await rejects(core.parseKeyFile(kf.text, { scope: c.key_file.scope, service: 'https://evil.example/datastore/' }), core.errors.UsageError);
 });

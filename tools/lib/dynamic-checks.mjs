@@ -11,7 +11,8 @@ import { DATASTORE_HOST, scanHtml } from './static-checks.mjs';
 import { instrument } from './page-instrument.mjs';
 import { RE_SCOPE, sriOfFile, rewriteScopes } from './targets.mjs';
 import { CANARY_PLACEHOLDER, MIGRATION_TEST_GLOBAL } from './config.mjs';
-import { dialog, dialogState, dialogSummary, briefError, chooseCreate, submitCreate, submitUnlock, confirmSheet, formError, newPassphrase, viewOf } from './drive-library.mjs';
+import { dialog, dialogState, dialogSummary, briefError, chooseCreate, submitCreate, submitUnlock, formError, newPassphrase, viewOf } from './dialog-internals.mjs';
+import { confirmSheet } from './drive-library.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const L = '(?<![\\p{L}\\p{N}])', R_ = '(?![\\p{L}\\p{N}])';
@@ -315,21 +316,12 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
           return true;
         }
         case 'migrate-large': {
-          // some entries are too large for the vault: download every one, then delete the old data anyway
+          // some entries are too large for the vault: download them (one ZIP), then delete the old data anyway
           const m = info.migrateDialog = info.migrateDialog || { asked: 0, backup: null, large: 0 };
-          const n = await ctl(d, 'migrate-large-download').count();
-          for (let i = 0; i < n; i++) {
-            try { await libraryDownloadClick(ctl(d, 'migrate-large-download').nth(i)); m.large++; }
-            catch (e) { note('the migration dialog: download ' + (i + 1) + ' of ' + n + ' did not start: ' + briefError(e, 3, 300)); }
-          }
+          m.large = await d.locator('.wds-person').count();
+          try { await libraryDownloadClick(ctl(d, 'migrate-large-download')); }
+          catch (e) { info.largeStuck = briefError(e, 3, 300); note('the migration dialog: the download of the files that are too large did not start: ' + info.largeStuck); throw new RunAbort('migrate-large download'); }   // delete stays disabled without it
           await ctl(d, 'migrate-delete').click({ timeout: 10000 });
-          await sleep(200);
-          return true;
-        }
-        case 'migrate-differs': {
-          // entries that the vault holds in another version: the tool decides nothing about a person's data, it says "not now" (the old data stays)
-          note('the migration dialog found entries whose copy in the vault differs from the old data (view migrate-differs); the tool pressed "later" (migrate-differs-later) and the old data stays in the browser');
-          await ctl(d, 'migrate-differs-later').click({ timeout: 5000 });
           await sleep(200);
           return true;
         }
@@ -747,32 +739,6 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
           return { total, shown, notShown: dropped.length, notShownNames: droppedNames, everyRound: [...groups.values()].every((g) => g.shown > 0), hasAfter: afterReload.length > 0 };
         };
         reload = evalReload();
-        // An app that restores a search or filter shows its list filtered by the canary the tool typed into the search field: the data is there but hidden.
-        // Only a search field (type=search, role=searchbox, or named like one; never a textarea or an ordinary field, which may be an edit form that
-        // holds saved data) that holds a value typed before the reload is cleared, and only when not every typed value is visible; the report names it.
-        if (reload.total && reload.shown < reload.total) {
-          const tokens = canaries.items.filter((x) => x.kind !== 'secret' && x.round !== undefined && x.round !== 'afterReload').map((x) => x.find || x.value);
-          const cleared = [];
-          for (const h of await page.$$('input')) {
-            const f = await h.evaluate((el, toks) => {
-              if (el.closest('.wds-root') || !el.getClientRects().length || el.disabled || el.readOnly) return null;
-              const type = (el.getAttribute('type') || 'text').toLowerCase();
-              if (type !== 'text' && type !== 'search') return null;
-              const searchy = type === 'search' || el.getAttribute('role') === 'searchbox' || /search|suche|filter|such/i.test([el.id, el.getAttribute('name'), el.getAttribute('placeholder'), el.getAttribute('aria-label')].join(' '));
-              if (!searchy || !toks.some((t) => (el.value || '').includes(t))) return null;
-              return el.id ? '#' + el.id : el.getAttribute('name') ? 'input[name="' + el.getAttribute('name') + '"]' : (el.getAttribute('aria-label') || el.getAttribute('placeholder') || 'input[type=' + type + ']');
-            }, tokens).catch(() => null);
-            if (!f) continue;
-            try { await h.fill('', { timeout: 3000 }); await h.evaluate((el) => el.dispatchEvent(new Event('change', { bubbles: true }))).catch(() => {}); cleared.push(f); } catch (e) { /* not clearable */ }
-          }
-          if (cleared.length) {
-            info.searchReset = cleared;
-            await settle(900); await snapshot();
-            await runSteps(afterReload.filter((s) => !s.fill && !s.upload), 'afterReload', async () => { await sleep(150); await snapshot(); }, true);
-            await sleep(300); await settle(900); await snapshot();
-            reload = evalReload();
-          }
-        }
       }
     }
     } catch (e) {
@@ -918,6 +884,7 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
     }
     if (seed && opts.migrationDelete && !sb) add('migration-delete', 'info', '--migration-delete', 'The flag has no effect on the mock target: the mock is no sandbox, so the migration deletes the old data as in production anyway.');
     const notes = sb ? unexpected.filter((u) => !/pw\.hibp\.unavailable/.test(u)) : unexpected;
+    if (info.largeStuck) add('migration-large', 'fail', 'Migration: the files that are too large could not be downloaded', 'The library offers "Delete the old data anyway" only after the download of these files, so the tool stopped there and the old data stays: ' + info.largeStuck);
     if (info.stuckError) add('dialog-error', 'fail', 'A library dialog stayed in its error view', 'The tool pressed "retry" three times and the dialog showed the error view again ("' + info.stuckError + '"). A person would be stuck in the same place: the storage service does not answer, or the dialog cannot be built (see the browser console).');
     if (notes.length) add('driver', 'warn', 'Test run notes', notes.slice(0, 6).join('\n'));
     if (info.locale !== 'en-US') add('locale', 'info', 'Browser language', 'The browser ran with the locale ' + info.locale + ' (the library dialogs follow it unless the app sets one).');
@@ -935,7 +902,6 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
         + (hasAfter ? 'Add afterReload steps that open the missing views (the tool looks after every step and takes all of them together).' : 'An app with tabs needs afterReload steps in wds-verify.json (they open the views that show the data; the tool looks after every step).') + skipped);
     }
     info.reload = reload;
-    if (info.searchReset && info.searchReset.length) add('search-reset', 'info', 'Restored search field', 'After the reload ' + (info.searchReset.length === 1 ? 'the field' : 'the fields') + ' ' + info.searchReset.join(', ') + ' held a value typed before the reload (the app restores its search or filter), and the list was filtered by it. The tool reset ' + (info.searchReset.length === 1 ? 'it' : 'them') + ' ("reset a restored search field ' + info.searchReset[0] + '") and looked again. Your own test should do the same: add an afterReload step that resets the field, for example {"fill": ["' + info.searchReset[0] + '", ""]}.');
 
     // the sandbox label must stay visible (the app must not hide it) and the sandbox may be unavailable or full
     if (sb) {

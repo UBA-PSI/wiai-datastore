@@ -272,18 +272,22 @@ class DocPlaceholders(DashCase):
         self.assertEqual(v["sandbox_scope"], SID)
         self.assertEqual(v["sandbox_wipe"], "03:30 Europe/Berlin")
         self.assertEqual(v["sandbox_limits"], "512 KB per record, 2 MB per vault, 2 versions")
+        self.assertEqual(v["sandbox_creation"], "20 per network per hour, 60 for the whole sandbox per 10 minutes")   # create_per_ip / create_window, create_global / create_global_window
 
     def test_without_a_sandbox(self):
         self.env.config.sandbox = None
         v = self.values()
-        self.assertEqual((v["sandbox_scope"], v["sandbox_wipe"], v["sandbox_limits"]), ("(no sandbox on this server)", "-", "-"))
+        self.assertEqual((v["sandbox_scope"], v["sandbox_wipe"], v["sandbox_limits"], v["sandbox_creation"]), ("(no sandbox on this server)", "-", "-", "-"))
         self.assertEqual(v["repo_url"], docs.REPO_URL)
 
     def test_fill_leaves_nothing_behind(self):
-        text = "{{repo_url}} {{sandbox_scope}} {{sandbox_wipe}} {{sandbox_limits}}"
+        text = "{{repo_url}} {{sandbox_scope}} {{sandbox_wipe}} {{sandbox_limits}} {{sandbox_creation}}"
         self.assertNotIn("{{", docs.fill(text, self.values()))
         self.env.config.sandbox = None
         self.assertNotIn("{{", docs.fill(text, self.values()))
+
+    def test_window_words(self):
+        self.assertEqual([docs._window(n) for n in (3600, 7200, 600, 60, 90)], ["hour", "2 hours", "10 minutes", "minute", "90 seconds"])
 
     def test_size_words(self):
         self.assertEqual([docs._size(n) for n in (100, 1024, 1536, 524288, 2097152, 1073741824)],

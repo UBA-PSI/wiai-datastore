@@ -342,12 +342,12 @@ test('collections on the real server: no lost update with two devices, and an it
   expect([await load(A), await load(B)]).toEqual([0, 0]);   // both loaded an index that does not exist yet
 
   // (a) lost update: B adds x, A (which has not seen x) adds y and z, B removes x, A adds w
-  await B.evaluate(() => notes.add({ t: 'x' }, { id: 'x' }));
-  await A.evaluate(() => notes.add({ t: 'y' }, { id: 'y' }));
-  await A.evaluate(() => notes.add({ t: 'z' }, { id: 'z' }));
+  await B.evaluate(() => notes.set('x', { t: 'x' }));
+  await A.evaluate(() => notes.set('y', { t: 'y' }));
+  await A.evaluate(() => notes.set('z', { t: 'z' }));
   expect(await ids(A)).toEqual(['x', 'y', 'z']);
   await B.evaluate(() => notes.remove('x'));
-  await A.evaluate(() => notes.add({ t: 'w' }, { id: 'w' }));
+  await A.evaluate(() => notes.set('w', { t: 'w' }));
   await A.evaluate(() => notes.refresh()); await B.evaluate(() => notes.refresh());
   expect(await ids(A)).toEqual(['w', 'y', 'z']);
   expect(await ids(B)).toEqual(['w', 'y', 'z']);
@@ -356,7 +356,7 @@ test('collections on the real server: no lost update with two devices, and an it
   expect(await C.evaluate(() => store.collection('notes/').load().then((l) => l.map((i) => i.id + ':' + i.meta.t).sort()))).toEqual(['w:w', 'y:y', 'z:z']);
 
   // (c) A deletes k, B edits it without a meta change and keeps its version: k is visible on both
-  await A.evaluate(() => notes.add({ t: 'same' }, { id: 'k' }));
+  await A.evaluate(() => notes.set('k', { t: 'same' }));
   await B.evaluate(() => notes.refresh());
   await B.evaluate(() => { store.onConflict('notes/', (c) => c.keepMine()); });
   await A.evaluate(() => notes.remove('k'));

@@ -64,9 +64,9 @@ def prompt(lang: str, *, sid: str, date: str, base: str, tag: str, repo_url: str
                          "When you need it, give me the commands from porting.md (\"The join code for tests\") and wait until I say it is there. "
                          "Never read, print or copy that file and never ask me for the code in the chat. Never write the code into the app, "
                          "the README, a test script, a command line, CLAUDE.md or AGENTS.md. "
-                         "End the test by deleting the test vault yourself (deleteVault of tools/lib/drive-library.mjs, porting.md, \"The test vault, afterwards\") and tell me its ID and the time, so that I can check that it is gone." + optional,
+                         "End the test by deleting the test vault yourself (deleteVault of tools/lib/drive-library.mjs, porting.md, \"The join code for tests\") and tell me its ID and the time, so that I can check that it is gone." + optional,
             "open": f"To test against a test vault in this scope ({why}), create one yourself: this scope needs no join code. Tell me when you ran the test "
-                    "(the time and the ID of the test vault). End the test by deleting the test vault yourself (deleteVault of tools/lib/drive-library.mjs, porting.md, \"The test vault, afterwards\") and tell me its ID.",
+                    "(the time and the ID of the test vault). End the test by deleting the test vault yourself (deleteVault of tools/lib/drive-library.mjs, porting.md, \"The join code for tests\") and tell me its ID.",
             "closed": f"This scope accepts no new vaults, so no test vault can be created in it. Tell me before you test the deletion path of a migration{late}.",
         }[enrollment]
         enroll = {
@@ -120,9 +120,9 @@ def prompt(lang: str, *, sid: str, date: str, base: str, tag: str, repo_url: str
                      "Wenn du ihn brauchst, gib mir die Befehle aus porting.md (\"The join code for tests\") und warte, bis ich sage, dass er dort liegt. "
                      "Lies, zeige oder kopiere diese Datei nie und frag mich nie im Chat nach dem Code. Schreibe den Code nie in die App, "
                      "die README, ein Testskript, eine Kommandozeile, CLAUDE.md oder AGENTS.md. "
-                     "Beende den Test, indem du den Test-Tresor selbst löschst (deleteVault in tools/lib/drive-library.mjs, porting.md, \"The test vault, afterwards\"), und nenne mir seine Kennung und die Uhrzeit, damit ich prüfen kann, dass er weg ist." + optional,
+                     "Beende den Test, indem du den Test-Tresor selbst löschst (deleteVault in tools/lib/drive-library.mjs, porting.md, \"The join code for tests\"), und nenne mir seine Kennung und die Uhrzeit, damit ich prüfen kann, dass er weg ist." + optional,
         "open": f"Für einen Test mit einem Test-Tresor in diesem Scope ({why}) leg selbst einen an: Dieser Scope braucht keinen Beitrittscode. Sag mir, wann du den Test gemacht hast "
-                "(die Uhrzeit und die Kennung des Test-Tresors). Beende den Test, indem du den Test-Tresor selbst löschst (deleteVault in tools/lib/drive-library.mjs, porting.md, \"The test vault, afterwards\"), und nenne mir seine Kennung.",
+                "(die Uhrzeit und die Kennung des Test-Tresors). Beende den Test, indem du den Test-Tresor selbst löschst (deleteVault in tools/lib/drive-library.mjs, porting.md, \"The join code for tests\"), und nenne mir seine Kennung.",
         "closed": f"In diesem Scope können keine neuen Tresore angelegt werden, also gibt es keinen Test-Tresor. Sag mir Bescheid, bevor du den Löschweg einer Migration testest{late}.",
     }[enrollment]
     enroll = {

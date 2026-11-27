@@ -26,6 +26,7 @@ export class FakeServer {
     this.requests = []; // log of {method, path}
     this.beforeRequest = null; // hook(method, path) may throw to simulate a network failure
     this.delayMs = 0; // artificial latency of every request (concurrency tests)
+    this.gate = null; // { path, until }: a request whose path starts with `path` waits for the promise `until` (a test releases it)
     this.inflight = 0; this.maxInflight = 0; // requests being served right now, and the maximum seen since resetInflight()
     this.failPreconditions = null; // predicate(rid): answer every record PUT of that record with 412 (conflict-cap tests)
     this.fetch = this.fetch.bind(this);
@@ -66,6 +67,7 @@ export class FakeServer {
     const path = u.pathname.slice(prefix.length);
     this.inflight++; this.maxInflight = Math.max(this.maxInflight, this.inflight);
     try {
+      if (this.gate && path.startsWith(this.gate.path)) await this.gate.until;
       if (this.delayMs) await new Promise((res) => setTimeout(res, this.delayMs));
       const r = await this.route(method, path, u.searchParams, headers, body);
       return this.respond(r.status || 200, r.json !== undefined ? JSON.stringify(r.json) : r.bytes, Object.assign(r.json !== undefined ? { 'content-type': 'application/json' } : { 'content-type': 'application/octet-stream' }, r.headers || {}));

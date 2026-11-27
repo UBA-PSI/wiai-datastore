@@ -622,8 +622,8 @@ test('static: store.migrateLocal is recognised; code that reads or deletes brows
   assert.deepEqual(r.findings.filter((f) => f.level === 'fail' || f.level === 'warn'), []);
   assert.ok(usesMigrateLocal(MIG));
   assert.ok(!usesMigrateLocal("var s = 'store.migrateLocal(x)'; // store.migrateLocal(y)".replace('// store.migrateLocal(y)', '')));
-  // by hand: reading is enough
-  for (const [code, name] of [["function readOld() { return indexedDB.open('old'); }", 'indexedDB.open'], ["var s = localStorage.getItem('old');", 'localStorage.getItem'],
+  // by hand: opening a database or removing a key is enough
+  for (const [code, name] of [["function readOld() { return indexedDB.open('old'); }", 'indexedDB.open'],
     ["function drop() { if (!store.status().sandbox) localStorage.removeItem('old'); }", 'localStorage.removeItem']]) {
     const x = check(withScript(code));
     assert.equal(level(x, 'hand-migration'), 'warn', code);
@@ -631,12 +631,25 @@ test('static: store.migrateLocal is recognised; code that reads or deletes brows
     assert.match(x.findings.find((f) => f.id === 'hand-migration').detail, /store\.migrateLocal \(porting\.md\)/);
     assert.deepEqual(handMigration(code), [name]);
   }
-  // with migrateLocal in the code: keys and databases that its options name are not reported, everything else is
+  // a personal preference may stay in localStorage under the app's own key: reading and writing keys is no finding
+  assert.equal(level(check(withScript("var t = localStorage.getItem('theme'); localStorage.setItem('theme', 'dark');")), 'hand-migration'), undefined);
+  assert.deepEqual(handMigration("var t = localStorage.getItem('theme'); localStorage.setItem('theme', 'dark');"), []);
+  // data is not a preference: a value built with JSON.stringify or a template is a finding, with or without migrateLocal, and a key under a named prefix counts as named
+  assert.deepEqual(handMigration("localStorage.setItem('inv.notes', JSON.stringify(allNotes));"), ['localStorage.setItem']);
+  assert.deepEqual(handMigration("localStorage.setItem('k' + n, `${a}:${b}`);"), ['localStorage.setItem']);
+  assert.deepEqual(handMigration("localStorage.setItem('theme', dark ? 'dark' : 'light'); render(JSON.stringify(x));"), []);
+  assert.deepEqual(handMigration("localStorage.setItem('inv.theme', 'dark');", new Set(['inv.'])), ['localStorage.setItem']);
+  assert.equal(level(check(withScript("localStorage.setItem('notes', JSON.stringify(all));")), 'hand-migration'), 'warn');
+  // with migrateLocal in the code: reading a key or opening a database that its options name is not reported; writing or removing it, and any other database, is
   assert.equal(level(check(withScript(MIG + "\nvar s = localStorage.getItem('literatur');")), 'hand-storage'), undefined);
-  const other = check(withScript(MIG + "\nvar s = localStorage.getItem('old');"));
+  assert.equal(level(check(withScript(MIG + "\nvar s = localStorage.getItem('old'); localStorage.setItem('theme', 'dark');")), 'hand-storage'), undefined);
+  const named = check(withScript("const M = { id: 'a', localStorage: { keys: ['zn.data'] }, map() {} };\nstore.migrateLocal(M);\nlocalStorage.setItem('zn.data', '[]');"));
+  assert.equal(level(named, 'hand-storage'), 'warn');
+  assert.match(named.findings.find((f) => f.id === 'hand-storage').detail, /localStorage\.setItem/);
+  const other = check(withScript(MIG + "\nvar s = indexedDB.open('old');"));
   assert.equal(level(other, 'hand-storage'), 'warn');
   assert.equal(level(other, 'hand-migration'), undefined);
-  assert.match(other.findings.find((f) => f.id === 'hand-storage').detail, /localStorage\.getItem/);
+  assert.match(other.findings.find((f) => f.id === 'hand-storage').detail, /indexedDB\.open/);
   // the options may be a variable
   assert.equal(level(check(withScript("const M = { id: 'a', localStorage: { keys: ['zn.data'] }, map() {} };\nstore.migrateLocal(M);\nvar s = localStorage.getItem('zn.data');")), 'hand-storage'), undefined);
   // comments do not count: a commented call does not hide the hand-made migration

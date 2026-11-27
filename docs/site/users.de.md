@@ -20,13 +20,13 @@ Wiederherstellungsverfahren weiter unten.
 | Was | Wofür | Geheim? |
 |---|---|---|
 | Zugangskennung | Benennt Ihren Tresor. Sie geben sie auf einem neuen Gerät zusammen mit der Passphrase ein. | Nein, bewahren Sie sie beim Zugangsblatt auf. |
-| Schlüsseldatei | Kleine Datei mit der App und Ihrer Zugangskennung. Ziehen Sie sie auf einem neuen Gerät in die App, statt die Kennung abzutippen. | Nein. Sie enthält keine Passphrase. |
+| Schlüsseldatei | Kleine Datei mit der App und Ihrer Zugangskennung. Wählen Sie sie auf einem neuen Gerät in der App aus, statt die Kennung abzutippen. | Nein. Sie enthält keine Passphrase. |
 | Passphrase | Öffnet Ihre Daten. Nur im Kopf oder in Ihrem Passwortmanager. | Ja |
 | Wiederherstellungscode | Erlaubt der Fakultät, Ihren Zugang wiederherzustellen, wenn Sie die Passphrase verlieren. | Ja. Getrennt vom Rechner aufbewahren. |
 
 ## Auf einem neuen Gerät oder nach dem Löschen des Browserspeichers
 
-Öffnen Sie die App, geben Sie Ihre Zugangskennung ein (oder ziehen Sie die Schlüsseldatei hinein) und Ihre Passphrase. Die App meldet:
+Öffnen Sie die App, geben Sie Ihre Zugangskennung ein (oder wählen Sie die Schlüsseldatei aus) und Ihre Passphrase. Die App meldet:
 „Dieses Gerät ist neu für Ihren Tresor.“ Das ist normal.
 
 ## Teilen
@@ -34,7 +34,7 @@ Wiederherstellungsverfahren weiter unten.
 Eigentümerinnen und Eigentümer teilen ihren ganzen Tresor: Wählen Sie in der App **Teilen**, eine Rolle und erzeugen Sie einen Einladungscode.
 
 - **Darf bearbeiten**: darf lesen und ändern. **Nur lesen**: darf nur lesen.
-- Schicken Sie den Code über einen anderen Weg als die App selbst (persönlich, Chat). Er läuft nach der gewählten Zeit ab.
+- Schicken Sie den Code über einen anderen Weg als die App selbst (persönlich, Chat). Er läuft nach 2 Tagen ab.
 - Die andere Person gibt den Code in der App ein und wählt eine **eigene Passphrase**. Bei Ihnen erscheint „Eine Einladung wurde eingelöst.“
 - **Entziehen** beendet den Zugang sofort. Danach verschlüsselt die App alle Daten mit neuen Schlüsseln neu. Bei großen Tresoren dauert das
   eine Weile und setzt sich von selbst fort, wenn Sie die Seite schließen.
@@ -82,7 +82,7 @@ Gab es die App vorher als Version, die ihre Daten nur in Ihrem Browser gespeiche
 - Die App kopiert die Einträge in Ihren Tresor, liest sie vom Server zurück und vergleicht sie, und löscht erst danach die alte Kopie im Browser. In Ihrem Tresor wird nichts überschrieben, und wenn das Kopieren nicht klappt, bleiben die alten Daten, wo sie sind.
 - **Laden Sie vorher eine Sicherung herunter**, wenn Sie eine möchten: eine ZIP-Datei mit allen alten Einträgen und ihren Dateien. Sie ist **nicht verschlüsselt**; bewahren Sie sie sicher auf oder löschen Sie sie, nachdem Sie hineingeschaut haben.
 - „Später“ ändert nichts; die alten Daten bleiben unverschlüsselt in diesem Browser, und die App fragt beim nächsten Mal wieder.
-- Passt etwas nicht in Ihren Tresor, listet die App es auf und lässt Sie jede Datei herunterladen, bevor etwas gelöscht wird.
+- Passt etwas nicht in Ihren Tresor, listet die App es auf und lässt Sie diese Dateien herunterladen, bevor etwas gelöscht wird.
 - Das kann nur die Eigentümerin oder der Eigentümer eines Tresors. Wurden Sie in den Tresor einer anderen Person eingeladen, zeigt die App einen Hinweis und lässt die alten Daten in Ruhe; übernehmen Sie sie in einem eigenen Tresor.
 - Öffnen Sie die neue Version so, wie Sie die alte geöffnet haben (dieselbe Datei am selben Ort oder dieselbe Webadresse): Ein Browser verwahrt die Daten jeder Adresse getrennt.
 

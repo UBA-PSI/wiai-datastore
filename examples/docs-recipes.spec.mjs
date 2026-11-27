@@ -6,7 +6,7 @@
 //    set and created, the table of the library's dialogs against client/src/wds-ui.js, the example app of section 14 and the wds-verify.json of section 12 under wds-verify,
 //  - porting.md: the import of an old export, the options of store.migrateLocal, the Cookbook block (Example 1) against a seeded old database, the type of a file (mime), the box of the library's notices (real server: migrated and deleted, the sandbox
 //    keeps, the test global deletes), the zeit-notizen block (identical to the one in examples/zeit-notizen/index.html), the start function, the checklist for apps with forms and
-//    modal dialogs, the popup block, the seed block (identical to the one of the example), the migration under wds-verify (mock deletes, sandbox keeps, --migration-delete deletes),
+//    modal dialogs, the seed block of section 12 (identical to the one of the example), the migration under wds-verify (mock deletes, sandbox keeps, --migration-delete deletes),
 //    static findings of the blocks,
 //  - every code block of both documents is accounted for (run, or syntax-checked), so that a new block cannot slip in untested,
 //  - the documents: no placeholder left, the repository named, links resolve.
@@ -379,7 +379,7 @@ test('lock and unlock again: handlers registered once, the screen is cleared, an
   expect(await page.evaluate(() => window.__locks)).toEqual(['user']);
   expect(await page.evaluate(() => window.__stateReads)).toEqual(['ok']);          // read once, before onLock cleared it
   await expect(page.locator('#unlock')).toBeVisible();
-  expect(await page.evaluate(() => window.__saver.stopReason)).toBe('lock');
+  expect(await page.evaluate(() => window.__saver.status)).toBe('stopped');
 
   // the person unlocks again in the same page: start runs once more, once
   await page.locator('#unlock').click();
@@ -408,9 +408,9 @@ test('files: deleting a note removes its attachments first, then the note', asyn
   const ids = await page.evaluate(async () => {
     await files.load();
     const a = (await notes.add({ title: 'with files' })).id, b = (await notes.add({ title: 'other' })).id;
-    await files.add(new Blob(['one'], { type: 'text/plain' }), { id: 'f1.txt', meta: { name: 'one.txt', note: a } });
-    await files.add(new Blob(['two'], { type: 'text/plain' }), { id: 'f2.txt', meta: { name: 'two.txt', note: a } });
-    await files.add(new Blob(['three'], { type: 'text/plain' }), { id: 'f3.txt', meta: { name: 'three.txt', note: b } });
+    await files.set('f1.txt', new Blob(['one'], { type: 'text/plain' }), { meta: { name: 'one.txt', note: a } });
+    await files.set('f2.txt', new Blob(['two'], { type: 'text/plain' }), { meta: { name: 'two.txt', note: a } });
+    await files.set('f3.txt', new Blob(['three'], { type: 'text/plain' }), { meta: { name: 'three.txt', note: b } });
     return { a, b };
   });
   // a file comes back with its type through getBlob, as bytes through get
@@ -520,36 +520,25 @@ test('files: saving a note with a new or replaced attachment writes file, note, 
   await ctx.close();
 });
 
-test('porting.md section 3: the import of an old export reads a file the person chose', async ({ browser, stack, md, porting }) => {
+test('porting.md section 3: the import of an old export keeps the ids, rewrites the references and overwrites on a second import', async ({ browser, stack, md, porting }) => {
   const recipe = blockAfter(porting, /^## 3\. Own export and import$/, 'js');
-  const url = harness(md, stack, { recipe, ret: ['notes', 'importOldExport'], scope: stack.scope });
+  const url = harness(md, stack, { recipe, ret: ['notes', 'files', 'importOldExportKeepingIds'], scope: stack.scope });
   const ctx = await newContext(browser);
   const page = await open(ctx, url);
   await page.evaluate(async () => { window.R = await window.__recipe(store, {}); });
-  const accessId = await openVault(page, stack);
+  await openVault(page, stack);
   await page.evaluate(() => window.__unlock);
-  const n = await page.evaluate(() => R.importOldExport(new File([JSON.stringify({ notes: [{ id: 1, title: 'one', text: 'x' }, { id: 2, title: 'two', text: 'y' }] })], 'old.json')));
-  expect(n).toBe(2);
-  const rows = await page.evaluate(() => R.notes.getAll());
-  expect(rows.map((r) => r.value.text).sort()).toEqual(['x', 'y']);
-  expect(rows.map((r) => r.meta.title).sort()).toEqual(['one', 'two']);
-  const bad = await page.evaluate(() => R.importOldExport(new File(['{"items": []}'], 'x.json')).then(() => 'accepted', (e) => e.message));
+  const bad = await page.evaluate(() => R.importOldExportKeepingIds(new File(['{"items": []}'], 'x.json')).then(() => 'accepted', (e) => e.message));
   expect(bad).toContain('not an export of the old version');
-  // the variant that keeps the old ids: references are rewritten, the old order and creation dates stay, a second import overwrites instead of doubling
-  const keep = blockAfter(porting, /^## 3\. Own export and import$/, 'js', 1);
-  const url2 = harness(md, stack, { recipe: blockAfter(porting, /^## 3\. Own export and import$/, 'js') + '\n' + keep, ret: ['notes', 'files', 'importOldExportKeepingIds'], scope: stack.scope });
-  const page2 = await open(ctx, url2);
-  await page2.evaluate(async () => { window.R = await window.__recipe(store, {}); });
-  await unlockLater(page2, accessId);
+  // the ids of the old export are kept: references are rewritten, the old order and creation dates stay, a second import overwrites instead of doubling
   const old = { notes: [{ id: 12, title: 'twelve', text: 'a', created: 1700000012000 }, { id: 3, title: 'three', text: 'b', created: 1700000003000 }],
     files: [{ id: 7, noteId: 12, name: 'plan.pdf', type: 'application/pdf', base64: Buffer.from([37, 80, 68, 70, 1]).toString('base64') }] };
-  expect(await page2.evaluate((o) => R.importOldExportKeepingIds(new File([JSON.stringify(o)], 'old.json')), old)).toBe(3);
-  expect(await page2.evaluate((o) => R.importOldExportKeepingIds(new File([JSON.stringify(o)], 'old.json')), old)).toBe(3);          // again: no conflict, no copies
-  const kept = await page2.evaluate(async () => { await R.notes.refresh(); await R.files.refresh(); return { notes: R.notes.items().map((i) => [i.id, i.created]), files: R.files.items().map((i) => [i.id, i.meta]) }; });
-  expect(kept.notes.filter(([id]) => /^j\d+$/.test(id)).sort()).toEqual([['j12', 1700000012000], ['j3', 1700000003000]]);       // (the two notes of the first import have random ids)
+  expect(await page.evaluate((o) => R.importOldExportKeepingIds(new File([JSON.stringify(o)], 'old.json')), old)).toBe(3);
+  expect(await page.evaluate((o) => R.importOldExportKeepingIds(new File([JSON.stringify(o)], 'old.json')), old)).toBe(3);          // again: no conflict, no copies
+  const kept = await page.evaluate(async () => { await R.notes.refresh(); await R.files.refresh(); return { notes: R.notes.items().map((i) => [i.id, i.created]).sort(), files: R.files.items().map((i) => [i.id, i.meta]) }; });
+  expect(kept.notes).toEqual([['j12', 1700000012000], ['j3', 1700000003000]]);
   expect(kept.files).toEqual([['j7.pdf', { name: 'plan.pdf', note: 'j12' }]]);
-  expect(await page2.evaluate(() => store.get('files/j7.pdf', { fresh: true }).then((b) => [...b]))).toEqual([37, 80, 68, 70, 1]);
-  await noProblems(page2);
+  expect(await page.evaluate(() => store.get('files/j7.pdf', { fresh: true }).then((b) => [...b]))).toEqual([37, 80, 68, 70, 1]);
   await noProblems(page);
   await ctx.close();
 });
@@ -570,7 +559,7 @@ test('collections: set is an upsert (creates the list entry, keeps its place); c
   expect(entry.created).toBeGreaterThanOrEqual(before - 5000);
   expect(await a.evaluate(() => store.get('notes/my-id'))).toEqual({ title: 'Made by set' });        // the value has no created
   // add with created: that number; set on an existing id: new meta, the same place
-  await a.evaluate(() => R.notes.add({ title: 'Dated' }, { id: 'dated', created: 1700000000000 }));
+  await a.evaluate(() => R.notes.set('dated', { title: 'Dated' }, { created: 1700000000000 }));
   expect(await a.evaluate(() => R.notes.items().map((i) => i.id))).toEqual(['dated', 'my-id']);
   await a.evaluate(() => R.notes.set('dated', { title: 'Dated, edited' }));
   expect(await a.evaluate(() => R.notes.items().find((i) => i.id === 'dated'))).toMatchObject({ created: 1700000000000, meta: { title: 'Dated, edited' } });
@@ -605,7 +594,7 @@ test('the table of the library dialogs in the guide matches client/src/wds-ui.js
   const BT = '\x60';
   const rows = section.split('\n').filter((l) => l.startsWith('| ' + BT) && !l.startsWith('| ' + BT + 'data-wds-view')).map((l) => l.split(' | ').map((c) => c.replace(/^\| /, '').replace(/ \|$/, '')));
   const views = rows.map((r) => r[0].replaceAll(BT, ''));
-  expect(views).toEqual(['loading', 'error', 'unlock', 'create', 'redeem', 'sheet', 'conflict', 'history', 'share', 'revoke', 'progress', 'notice', 'migrate', 'migrate-discard', 'migrate-differs', 'migrate-large']);
+  expect(views).toEqual(['loading', 'error', 'unlock', 'create', 'redeem', 'sheet', 'conflict', 'history', 'share', 'revoke', 'progress', 'notice', 'migrate', 'migrate-large']);
   const names = (cell) => [...cell.matchAll(/\x60([a-z][a-z-]*)\x60/g)].map((m) => m[1]);
   // every view and every control of the table exists in the library
   for (const view of views) expect(ui, 'view ' + view).toMatch(new RegExp("(view: |setView\\(|frame\\(|migrateView\\(run, )'" + view + "'"));
@@ -614,19 +603,8 @@ test('the table of the library dialogs in the guide matches client/src/wds-ui.js
     listed.add(name);
     expect(ui.includes("'" + name + "'"), 'control ' + name + ' of ' + row[0]).toBe(true);
   }
-  // every name that the library's own header comment lists is in the guide (table or the paragraph below it)
-  const header = ui.slice(ui.indexOf('Stable attributes:'), ui.indexOf('Dialogs use the class prefix'));
-  const documented = new Set(names(section));
-  let checked = 0;
-  for (const line of header.split('\n').slice(1)) {
-    const m = line.match(/^ \*\s+[a-z, ]+:\s*(.*)$/);
-    if (!m) continue;
-    for (const name of m[1].split(/[,;]\s*/).map((s) => s.trim().replace(/^[a-z ]+:\s*/, '').replace(/[^a-z-].*$/, '')).filter((n) => n && !['toast', 'only'].includes(n))) {      // (the words of the prose in the toast line are no control names)
-      expect(documented.has(name), 'the guide misses ' + name).toBe(true);
-      checked++;
-    }
-  }
-  expect(checked).toBeGreaterThan(50);
+  expect(listed.size).toBeGreaterThan(50);
+  expect(section).toContain('until the roster is refreshed');
   expect(section).toContain('tools/lib/drive-library.mjs');
   expect(section).toContain('tools/node_modules/playwright');
 });
@@ -708,25 +686,23 @@ const vaultOfCook = (page) => page.evaluate(async () => {
   const all = await recipes.getAll(), files = [];
   for (const e of images.items()) { const b = await store.getBlob('images/' + e.id); files.push({ id: e.id, meta: e.meta, type: b.type, bytes: [...new Uint8Array(await b.arrayBuffer())] }); }
   files.sort((x, y) => (x.id < y.id ? -1 : 1));
-  return { tag, recipes: all.map((r) => ({ id: r.id, meta: r.meta, value: r.value, created: recipes.items().find((i) => i.id === r.id).created })), files, settings: await store.get('settings', { fresh: true }), records: (await store.list()).map((r) => r.name) };
+  return { tag, recipes: all.map((r) => ({ id: r.id, meta: r.meta, value: r.value, created: recipes.items().find((i) => i.id === r.id).created })), files, records: (await store.list()).map((r) => r.name) };
 });
 const IMAGE_1 = [255, 216, 255, 224, 1, 2, 3, 250, 251, 252], IMAGE_2 = [255, 216, 255, 224, 9, 8, 7];
 
-test('porting.md example 1 (string keys, a list of photos, references both ways, a dead reference, images, settings): the real server migrates and deletes; the person asked once; a second start finds nothing', async ({ browser, stack, md, porting }) => {
+test('porting.md example 1 (string keys, a list of photos, a reference to the image, a dead reference, images): the real server migrates and deletes; the person asked once; a second start finds nothing', async ({ browser, stack, md, porting }) => {
   const url = cookUrl(md, porting, stack);
   const ctx = await newContext(browser);
   const page = await open(ctx, url);
   if (!(await idbAvailable(page))) test.skip(true, 'this engine has no IndexedDB for file:// pages');
   const accessId = await openVault(page, stack);
   await page.evaluate(() => window.__unlock);
-  // the person has started the new app already: a setting of its own that the old settings must not overwrite
-  await page.evaluate(async () => { await store.set('settings', { units: 'metric' }); });
   await page.evaluate((blobs) => seedCook({ blobs }), await canKeepBlobs(page));
   await startCook(page);
   await answerYes(page, { backup: true });
   const res = await finishCook(page);
-  expect(res.result).toEqual({ status: 'migrated', deleted: 'deleted', copied: 5, total: 5, sandbox: false });
-  // the notice of the library: the box that integration.md, section 4 describes (26rem wide, 1rem from the right and bottom edge of the window, 5 to 8rem high)
+  expect(res.result).toEqual({ status: 'migrated', deleted: 'deleted' });
+  // the notice of the library: a box at the bottom right of the window (26rem wide, 1rem from the right and bottom edge, 5 to 8rem high; in a narrow window .5rem from the edges)
   const toast = page.locator('[data-wds-toast=migration]');
   await expect(toast).toBeVisible();
   const box = await toast.boundingBox(), view = page.viewportSize();
@@ -748,7 +724,7 @@ test('porting.md example 1 (string keys, a list of photos, references both ways,
   const byTitle = Object.fromEntries(st.recipes.map((r) => [r.value.title, r]));
   expect(byTitle['Apple pie'].id).toBe(st.tag + '-sapple-pie');          // a string key: "s" and the URL-encoded text
   expect(byTitle['Tarte Tatin'].id).toBe(st.tag + '-sTarte%20Tatin');
-  expect(byTitle['Apple pie'].value).toEqual({ title: 'Apple pie', portions: 8, steps: ['Peel the apples', 'Bake for 45 minutes'],
+  expect(byTitle['Apple pie'].value).toEqual({ title: 'Apple pie',
     photos: [{ image: st.tag + '-simg-1.jpg', caption: 'Fresh from the oven' }, { image: st.tag + '-simg-2.jpg', caption: 'The first slice' }] });   // the references compute the ids of their images as the image side does
   expect(byTitle['Tarte Tatin'].value.photos).toEqual([{ image: null, caption: 'A photo that was lost' }]);   // a dead reference keeps what the person wrote
   expect(byTitle['Plain rice'].value.photos).toEqual([]);
@@ -756,43 +732,20 @@ test('porting.md example 1 (string keys, a list of photos, references both ways,
   expect(byTitle['Apple pie'].created).toBe(Date.parse('2024-03-01T10:00:00.000Z'));
   expect(st.recipes.slice().sort((x, y) => x.created - y.created).map((r) => r.value.title)).toEqual(['Apple pie', 'Tarte Tatin', 'Plain rice']);
   expect(st.files).toEqual([
-    { id: st.tag + '-simg-1.jpg', meta: { name: 'apple-pie.jpg', recipe: st.tag + '-sapple-pie' }, type: 'image/jpeg', bytes: IMAGE_1 },   // the other direction, byte for byte; the type of the File is kept without a mime in the block
-    { id: st.tag + '-simg-2.jpg', meta: { name: 'slice.jpg', recipe: st.tag + '-sapple-pie' }, type: 'image/jpeg', bytes: IMAGE_2 }]);
-  expect(st.settings).toEqual({ units: 'metric', view: 'grid' });        // the old settings fill only what the vault lacks; "search" was left out on purpose
+    { id: st.tag + '-simg-1.jpg', meta: { name: 'apple-pie.jpg' }, type: 'image/jpeg', bytes: IMAGE_1 },   // byte for byte; the type of the File is kept without a mime in the block
+    { id: st.tag + '-simg-2.jpg', meta: { name: 'slice.jpg' }, type: 'image/jpeg', bytes: IMAGE_2 }]);
   expect(st.records).not.toContain('.wds/migration/cookbook/' + st.tag);   // the marker is hidden
   const old = await page.evaluate(() => oldCook());
   expect(old.rows).toEqual({ recipes: 0, images: 0 });
-  expect(old.local).toEqual({ 'other.app.key': 'keep me' });            // only the configured keys are gone
+  expect(Object.keys(old.local).sort()).toEqual(['cookbook.prefs', 'other.app.key']);   // the block names no localStorage key: a personal preference and another app's key are never touched
   // a second start: nothing to take over, no dialog, no question
   const page2 = await open(ctx, url);
   await page2.evaluate(() => { window.R = null; });
   await unlockLater(page2, accessId);
   await startCook(page2);
-  expect((await finishCook(page2)).result).toEqual({ status: 'nothing', sandbox: false });
+  expect((await finishCook(page2)).result).toEqual({ status: 'nothing' });
   await expect(page2.locator('dialog[data-wds-view]')).toHaveCount(0);
   await noProblems(page, page2);
-  await ctx.close();
-});
-
-test('porting.md example 1 with tagged: false: the ids are the ones that the import of section 3 builds (sapple-pie, simg-1.jpg)', async ({ browser, stack, md, porting }) => {
-  const recipe = COOK(porting);
-  expect(recipe).toContain('id: "cookbook",');
-  const url = cookUrl(md, porting, stack, { recipe: recipe.replace('id: "cookbook",', 'id: "cookbook", tagged: false,') });
-  const ctx = await newContext(browser);
-  const page = await open(ctx, url);
-  if (!(await idbAvailable(page))) test.skip(true, 'this engine has no IndexedDB for file:// pages');
-  await openVault(page, stack);
-  await page.evaluate(() => window.__unlock);
-  await page.evaluate((blobs) => seedCook({ blobs }), await canKeepBlobs(page));
-  await startCook(page);
-  await answerYes(page);
-  expect((await finishCook(page)).result).toMatchObject({ status: 'migrated', deleted: 'deleted', copied: 5 });
-  const st = await vaultOfCook(page);
-  const newId = (oldId) => (typeof oldId === 'string' ? 's' : 'j') + encodeURIComponent(typeof oldId === 'string' ? oldId : JSON.stringify(oldId));     // the function of the import in section 3
-  expect(st.recipes.map((r) => r.id).sort()).toEqual([newId('apple-pie'), newId('Tarte Tatin'), newId('rice')].sort());
-  expect(st.files.map((f) => f.id)).toEqual([newId('img-1') + '.jpg', newId('img-2') + '.jpg']);
-  expect(st.recipes.find((r) => r.value.title === 'Apple pie').value.photos[0].image).toBe(newId('img-1') + '.jpg');
-  await noProblems(page);
   await ctx.close();
 });
 
@@ -819,7 +772,7 @@ const MIME_SEED = String.raw`
 const MIME_RECIPE = String.raw`
 const blobs = store.collection("blobs/");
 const result = await store.migrateLocal({
-  id: "mimes", tagged: false,
+  id: "mimes",
   indexedDB: { name: "mimes", stores: ["rows"] },
   map(old, h) {
     return { items: old.rows("rows").map((row) => ({ col: blobs, id: h.id(row.key), from: row,
@@ -844,15 +797,17 @@ test('porting.md, the items table: without mime the type of the Blob or File is 
   await page.evaluate(() => { window.__done = window.__recipe(store, {}).then((r) => (window.R = r), (e) => ({ rejected: e.name + ': ' + e.message })); });
   await answerYes(page);
   const res = await page.evaluate(() => window.__done);
-  expect(res.result).toMatchObject({ status: 'migrated', deleted: 'deleted', copied: withFile ? 6 : 5 });
+  expect(res.result).toEqual({ status: 'migrated', deleted: 'deleted' });
   const types = await page.evaluate(async () => {
-    const out = {};
+    const out = {}, tag = localStorage.getItem('wds:migrate:mimes:tag');
     for (const key of ['typed', 'untyped', 'override', 'raw', 'dataurl', 'file']) {
-      const rec = await store.getRecord('blobs/s' + key, { fresh: true });
-      out[key] = rec ? { mime: rec.mime || null, blobType: (await store.getBlob('blobs/s' + key)).type } : null;
+      const rec = await store.getRecord('blobs/' + tag + '-s' + key, { fresh: true });
+      out[key] = rec ? { mime: rec.mime || null, blobType: (await store.getBlob('blobs/' + tag + '-s' + key)).type } : null;
     }
+    out.count = (await store.list('blobs/')).length;
     return out;
   });
+  expect(types.count).toBe(withFile ? 6 : 5);
   expect(types.typed).toEqual({ mime: 'image/png', blobType: 'image/png' });
   expect(types.untyped).toEqual({ mime: null, blobType: 'application/octet-stream' });
   expect(types.override).toEqual({ mime: 'image/webp', blobType: 'image/webp' });
@@ -883,7 +838,7 @@ test('porting.md example 1 in the sandbox: the data is copied and the old data i
   await expect(dlg(page, 'migrate')).toContainText('Sandbox');
   await answerYes(page);
   const res = await finishCook(page);
-  expect(res.result).toEqual({ status: 'migrated', deleted: 'kept', copied: 5, total: 5, sandbox: true });
+  expect(res.result).toEqual({ status: 'migrated', deleted: 'kept' });
   const old = await page.evaluate(() => oldCook());
   expect(old.rows).toEqual({ recipes: 3, images: 2 });                   // still there
   expect(Object.keys(old.local).sort()).toEqual(['cookbook.prefs', 'other.app.key']);
@@ -892,7 +847,7 @@ test('porting.md example 1 in the sandbox: the data is copied and the old data i
   await page.evaluate(async () => { const all = R.recipes.items(); await R.recipes.remove(all[0].id); });
   await startCook(page);
   const again = await finishCook(page);
-  expect(again.result).toMatchObject({ status: 'migrated', again: true, deleted: 'kept' });
+  expect(again.result).toMatchObject({ status: 'migrated', deleted: 'kept' });
   await expect(page.locator('dialog[data-wds-view="migrate"]')).toHaveCount(0);
   expect((await vaultOfCook(page)).recipes).toHaveLength(2);
   // the documents of a server with a sandbox name it
@@ -925,7 +880,7 @@ test('porting.md, the test global: an automated test that sets window.__WDS_MIGR
   await page.evaluate((blobs) => seedCook({ blobs }), await canKeepBlobs(page));
   await startCook(page);
   await answerYes(page);                                                         // (the question is the sandbox's and still says that the old data stays; the result says what happened)
-  expect((await finishCook(page)).result).toMatchObject({ status: 'migrated', deleted: 'deleted', copied: 5, sandbox: true });
+  expect((await finishCook(page)).result).toEqual({ status: 'migrated', deleted: 'deleted' });
   expect((await page.evaluate(() => oldCook())).rows).toEqual({ recipes: 0, images: 0 });
   expect(warnings.filter((w) => /__WDS_MIGRATION_TEST__/.test(w))).toHaveLength(1);
   await noProblems(page);
@@ -941,7 +896,7 @@ test('porting.md, the call: the options of the block are valid, and without old 
   page.on('request', (r) => { if (/\/api\//.test(r.url())) requests++; });
   const before = requests;
   const res = await page.evaluate(() => window.__recipe(store, {}));
-  expect(res.result).toEqual({ status: 'nothing', sandbox: false });
+  expect(res.result).toEqual({ status: 'nothing' });
   await expect(page.locator('dialog[data-wds-view]')).toHaveCount(0);
   expect(requests - before).toBeLessThanOrEqual(1);                       // at most the scope document that tells whether this is a sandbox
   await noProblems(page);
@@ -977,14 +932,14 @@ test('porting.md example 2 is the code of examples/zeit-notizen/index.html, and 
   const fromApp = m[2].split('\n').map((l) => l.slice(m[1].length)).join('\n');
   expect(fromApp).toBe(ZEIT(porting));
   expect(app).toContain('await takeOverOldData()');
-  expect(app).not.toMatch(/indexedDB\.open|localStorage\.(getItem|removeItem|setItem)/);              // the app itself never touches the old storage
+  expect(app).not.toMatch(/indexedDB\.open|localStorage\.removeItem/);                                 // the app itself never opens or empties the old storage
+  expect(app).toContain('var LANG_KEY = "zeitnotizen.lang"');                                         // its one personal preference stays in localStorage under its own key
+  expect(fromApp).not.toContain('zeitnotizen.lang');                                                  // and is never named in migrateLocal
   for (const name of ['projectsCol', 'timeCol', 'notesCol', 'filesCol']) expect(app).toContain('var ' + name + ' = store.collection');
 });
 
-test('the seed block of porting.md and of section 12 is the one of examples/zeit-notizen/wds-verify.json, and the old app has the elements it names', async ({ md, porting }) => {
+test('the seed block of section 12 is the one of examples/zeit-notizen/wds-verify.json, and the old app has the elements it names', async ({ md }) => {
   const file = JSON.parse(readFileSync(join(HERE, 'zeit-notizen', 'wds-verify.json'), 'utf8'));
-  const fromPorting = JSON.parse(blockAfter(porting, /^### The migration test in wds-verify /, 'json'));
-  expect(fromPorting.seed).toEqual(file.seed);
   const printed = JSON.parse(blockAfter(md, /^### Writing wds-verify\.json$/, 'json', 1));
   expect(printed.seed).toEqual(file.seed);
   const old = readFileSync(join(HERE, 'zeit-notizen', 'old', 'index.html'), 'utf8');
@@ -1001,10 +956,8 @@ test('the seed block of porting.md and of section 12 is the one of examples/zeit
 // tests: the other code blocks (checklist, popup, autosave, role)
 
 const POPUP_HEADING = /^### Files$/;
-test('the popup block of integration.md (Files) and porting.md (checklist) is one and the same, opens the window inside the click and falls back to a download link', async ({ browser, stack, md, porting }) => {
+test('the popup block of integration.md (Files) opens the window inside the click and falls back to a download link', async ({ browser, stack, md }) => {
   const fromGuide = blockAfter(md, POPUP_HEADING, 'js', 2);
-  const fromPorting = blockAfter(porting, /^## 7\. Checklist for apps with forms and modal dialogs$/, 'js', 1);
-  expect(fromGuide).toBe(fromPorting);
   const url = harness(md, stack, { recipe: fromGuide, params: ['openButton', 'id', 'name', 'offerDownloadLink', 'showError'], ret: [], scope: stack.scope });
   const ctx = await newContext(browser);
   const page = await open(ctx, url);
@@ -1063,10 +1016,10 @@ test('headless Chromium has no PDF viewer: a popup filled with a PDF blob stays 
   await ctx.close();
 });
 
-test('porting.md checklist for apps with forms: own dialogs are closed on lock, the typed values stay after a failed save, the button is disabled while saving and enabled again', async ({ browser, stack, md, porting }) => {
+test('porting.md checklist for apps with forms: the typed values stay after a failed save, the button is disabled while saving and enabled again, the submit does not navigate', async ({ browser, stack, md, porting }) => {
   const recipe = blockAfter(porting, /^## 7\. Checklist for apps with forms and modal dialogs$/, 'js', 0);
-  const url = harness(md, stack, { recipe, params: ['recipes', 'form', 'saveButton', 'readForm', 'showSaved', 'showError', 'closeForm', 'clearScreen', 'id'], ret: [], scope: stack.scope,
-    extraBody: '<dialog id="mine"><p>my own modal dialog</p></dialog><form id="f"><input id="title" value="typed text"><button id="save" type="submit">Save</button></form>' });
+  const url = harness(md, stack, { recipe, params: ['recipes', 'form', 'saveButton', 'readForm', 'showSaved', 'showError', 'closeForm', 'id'], ret: [], scope: stack.scope,
+    extraBody: '<form id="f"><input id="title" value="typed text"><button id="save" type="submit">Save</button></form>' });
   const ctx = await newContext(browser);
   const page = await open(ctx, url);
   await page.evaluate(async () => {
@@ -1078,12 +1031,11 @@ test('porting.md checklist for apps with forms: own dialogs are closed on lock, 
       recipes: window.recipes, form: document.getElementById('f'), saveButton: document.getElementById('save'), id: 'item-1.pdf',
       readForm: () => ({ title: document.getElementById('title').value }),
       showSaved: (v) => window.__log.push('saved ' + v.title), showError: (e) => window.__log.push('error ' + e.message), closeForm: () => window.__log.push('closed'),
-      clearScreen: () => window.__log.push('cleared'),
     });
   });
   await openVault(page, stack);
   await page.evaluate(() => window.__unlock);
-  // (3) while the save is in flight the button is disabled; (4) the submit does not navigate
+  // while the save is in flight the button is disabled; the submit does not navigate
   await page.evaluate(() => { window.__gate = new Promise((r) => { window.__openGate = r; }); });
   await page.locator('#save').click();
   await expect(page.locator('#save')).toBeDisabled();
@@ -1091,21 +1043,13 @@ test('porting.md checklist for apps with forms: own dialogs are closed on lock, 
   await expect(page.locator('#save')).toBeEnabled();
   expect(await page.evaluate(() => window.__log)).toEqual(['set typed text', 'closed', 'saved typed text']);
   expect(page.url()).toBe(url);
-  // (2) a failed save keeps the form: nothing is closed, the error is shown, the button is enabled again
+  // a failed save keeps the form: nothing is closed, the error is shown, the button is enabled again
   await page.evaluate(() => { window.__log.length = 0; window.__gate = null; window.__fail = true; });
   await page.locator('#save').click();
   await expect.poll(() => page.evaluate(() => window.__log.length)).toBe(2);
   expect(await page.evaluate(() => window.__log)).toEqual(['set typed text', 'error offline']);
   await expect(page.locator('#save')).toBeEnabled();
   expect(await page.locator('#title').inputValue()).toBe('typed text');
-  // (1) an own modal dialog is closed by the onLock handler, which the library calls on every lock
-  await page.evaluate(() => { window.__log.length = 0; document.getElementById('mine').showModal(); });
-  expect(await page.evaluate(() => document.querySelectorAll('dialog:not(.wds-dialog)[open]').length)).toBe(1);
-  await page.evaluate(() => store.lock());
-  await expect.poll(() => page.evaluate(() => document.querySelectorAll('dialog:not(.wds-dialog)[open]').length)).toBe(0);
-  expect(await page.evaluate(() => window.__log)).toContain('cleared');
-  // (6) an id with "." and a percent sign goes into a selector through CSS.escape
-  expect(await page.evaluate(() => { const el = document.createElement('li'); el.id = 'item-a%2Fb.pdf'; document.body.append(el); return document.querySelector('#item-' + CSS.escape('a%2Fb.pdf')) === el; })).toBe(true);
   await noProblems(page);
   await ctx.close();
 });
@@ -1144,9 +1088,9 @@ test('integration.md: the autosave block saves the state it is given, and the ro
     const statusEl = document.createElement('span'), textarea = document.createElement('textarea'), saveButton = document.createElement('button');
     const R = await window.__recipe(store, { state: { text: 'draft text' }, statusEl, textarea, saveButton });
     // the block itself ran changed(), flush() and stop(): the draft is in the vault, the handle is stopped by the person's own call
-    return { stopReason: R.saver.stopReason, readOnly: textarea.readOnly, hidden: saveButton.hidden, saved: await store.get('draft', { fresh: true }) };
+    return { status: R.saver.status, readOnly: textarea.readOnly, hidden: saveButton.hidden, saved: await store.get('draft', { fresh: true }) };
   });
-  expect(out).toEqual({ stopReason: 'stop', readOnly: false, hidden: false, saved: { text: 'draft text' } });
+  expect(out).toEqual({ status: 'stopped', readOnly: false, hidden: false, saved: { text: 'draft text' } });
   await noProblems(page);
   await ctx.close();
 });
@@ -1186,16 +1130,13 @@ test('every code block of integration.md and porting.md is run or at least parse
     'integration|13. What to tell users|0': 'text: the sentences are compared in test_docs.py',
     'integration|14. Complete minimal example|0': 'run: wds-verify (mock and sandbox)',
     'porting|3. Own export and import|0': RUN,
-    'porting|3. Own export and import|1': RUN,
     'porting|The call|0': RUN,
-    'porting|Example 1: string keys, a list of photos inside a recipe, references in both directions, settings in localStorage|0': RUN,
+    'porting|Example 1: a reference from one entry to another (photos in a recipe)|0': RUN,
     'porting|Example 2: a localStorage JSON, notes, files and a key-value store|0': 'identical to the app, which app.spec.mjs runs against a seeded old browser',
     'porting|What your app does with the result|0': RUN,
-    'porting|The migration test in wds-verify (the seed block)|0': 'json: equal to the example, run by wds-verify below',
     'porting|The deletion path in the sandbox: the test global|0': PARSE,
     'porting|The join code for tests (a real scope)|0': 'shell: text only',
     'porting|7. Checklist for apps with forms and modal dialogs|0': RUN,
-    'porting|7. Checklist for apps with forms and modal dialogs|1': RUN,
   };
   const Async = Object.getPrototypeOf(async function () {}).constructor;
   const seen = new Set();

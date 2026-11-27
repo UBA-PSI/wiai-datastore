@@ -344,7 +344,7 @@
 <div id="toast" role="status" aria-live="polite"></div>
 
 
-<script src="https://wiai.uni-bamberg.de/datastore/client/wds-1.0.0.js" integrity="sha384-fmN0nQDEY+C5dimjydhbS0WkgIoFDxgwHjlNS9Iqm8+CoVz/5o+GXDEl6HDRFsdp" crossorigin="anonymous"
+<script src="https://wiai.uni-bamberg.de/datastore/client/wds-1.0.0.js" integrity="sha384-zNTgKx5jm6ESzFb+xzoqPjMSbtWdS/DSbc5D/BBUIc4+J8zQViLK5TNk26/L3grZ" crossorigin="anonymous"
         onerror="document.body.textContent='Storage service unreachable. Check your connection and reload this page.'"></script>
 <script>
 "use strict";
@@ -418,7 +418,7 @@
       cf_mine: "Meine Fassung", cf_theirs: "Neuere Fassung", cf_keep_mine: "Meine Fassung behalten", cf_keep_theirs: "Neuere Fassung behalten",
       cf_deleted: "(wurde gelöscht)", cf_keep_deleted: "Gelöscht lassen", cf_restore_mine: "Meine Fassung wiederherstellen", cf_note: "Die nicht gewählte Fassung bleibt im Verlauf erhalten.",
       cf_unsaved: "Noch nicht gespeichert", cf_will_delete: "Noch nicht gelöscht", cf_delete_anyway: "Trotzdem löschen", cf_saved_at: "Gespeichert: {time}", cf_diff: "Farbig hinterlegte Zeilen gibt es nur in einer der beiden Fassungen.",
-      lb_note: "Notiz „{t}“", lb_time: "Zeiteintrag „{t}“", lb_project: "Projekt „{t}“", lb_file: "Anhang „{t}“", lb_index: "Verzeichnis", lb_settings: "Einstellungen", lb_timer: "Timer",
+      lb_note: "Notiz „{t}“", lb_time: "Zeiteintrag „{t}“", lb_project: "Projekt „{t}“", lb_file: "Anhang „{t}“", lb_index: "Verzeichnis", lb_timer: "Timer",
       weekdays_short: "Mo,Di,Mi,Do,Fr,Sa,So"
     },
     en: {
@@ -483,17 +483,21 @@
       cf_mine: "My version", cf_theirs: "Newer version", cf_keep_mine: "Keep my version", cf_keep_theirs: "Keep the newer version",
       cf_deleted: "(was deleted)", cf_keep_deleted: "Keep it deleted", cf_restore_mine: "Restore my version", cf_note: "The version you do not choose stays in the history.",
       cf_unsaved: "Not saved yet", cf_will_delete: "Not deleted yet", cf_delete_anyway: "Delete anyway", cf_saved_at: "Saved: {time}", cf_diff: "Highlighted lines exist in only one of the two versions.",
-      lb_note: "note \"{t}\"", lb_time: "time entry \"{t}\"", lb_project: "project \"{t}\"", lb_file: "attachment \"{t}\"", lb_index: "index", lb_settings: "settings", lb_timer: "timer",
+      lb_note: "note \"{t}\"", lb_time: "time entry \"{t}\"", lb_project: "project \"{t}\"", lb_file: "attachment \"{t}\"", lb_index: "index", lb_timer: "timer",
       weekdays_short: "Mon,Tue,Wed,Thu,Fri,Sat,Sun"
     }
   };
 
   // ---------------------------------------------------------------- state
+  // The language is a personal preference: it stays in this browser's localStorage under the app's own key (never in the vault, never named in migrateLocal),
+  // so every member of a shared vault, a read member too, chooses their own.
+  var LANG_KEY = "zeitnotizen.lang";
+  function savedLang() { try { var v = localStorage.getItem(LANG_KEY); return v === "de" || v === "en" ? v : null; } catch (e) { return null; } }
   var S = {
-    lang: /^de\b/i.test(navigator.language || "") ? "de" : "en",   // before the vault is open: the language of the browser; a choice stored in the vault replaces it
+    lang: savedLang() || (/^de\b/i.test(navigator.language || "") ? "de" : "en"),   // the person's choice (this browser's localStorage), else the language of the browser: known before the vault is open
     role: "owner", loaded: false,
     projects: new Map(), time: new Map(), notes: new Map(),
-    timer: null, settings: {},
+    timer: null,
     view: "time", week: null, timeDays: 14,
     noteId: null, saver: null, upload: null, previews: new Map(), query: "", tag: "", filterProject: "",
     ticker: null, maxBytes: null, syncing: false, migrationChecked: false
@@ -582,15 +586,15 @@
   // and meant for developers; it goes to the console).
   function errText(e) {
     if (typeof console !== "undefined" && e) console.warn(e);
-    if (e instanceof WDS.OfflineError) return t("err_offline");
-    if (e instanceof WDS.QuotaError) return t("err_quota");
-    if (e instanceof WDS.AuthError) return e.code === "forbidden" ? t("err_forbidden") : t("err_auth");
-    if (e instanceof WDS.IntegrityError || e instanceof WDS.VersionError) return t("err_integrity");
-    if (e instanceof WDS.ConflictError) return t("err_conflict");
+    if (e instanceof WDS.errors.OfflineError) return t("err_offline");
+    if (e instanceof WDS.errors.QuotaError) return t("err_quota");
+    if (e instanceof WDS.errors.AuthError) return e.code === "forbidden" ? t("err_forbidden") : t("err_auth");
+    if (e instanceof WDS.errors.IntegrityError || e instanceof WDS.errors.VersionError) return t("err_integrity");
+    if (e instanceof WDS.errors.ConflictError) return t("err_conflict");
     return t("err_unknown");
   }
   // The end of the session (access revoked, session expired) is announced by the library and the lock screen follows.
-  function sessionEnded(e) { return e instanceof WDS.AuthError && (e.code === "revoked" || e.status === 401); }
+  function sessionEnded(e) { return e instanceof WDS.errors.AuthError && (e.code === "revoked" || e.status === 401); }
   function fail(e) { if (sessionEnded(e)) return; toast(t("error_generic", { msg: errText(e) })); }
 
   // One modal dialog at a time. build(dlg, done) fills it; done(value) closes it. sticky: Escape and a click outside do nothing.
@@ -679,12 +683,12 @@
   // ---------------------------------------------------------------- the store
   // Four collections (store.collection): projects/<id>, time/<id>, notes/<id> and files/<id> (the bytes of an attachment). Each one keeps
   // an index record (projects.index, ...) with a little meta per item, merges the changes of several devices without losing items and can be
-  // repaired with rebuild(). settings and timer are single records. The app never calls list(): that would download every attachment.
+  // repaired with rebuild(). The timer is a single record. The app never calls list(): that would download every attachment.
   var store = WDS.connect({ scope: "zeitnotizen-demo-xn8kp9", label: labelOf });   // public scope ID of the demo scope (the join code is never part of the app)
   var projectsCol = store.collection("projects/", { meta: function (p) { return { name: String(p.name || "").slice(0, 80) }; } });
   var timeCol = store.collection("time/", { meta: function (e) { return { date: e.date, minutes: e.minutes, project: e.project }; } });
   var notesCol = store.collection("notes/", { meta: function (n) { return { title: String(n.title || "").slice(0, 80) }; } });
-  var filesCol = store.collection("files/");     // attachments: the value is the File, the meta (given with add) says which note it belongs to
+  var filesCol = store.collection("files/");     // attachments: the value is the File, the meta (given with set) says which note it belongs to
 
   function labelOf(name) {
     var m = String(name).match(/^(notes|time|projects|files)\/(.+)$/);
@@ -695,7 +699,7 @@
       if (m[1] === "projects") { var p = S.projects.get(id); return t("lb_project", { t: p ? p.name : id }); }
       return t("lb_file", { t: fileNameOf(id) });
     }
-    return /\.index$/.test(name) ? t("lb_index") : name === "settings" ? t("lb_settings") : name === "timer" ? t("lb_timer") : name;
+    return /\.index$/.test(name) ? t("lb_index") : name === "timer" ? t("lb_timer") : name;
   }
 
   // The name of an attachment for the dialogs: from its list entry when the list is loaded, else the id without the random start of an id made here.
@@ -757,22 +761,20 @@
   async function loadAll(refresh) {
     S.syncing = true;
     try {
-      var heads = await Promise.all([store.get("settings"), store.get("timer")]);
-      S.settings = heads[0] && typeof heads[0] === "object" ? heads[0] : {};
-      S.timer = heads[1] && heads[1].start ? heads[1] : null;
+      var timer = await store.get("timer");
+      S.timer = timer && timer.start ? timer : null;
       var cols = [projectsCol, timeCol, notesCol, filesCol];
       await Promise.all(cols.map(function (c) { return refresh ? c.refresh() : c.load(); }));
       var total = projectsCol.items().length + timeCol.items().length + notesCol.items().length, done = 0;
       for (var k = 0; k < 3; k++) {
         var col = cols[k], map = mapOf(col);
-        var rows = await col.getAll({ concurrency: 8 });       // records that are gone are skipped (and leave the list with the next write)
+        var rows = await col.getAll();       // records that are gone are skipped (and leave the list with the next write)
         map.clear();
         rows.forEach(function (r) { if (r.value && typeof r.value === "object") map.set(r.id, r.value); });
         done += col.items().length;
         $("screen-msg").textContent = t("loading_data", { n: done, total: total });
       }
       try { var u = await store.usage(); S.maxBytes = u && u.limits && u.limits.max_value_bytes ? u.limits.max_value_bytes : null; } catch (e) { S.maxBytes = null; }
-      if (S.settings.lang === "de" || S.settings.lang === "en") S.lang = S.settings.lang;
     } finally { S.syncing = false; }
   }
   // Items that other devices added, removed or changed arrive when the window gets focus: the collections tell us (not for our own calls).
@@ -818,7 +820,7 @@
 
   async function addProject(name) {
     var p = { id: uid(), name: name, color: S.projects.size % PALETTE, archived: false, created: Date.now() };
-    await stored(projectsCol.add(p, { id: p.id }));
+    await stored(projectsCol.set(p.id, p));
     S.projects.set(p.id, p);
   }
   async function saveProject(p) { await save(projectsCol, p.id, p); }
@@ -872,7 +874,7 @@
   // ---------------------------------------------------------------- time entries and the timer
   function entryText(e) { return e.desc || projectName(e.project); }
   async function addEntry(e) {
-    await stored(timeCol.add(e, { id: e.id }));
+    await stored(timeCol.set(e.id, e));
     S.time.set(e.id, e);
   }
   function renderEntries() {
@@ -1136,7 +1138,7 @@
     await openNote(id, true);
     $("note-title").focus();
     // The record and its list entry are created now (autosave only keeps them current); typing does not wait for the requests.
-    stored(notesCol.add(n, { id: id })).catch(fail);
+    stored(notesCol.set(id, n)).catch(fail);
   }
   function noteEdited() {
     var n = S.notes.get(S.noteId); if (!n || !S.saver) return;
@@ -1234,7 +1236,7 @@
         $("file-hint").textContent = t("uploading", { name: f.name });
         try {
           // the ending stays in the id (files/<id>.pdf in the export); the meta says which note owns the file
-          await stored(filesCol.add(f, { id: fid + "-" + safeName(f.name), mime: mime, meta: { note: n.id, name: f.name.slice(0, 100), mime: mime.slice(0, 80), size: f.size } }));
+          await stored(filesCol.set(fid + "-" + safeName(f.name), f, { mime: mime, meta: { note: n.id, name: f.name.slice(0, 100), mime: mime.slice(0, 80), size: f.size } }));
           n.updated = Date.now();
           saver.changed(); await saver.flush();
           if (S.noteId === n.id) { renderFiles(); renderNoteList(); }
@@ -1267,7 +1269,7 @@
       h("pre", {}, lines.map(function (l) { return h("span", { class: "ln" + (other && l.trim() && !seen[l] ? " diff" : ""), text: l }); })));
   }
   // The conflict dialog for notes, time entries and projects (replaces the library's for these records only): the person sees titles and texts,
-  // never raw JSON. Resolves "mine" or "theirs". Attachments (bytes) keep the library's dialog; settings and the timer are decided in code.
+  // never raw JSON. Resolves "mine" or "theirs". Attachments (bytes) keep the library's dialog; the timer is decided in code.
   function askPerson(c) {
     var gone = !c.theirs || c.theirs.deleted, deleting = c.mine.deleted;
     return modal(function (dlg, done) {
@@ -1285,7 +1287,6 @@
     }, { sticky: true });
   }
   ["notes/", "time/", "projects/"].forEach(function (prefix) { store.onConflict(prefix, askPerson); });
-  store.onConflict("settings", function (c) { c.merge(function (mine, theirs) { return Object.assign({}, theirs, mine); }); });   // two devices changed different settings: keep both
   store.onConflict("timer", function (c) { c.keepMine(); });
 
   // ---------------------------------------------------------------- data of the older, local-only version
@@ -1304,8 +1305,11 @@
         const projects = Array.isArray(data.projects) ? data.projects : [], entries = Array.isArray(data.entries) ? data.entries : [];
         const pid = (n) => h.id("p" + n), eid = (n) => h.id("e" + n);    // two counters in one JSON text: "p" and "e" keep their ids apart
         const known = new Set(projects.map((p) => p.id));
-        const meta = {};                                    // the key-value store: "timer" and "lang"
-        for (const row of old.rows("meta")) { if (row.key === "timer" || row.key === "lang") meta[row.key] = row; else h.skip(row, "not a setting of the new app"); }
+        const meta = {};                                    // the key-value store: the timer is data, every other row is skipped
+        for (const row of old.rows("meta")) {
+          if (row.key === "timer") meta.timer = row;
+          else h.skip(row, row.key === "lang" ? "language: reset, the new app keeps it in localStorage" : "not a setting of the new app");
+        }
         const ending = (name) => (/\.[A-Za-z0-9]{1,8}$/.exec(String(name)) || [""])[0];   // nothing refers to the id of a file, so its id may use the name
     
         const items = [];
@@ -1328,8 +1332,7 @@
     
         const records = [], t = meta.timer && meta.timer.value;
         if (t) records.push({ name: "timer", from: meta.timer, value: { project: known.has(t.project) ? pid(t.project) : null, desc: String(t.desc || ""), start: Number(t.start) } });   // a timer of a deleted project keeps running, without a project
-        const settings = meta.lang ? { record: "settings", from: meta.lang, value: { lang: meta.lang.value === "en" ? "en" : "de" } } : undefined;
-        return { items, records, settings };
+        return { items, records };
       },
     });
     // migrateLocal: end
@@ -1482,8 +1485,7 @@
   $("btn-lang").addEventListener("click", async function () {
     S.lang = S.lang === "de" ? "en" : "de";
     applyLang(); toast(t("lang_switched"));
-    if (!canWrite()) return;
-    try { S.settings = Object.assign({}, S.settings, { lang: S.lang }); await store.set("settings", S.settings); } catch (e) { fail(e); }
+    try { localStorage.setItem(LANG_KEY, S.lang); } catch (e) { /* the choice then lasts until the page closes */ }
   });
 
   applyLang();

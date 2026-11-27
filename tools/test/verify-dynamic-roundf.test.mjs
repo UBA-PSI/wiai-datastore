@@ -1,6 +1,6 @@
 // wds-verify, round F: the readiness of the library's dialogs (a dialog without a view, busy, or with a field that is disabled for a while is waited for, never
 // "unexpected"), the library's migration dialogs (migrate, migrate-large) answered by the tool, an app with a modal dialog of its own, the name of a value that was
-// neither shown nor written, the reset of a restored search field, and store.migrateLocal end to end.
+// neither shown nor written, and store.migrateLocal end to end.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync, readFileSync, cpSync } from 'node:fs';
@@ -50,7 +50,7 @@ const OLD_APP = '<!doctype html><html><head><meta charset="utf-8"><title>Old not
   + "var ready = new Promise(function (ok) { req.onsuccess = function () { ok(req.result); }; });\n"
   + "document.getElementById('save').onclick = function () { ready.then(function (db) { var tx = db.transaction('notes', 'readwrite'); tx.objectStore('notes').put({ id: 'n' + Date.now() + Math.floor(Math.random() * 1000), title: document.getElementById('title').value }); localStorage.setItem('oldapp:prefs', JSON.stringify({ theme: 'dark' })); }); };\n"
   + '</script></body></html>';
-const SEED = { page: 'old.html', steps: [{ fill: ['#title', 'old note {canary}'] }, { click: '#save' }] };
+const SEED = { page: 'old.html', steps: [{ fill: ['#title', 'old note {canary}'] }, { click: '#save' }], keep: ['oldapp:prefs'] };   // the preferences key stays in localStorage: migrateLocal does not name it
 function writeMig(html, config, old = OLD_APP) {
   const dir = writeApp(html, config);
   writeFileSync(join(dir, 'old.html'), old);
@@ -58,8 +58,8 @@ function writeMig(html, config, old = OLD_APP) {
 }
 
 // A page that plays the migration dialogs of the library: the markup and the names of client/README.md (view migrate with migrate-backup, migrate-yes;
-// view migrate-large with migrate-large-download and migrate-delete, which stays disabled until every file was downloaded), made by the page.
-// large: two entries "are too large" and have to be downloaded one by one before the old data may go.
+// view migrate-large with migrate-large-download and migrate-delete, which stays disabled until the files were downloaded), made by the page.
+// large: two entries "are too large" and are downloaded (one ZIP) before the old data may go.
 const FAKE = `
   function openOld() { return new Promise(function (ok) { var req = indexedDB.open('oldapp'); req.onupgradeneeded = function () { req.transaction.abort(); }; req.onsuccess = function () { ok(req.result); }; req.onerror = function () { ok(null); }; }); }
   function all(db, name) { return new Promise(function (ok) { var q = db.transaction(name).objectStore(name).getAll(); q.onsuccess = function () { ok(q.result); }; }); }
@@ -76,9 +76,9 @@ const FAKE = `
     await wait(d, 'migrate-yes'); d.remove();
     for (var i = 0; i < rows.length; i++) await store.set('notes/' + rows[i].id, { title: rows[i].title });
     if (LARGE) {
-      var big = dialog('migrate-large', '<button data-wds="migrate-large-download">One</button><button data-wds="migrate-large-download">Two</button><button data-wds="migrate-delete" disabled>Delete anyway</button>');
-      var left = 2, del = big.querySelector('[data-wds=migrate-delete]');
-      big.querySelectorAll('[data-wds=migrate-large-download]').forEach(function (b, i) { b.onclick = function () { download('large-' + i + '.bin', rows[0].title, 'application/octet-stream'); if (--left === 0) del.disabled = false; }; });
+      var big = dialog('migrate-large', '<ul><li class="wds-person">One</li><li class="wds-person">Two</li></ul><button data-wds="migrate-large-download">Download these files</button><button data-wds="migrate-delete" disabled>Delete anyway</button>');
+      var del = big.querySelector('[data-wds=migrate-delete]');
+      big.querySelector('[data-wds=migrate-large-download]').onclick = function () { download('too-large.zip', rows[0].title, 'application/zip'); del.disabled = false; };
       await new Promise(function (ok) { del.onclick = function () { if (!del.disabled) ok(); }; }); big.remove();
     }
     var tx = db.transaction('notes', 'readwrite'); tx.objectStore('notes').clear(); await new Promise(function (ok) { tx.oncomplete = ok; }); db.close();
@@ -103,18 +103,24 @@ test('the tool answers the migration dialog of the library: it waits for the bus
   assert.match(r.find('downloads').detail, /oldapp-old-data-2031-01-01\.json \(offered by the library's migration dialog\)/);
 });
 
-test('the tool answers migrate-large: every file is downloaded one by one, then "delete anyway"; the downloads hold the old data and are no leak', { timeout: 240000 }, async () => {
+test('the tool answers migrate-large: the files are downloaded (one ZIP), then "delete anyway"; the download holds the old data and is no leak', { timeout: 240000 }, async () => {
   const r = await verify(writeMig(fakeMigration(true), { seed: SEED }));
   assert.equal(r.code, 0, JSON.stringify(r.failures) + r.stderr);
   noNotes(r);
   assert.equal(r.find('migration-old-data').level, 'pass', r.find('migration-old-data').detail);
   assert.equal(r.find('leak-download').level, 'pass', r.find('leak-download').detail);
   assert.match(r.find('migration-dialog').detail, /2 entries were too large for the vault: the tool downloaded them and deleted the old data anyway/);
-  assert.match(r.find('downloads').detail, /large-0\.bin \(offered by the library's migration dialog\).*large-1\.bin \(offered by the library's migration dialog\)/);
+  assert.match(r.find('downloads').detail, /too-large\.zip \(offered by the library's migration dialog\)/);
   // the same data as an ordinary download that the app starts on its own is a leak
   const leaky = variant(fakeMigration(false), "$('result').textContent = 'migrated';", "download('copy.txt', rows[0].title, 'text/plain'); $('result').textContent = 'migrated';");
   const l = await verify(writeMig(leaky, { seed: SEED }));
   assert.ok(l.titles('fail').includes('Canary found in download'), l.titles('fail').join('|'));
+});
+
+test('migrate-large: a download that does not start is a finding of its own, and the tool does not press the disabled delete button', { timeout: 240000 }, async () => {
+  const broken = variant(fakeMigration(true), "download('too-large.zip', rows[0].title, 'application/zip'); del.disabled = false;", '');
+  const r = await verify(writeMig(broken, { seed: SEED }));
+  assert.ok(r.titles('fail').includes('Migration: the files that are too large could not be downloaded'), r.titles('fail').join('|'));
 });
 
 // ---- an app with a modal dialog of its own ----
@@ -158,37 +164,6 @@ test('"neither shown nor written" names the field and its value', { timeout: 240
   assert.match(steps.find('reload').detail, /2 other typed values were neither shown.*#eDoi \("WDSCANARY [0-9a-f]+z\d\d äöü&="\), #eDoi \("doi 10\.1000\/WDSCANARY-[0-9a-f]+z\d\d"\)\./);
 });
 
-// ---- a restored search field ----
-const SEARCH_APP = () => miniApp({
-  body: '<label>Search <input id="fSearch" type="search"></label><label>Title <input id="title" type="text"></label><button id="go" type="button" data-wds-verify="save">Keep</button><ul id="list"></ul>',
-  script: [
-    "var items = [], filter = '';",
-    "function render() { $('list').textContent = ''; items.filter(function (i) { return !filter || i.title.indexOf(filter) >= 0; }).forEach(function (i) { var li = document.createElement('li'); li.textContent = i.title; $('list').appendChild(li); }); }",
-    "$('fSearch').onchange = function () { filter = $('fSearch').value; store.set('settings', { filter: filter }); render(); };",
-    "$('go').onclick = function () { items.push({ title: $('title').value }); store.set('items', { items: items }); render(); };",
-    "store.unlock().then(function () { return Promise.all([store.get('settings'), store.get('items')]); }).then(function (r) { filter = (r[0] && r[0].filter) || ''; $('fSearch').value = filter; items = (r[1] && r[1].items) || []; render(); });",
-  ].join('\n'),
-});
-
-test('an app that restores its search field: the tool clears the field (a search field only) when values are hidden by it, and says so', { timeout: 300000 }, async () => {
-  const r = await verify(writeApp(SEARCH_APP()));
-  assert.equal(r.code, 0, JSON.stringify(r.failures) + r.stderr);
-  assert.equal(r.find('reload').level, 'pass', r.find('reload').detail);
-  const s = r.find('search-reset');
-  assert.equal(s.level, 'info');
-  assert.match(s.detail, /the field #fSearch held a value typed before the reload.*reset a restored search field #fSearch.*\{"fill": \["#fSearch", ""\]\}/);
-  // the same app with the reset as an afterReload step (an empty text is allowed in a fill step): the tool has nothing to clear
-  const stepped = await verify(writeApp(SEARCH_APP(), { afterReload: [{ fill: ['#fSearch', ''] }] }));
-  assert.equal(stepped.code, 0, JSON.stringify(stepped.failures) + stepped.stderr);
-  assert.equal(stepped.find('search-reset'), undefined);
-  assert.equal(stepped.find('afterReload-step-1'), undefined);
-  // a field that is no search field is left alone: the values stay hidden and the check says so as before
-  const plain = SEARCH_APP().replace(/fSearch/g, 'fOther').replace('type="search"', 'type="text"');
-  const p = await verify(writeApp(plain));
-  assert.equal(p.find('search-reset'), undefined);
-  assert.notEqual(p.find('reload').level, 'fail');
-});
-
 // ---- the same app five times in a row: no flaky note ----
 test('examples/zeit-notizen five times in a row: no note, no warning (the unlock dialog after the reload is waited for)', { timeout: 900000 }, async () => {
   // a copy of the example with the integrity hash of the library as it is built now (the example carries the hash of the last release build)
@@ -211,13 +186,8 @@ const MIGRATE_LOCAL = `
   var MIGRATION = {
     id: 'oldnotes',
     indexedDB: { name: 'oldapp', stores: ['notes'] },
-    localStorage: { keys: ['oldapp:prefs'] },
     map: function (old, h) {
-      var prefs = old.json('oldapp:prefs') || {};
-      return {
-        items: old.rows('notes').map(function (r) { return { col: notes, id: h.id(r.key), value: { title: r.value.title }, from: r }; }),
-        settings: { record: 'settings', value: { theme: prefs.theme }, from: 'oldapp:prefs' },
-      };
+      return { items: old.rows('notes').map(function (r) { return { col: notes, id: h.id(r.key), value: { title: r.value.title }, from: r }; }) };
     },
   };
   async function render() { var vals = await notes.getAll(); $('list').textContent = vals.map(function (v) { return v.value.title; }).join(' | '); }
@@ -251,12 +221,11 @@ test('store.migrateLocal (mock): the tool answers the library, the values are in
 // library's own download button), presses "delete anyway", and the old data is gone; the other entry is in the vault.
 const OLD_APP_BIG = OLD_APP.replace("tx.objectStore('notes').put({ id: 'n' + Date.now() + Math.floor(Math.random() * 1000), title: document.getElementById('title').value });",
   "var os = tx.objectStore('notes'); os.put({ id: 'n' + Date.now() + Math.floor(Math.random() * 1000), title: document.getElementById('title').value }); os.put({ id: 'big', title: 'big file', file: new Blob([new Uint8Array(11 * 1024 * 1024)], { type: 'application/octet-stream' }) });");
-const MIGRATE_BIG = MIGRATE_LOCAL.replace("items: old.rows('notes').map(function (r) { return { col: notes, id: h.id(r.key), value: { title: r.value.title }, from: r }; }),",
-  "items: old.rows('notes').map(function (r) { return { col: notes, id: h.id(r.key), value: r.value.file || { title: r.value.title }, from: r }; }),")
+const MIGRATE_BIG = MIGRATE_LOCAL.replace("value: { title: r.value.title }, from: r }; }) };", "value: r.value.file || { title: r.value.title }, from: r }; }) };")
   .replace("$('list').textContent = vals.map(function (v) { return v.value.title; }).join(' | ');", "$('list').textContent = vals.map(function (v) { return v.value && v.value.title; }).filter(Boolean).join(' | ');");
 
 test('the real migrate-large view of the library: the tool downloads the large entry, presses "delete anyway", and the old data is gone (mock)', { timeout: 300000, ...needs(LIB_MIGRATE, 'the library has no store.migrateLocal yet') }, async () => {
-  assert.ok(OLD_APP_BIG !== OLD_APP && MIGRATE_BIG !== MIGRATE_LOCAL, 'the test variants were not applied');
+  assert.ok(OLD_APP_BIG !== OLD_APP && MIGRATE_BIG.includes('r.value.file ||') && MIGRATE_BIG !== MIGRATE_LOCAL, 'the test variants were not applied');
   const r = await verify(writeMig(miniApp({ body: NEW_BODY, script: MIGRATE_BIG }), { seed: SEED }, OLD_APP_BIG));
   assert.equal(r.code, 0, JSON.stringify(r.failures) + r.stderr);
   assert.equal(r.find('migration-visible').level, 'pass', r.find('migration-visible').detail);
@@ -268,7 +237,7 @@ test('the real migrate-large view of the library: the tool downloads the large e
 
 // Rows that map leaves out are deleted with the old data: the question asks for a confirmation, the tool ticks it and the report warns.
 test('store.migrateLocal: h.skip rows need the confirmation of the question; the tool ticks the box and warns (mock)', { timeout: 300000, ...needs(LIB_MIGRATE, 'the library has no store.migrateLocal yet') }, async () => {
-  const skipping = variant(migrateApp(), "settings: { record: 'settings', value: { theme: prefs.theme }, from: 'oldapp:prefs' },", "settings: (h.skip('oldapp:prefs', 'a cache'), undefined),");
+  const skipping = variant(migrateApp().replace("indexedDB: { name: 'oldapp', stores: ['notes'] },", "indexedDB: { name: 'oldapp', stores: ['notes'] }, localStorage: { keys: ['oldapp:prefs'] },"), "return { items:", "h.skip('oldapp:prefs', 'a cache'); return { items:");
   assert.ok(skipping !== migrateApp());
   const r = await verify(writeMig(skipping, { seed: SEED }));
   assert.equal(r.code, 0, JSON.stringify(r.failures) + r.stderr);

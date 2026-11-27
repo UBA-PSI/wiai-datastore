@@ -29,11 +29,11 @@ test('unlock with passphrase, wrong passphrase, key file vault check', async () 
   assert.equal(st.role, 'owner');
   assert.equal(st.stateStatus, 'ok');
   const c3 = newClient(world);
-  await rejects(c3.unlock({ accessId: created.accessId, passphrase: 'wrong wrong wrong' }), core.AuthError);
+  await rejects(c3.unlock({ accessId: created.accessId, passphrase: 'wrong wrong wrong' }), core.errors.AuthError);
   const c4 = newClient(world);
-  await rejects(c4.unlock({ accessId: created.accessId, passphrase, vaultId: 'ZZZZZZZZZZZZZZZZZZZZZZZZZZ' }), core.IntegrityError, /key file/);
-  await rejects(newClient(world).unlock({ accessId: '00000000000000000000', passphrase }), core.UsageError);
-  await rejects(newClient(world).unlock({ accessId: await I.randomAccessId(), passphrase }), core.RequestError);
+  await rejects(c4.unlock({ accessId: created.accessId, passphrase, vaultId: 'ZZZZZZZZZZZZZZZZZZZZZZZZZZ' }), core.errors.IntegrityError, /key file/);
+  await rejects(newClient(world).unlock({ accessId: '00000000000000000000', passphrase }), core.errors.UsageError);
+  await rejects(newClient(world).unlock({ accessId: await I.randomAccessId(), passphrase }), core.errors.RequestError);
 });
 
 test('real Argon2id end to end (vendored hash-wasm)', async () => {
@@ -75,9 +75,9 @@ test('json and bytes records, list, prefix filter, tombstones', async () => {
 test('invalid names and values are rejected before any request', async () => {
   const { founder, world } = await setupVault();
   const n = world.server.requests.length;
-  for (const bad of ['', 'a' + String.fromCharCode(0xd800) + 'b', 'x'.repeat(1025)]) await rejects(founder.put(bad, 1), core.UsageError);
-  await rejects(founder.put('a', undefined), core.UsageError);
-  await rejects(founder.put('a', () => 1), core.UsageError);
+  for (const bad of ['', 'a' + String.fromCharCode(0xd800) + 'b', 'x'.repeat(1025)]) await rejects(founder.put(bad, 1), core.errors.UsageError);
+  await rejects(founder.put('a', undefined), core.errors.UsageError);
+  await rejects(founder.put('a', () => 1), core.errors.UsageError);
   assert.equal(world.server.requests.length, n);
   await founder.put('x'.repeat(1024), 1); // exactly 1024 bytes is fine
   await founder.put('äöü'.repeat(100), 1);
@@ -88,11 +88,11 @@ test('conflicts: stale write, concurrent create, delete vs update, keep mine', a
   await founder.put('doc', { v: 1 });
   const other = newClient(world);
   await other.unlock({ accessId: created.accessId, passphrase });
-  await rejects(other.put('doc', { v: 'blind' }), core.ConflictError); // never read it: treated as a new name
+  await rejects(other.put('doc', { v: 'blind' }), core.errors.ConflictError); // never read it: treated as a new name
   await other.get('doc');
   await other.put('doc', { v: 'other' });
   // founder still believes version 1
-  const err = await rejects(founder.put('doc', { v: 'mine' }), core.ConflictError);
+  const err = await rejects(founder.put('doc', { v: 'mine' }), core.errors.ConflictError);
   assert.equal(err.name, 'ConflictError');
   assert.equal(err.record, 'doc');
   assert.deepEqual(err.theirs.value, { v: 'other' });
@@ -110,17 +110,17 @@ test('conflicts: stale write, concurrent create, delete vs update, keep mine', a
   // two clients create the same new name
   const a = await founder.put('new', 1);
   assert.equal(a.version, 1);
-  const e2 = await rejects(other.put('new', 2), core.ConflictError);
+  const e2 = await rejects(other.put('new', 2), core.errors.ConflictError);
   assert.equal(e2.theirs.value, 1);
   // delete vs update
   await other.get('doc');
   await other.delete('doc');
-  const e3 = await rejects(founder.put('doc', { v: 'late' }), core.ConflictError);
+  const e3 = await rejects(founder.put('doc', { v: 'late' }), core.errors.ConflictError);
   assert.equal(e3.theirs.deleted, true); assert.equal(e3.theirs.version, 4);
   const r2 = await founder.put('doc', { v: 'recreated' }, { base: e3.current });
   assert.equal(r2.version, 5);
   // stale delete
-  const e4 = await rejects(other.delete('doc', { base: 4 }), core.ConflictError);
+  const e4 = await rejects(other.delete('doc', { base: 4 }), core.errors.ConflictError);
   assert.equal(e4.current, 5);
 });
 
@@ -134,7 +134,7 @@ test('history, restore, purge', async () => {
   assert.equal(r.version, 5);
   assert.deepEqual(await founder.get('note'), { i: 2 });
   await founder.delete('note');
-  await rejects(founder.restore('note', 6), core.UsageError); // tombstone
+  await rejects(founder.restore('note', 6), core.errors.UsageError); // tombstone
   await founder.restore('note', 3);
   assert.deepEqual(await founder.get('note'), { i: 3 });
   const freed = await founder.deleteHistory('note');
@@ -180,7 +180,7 @@ test('change passphrase', async () => {
   const old = founder.s.token;
   await founder.changePassphrase('a completely new passphrase');
   assert.deepEqual(await founder.get('a'), 1); // the session continues with the new token
-  await rejects(newClient(world).unlock({ accessId: created.accessId, passphrase }), core.AuthError);
+  await rejects(newClient(world).unlock({ accessId: created.accessId, passphrase }), core.errors.AuthError);
   const c = newClient(world);
   await c.unlock({ accessId: created.accessId, passphrase: 'a completely new passphrase' });
   assert.deepEqual(await c.get('a'), 1);
@@ -190,14 +190,14 @@ test('change passphrase', async () => {
 test('offline, quota and size errors map to typed errors', async () => {
   const { world, founder } = await setupVault({ world: { scope: { limits: { max_value_bytes: 1000, vault_bytes: 3500 } } } });
   await founder.getScopeInfo(true);
-  await rejects(founder.put('big', seq(2000, 0)), core.QuotaError, /larger/);
+  await rejects(founder.put('big', seq(2000, 0)), core.errors.QuotaError, /larger/);
   await founder.put('ok', seq(900, 0));
   await founder.put('ok2', seq(900, 0));
   await founder.put('ok3', seq(900, 0));
-  const e = await rejects(founder.put('ok4', seq(900, 0)), core.QuotaError);
+  const e = await rejects(founder.put('ok4', seq(900, 0)), core.errors.QuotaError);
   assert.equal(e.status, 507); assert.equal(e.body.limit, 'vault_bytes');
   world.server.beforeRequest = () => { throw new TypeError('fetch failed'); };
-  await rejects(founder.get('ok'), core.OfflineError);
+  await rejects(founder.get('ok'), core.errors.OfflineError);
   world.server.beforeRequest = null;
   assert.deepEqual(Array.from((await founder.get('ok'))), Array.from(seq(900, 0)));
 });
@@ -205,7 +205,7 @@ test('offline, quota and size errors map to typed errors', async () => {
 test('locked client refuses operations; lock() drops the session', async () => {
   const { founder } = await setupVault();
   founder.lock();
-  await rejects(founder.get('a'), core.UsageError, /locked/);
+  await rejects(founder.get('a'), core.errors.UsageError, /locked/);
   assert.equal(founder.status().unlocked, false);
 });
 
@@ -214,10 +214,10 @@ test('read-only slots cannot write; export of everything via readAll', async () 
   await ctx.founder.put('a', { n: 1 });
   await ctx.founder.put('b/c', seq(10, 0));
   const { member } = await addMember(ctx, 'read');
-  await rejects(member.put('x', 1), core.AuthError);
+  await rejects(member.put('x', 1), core.errors.AuthError);
   assert.deepEqual(await member.get('a'), { n: 1 });
   const all = await member.readAll();
   assert.deepEqual(all.map((r) => r.name), ['a', 'b/c']);
-  await rejects(member.delete('a'), core.AuthError);
-  await rejects(member.deleteHistory('a'), core.AuthError);
+  await rejects(member.delete('a'), core.errors.AuthError);
+  await rejects(member.deleteHistory('a'), core.errors.AuthError);
 });

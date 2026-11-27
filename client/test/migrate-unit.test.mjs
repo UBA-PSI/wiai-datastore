@@ -1,4 +1,4 @@
-// Unit tests of the pure parts of store.migrateLocal (ids, helpers, option checks, value checks, fillGaps).
+// Unit tests of the pure parts of store.migrateLocal (ids, helpers, option checks, value checks).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
@@ -10,17 +10,16 @@ const M = WDS.internals.migrate;
 test('h.id: same key, same id; 1 and "1" differ; "a/b" and "a_b" differ; never a "/"', () => {
   const t = 'abcd1234';
   assert.equal(M.buildId(t, 12), t + '-j12');
-  assert.equal(M.buildId(null, 12), 'j12');                      // tagged:false: "j12" for the number 12
-  assert.equal(M.buildId(null, '12'), 's12');
+  assert.equal(M.buildId(t, '12'), t + '-s12');
   assert.notEqual(M.buildId(t, 1), M.buildId(t, '1'));
   assert.notEqual(M.buildId(t, 'a/b'), M.buildId(t, 'a_b'));
   assert.ok(!M.buildId(t, 'a/b/c').includes('/'));
   assert.equal(M.buildId(t, 'a/b'), t + '-sa%2Fb');
   assert.equal(M.buildId(t, 7, '.pdf'), t + '-j7.pdf');
   assert.equal(M.buildId(t, 7, '.pdf'), M.buildId(t, 7, '.pdf'));
-  assert.equal(M.buildId(null, [1, 'x']), 'j%5B1%2C%22x%22%5D');
-  assert.equal(M.buildId(null, new Uint8Array([1, 255])), 'b01ff');
-  assert.notEqual(M.buildId(null, new Uint8Array([1, 255])), M.buildId(null, new Uint8Array([1, 254])));
+  assert.equal(M.buildId(t, [1, 'x']), t + '-j%5B1%2C%22x%22%5D');
+  assert.equal(M.buildId(t, new Uint8Array([1, 255])), t + '-b01ff');
+  assert.notEqual(M.buildId(t, new Uint8Array([1, 255])), M.buildId(t, new Uint8Array([1, 254])));
   assert.throws(() => M.buildId(t, 1, 'pdf'), /ending/);
   assert.throws(() => M.buildId(t, 1, '.toolongending'), /ending/);
   assert.throws(() => M.buildId(t, 1, '/x'), /ending/);
@@ -34,13 +33,13 @@ test('h.id: more than 200 characters are cut to 180 plus "~" and a hash of the w
   assert.equal(a, M.buildId('abcd1234', long, '.pdf'));
   assert.equal(M.buildId('abcd1234', 'x'.repeat(170)).length, 8 + 1 + 1 + 170);   // 180 characters stay as they are
   // an id that fits without its ending but not with it is cut as well
-  const edge = M.buildId(null, 'y'.repeat(197), '.pdf');
+  const edge = M.buildId('abcd1234', 'y'.repeat(197), '.pdf');
   assert.ok(edge.length <= 200 && edge.endsWith('.pdf') && edge.includes('~'));
 });
 
-const mkCtx = (rows, tagged = true) => {
+const mkCtx = (rows) => {
   const refs = new Set(), skipped = new Map();
-  return { refs, skipped, tag: 'cafe0001', tagged, hasRow: (s, k) => !!rows[s] && rows[s].includes(k), unknownRow: (r) => r.id, describe: (r) => (r && r.id) || '' };
+  return { refs, skipped, tag: 'cafe0001', hasRow: (s, k) => !!rows[s] && rows[s].includes(k), unknownRow: (r) => r.id };
 };
 test('h.ref: the id the other side computes, null for a dead or missing reference; the same call on both sides gives the same id', () => {
   const ctx = mkCtx({ pdfs: [1, 2] }), h = M.makeHelpers(ctx);
@@ -49,14 +48,12 @@ test('h.ref: the id the other side computes, null for a dead or missing referenc
   assert.equal(h.ref('pdfs', null), null);
   assert.equal(h.ref('pdfs', undefined), null);
   assert.deepEqual([...ctx.refs], ['cafe0001-j1.pdf']);
-  const plain = M.makeHelpers(mkCtx({ pdfs: [1] }, false));
-  assert.equal(plain.id(1), 'j1');
 });
-test('h.skip and h.fail', () => {
+test('h.skip; there is no h.fail', () => {
   const ctx = mkCtx({}), h = M.makeHelpers(ctx);
   h.skip({ id: 'r1' }, 'not an entry');
   assert.deepEqual([...ctx.skipped], [['r1', 'not an entry']]);
-  assert.throws(() => h.fail({ id: 'r2' }, 'no title'), (e) => e.isMigrateStop && e.why === 'r2: no title');
+  assert.equal(h.fail, undefined);
 });
 test('h.blob: Blob, field, .blob, .data (binary, data: URL), and a clear error otherwise', async () => {
   const b = new Blob(['hello'], { type: 'text/plain' });
@@ -84,20 +81,10 @@ test('h.created: Date, number, date string; undefined otherwise', () => {
   assert.equal(M.created(null), undefined);
   assert.equal(M.created(new Date('x')), undefined);
 });
-test('WDS.fillGaps: only absent keys are filled; null, "", 0 and false stay', () => {
-  assert.deepEqual(WDS.fillGaps({ a: 1 }, { a: 2, b: 3 }), { a: 1, b: 3 });
-  assert.deepEqual(WDS.fillGaps({ a: null, b: '', c: 0, d: false }, { a: 1, b: 2, c: 3, d: 4, e: 5 }), { a: null, b: '', c: 0, d: false, e: 5 });
-  assert.deepEqual(WDS.fillGaps(undefined, { a: 1 }), { a: 1 });
-  assert.deepEqual(WDS.fillGaps({ a: 1 }, undefined), { a: 1 });
-  assert.deepEqual(WDS.fillGaps({ a: 1 }, { b: undefined }), { a: 1 });
-  const cur = { a: 1 }; WDS.fillGaps(cur, { b: 2 }); assert.deepEqual(cur, { a: 1 });   // no change in place
-});
-test('the options: unknown option, bad id, no source, prefixes, doubles, the removed applySettings', () => {
+test('the options: unknown option, bad id, no source, prefixes, doubles, the removed options', () => {
   const ok = { id: 'literatur', map() {}, indexedDB: { name: 'db', stores: ['a', 'b'] }, localStorage: { keys: ['k'], prefixes: ['p.'] } };
   const cfg = M.parse(ok);
   assert.deepEqual(cfg.dbs, [{ name: 'db', stores: ['a', 'b'] }]);
-  assert.equal(cfg.tagged, true);
-  assert.equal(M.parse({ ...ok, tagged: false }).tagged, false);
   const bad = (o, re) => assert.throws(() => M.parse(o), (e) => e.name === 'UsageError' && re.test(e.message), JSON.stringify(Object.keys(o || {})));
   bad(undefined, /options object/);
   bad({ ...ok, id: 'Bad' }, /id must be/);
@@ -112,8 +99,9 @@ test('the options: unknown option, bad id, no source, prefixes, doubles, the rem
   bad({ ...ok, indexedDB: [{ name: 'a', stores: ['s'] }, { name: 'a', stores: ['t'] }] }, /listed twice/);
   bad({ ...ok, indexedDB: { name: 'a', stores: ['s', 's'] } }, /listed twice/);
   bad({ ...ok, indexedDB: { name: 'a', stores: [] } }, /needs stores/);
-  bad({ ...ok, applySettings() {} }, /applySettings/);
-  bad({ ...ok, tagged: 'yes' }, /tagged must be/);
+  bad({ ...ok, applySettings() {} }, /unknown option "applySettings"/);
+  bad({ ...ok, tagged: false }, /unknown option "tagged"/);
+  bad({ ...ok, texts: {} }, /unknown option "texts"/);
   bad({ ...ok, whatever: 1 }, /unknown option "whatever"/);
   assert.equal(M.parse({ id: 'x', map() {}, indexedDB: [{ name: 'a', stores: ['s'] }, { name: 'b', stores: ['s'] }] }).dbs.length, 2);   // the same store name in two databases is fine
 });

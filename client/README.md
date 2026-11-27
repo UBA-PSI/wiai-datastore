@@ -19,7 +19,7 @@ Browser library for the WIAI Datastore, the end-to-end encrypted key-value store
   const store = WDS.connect({ scope: "myapp-k7m2a9" });
   async function start() {
     await store.unlock();                         // dialog: create vault, unlock, redeem invite, key file
-    const settings = (await store.get("settings")) || {};
+    const prefs = (await store.get("prefs")) || {};
     const draft = store.autosave("draft", () => state, { delayMs: 2000 });   // call draft.changed() after every edit
     document.getElementById("share").onclick = () => store.share();
   }
@@ -27,7 +27,7 @@ Browser library for the WIAI Datastore, the end-to-end encrypted key-value store
 ```
 
 API summary: `unlock`, `onUnlock`, `onLock`, `lock`, `status`, `get`, `getMany`, `getRecord`, `getBlob`, `set`, `remove`, `list`, `collection`, `autosave`, `history`, `restore`,
-`showHistory`, `onConflict`, `onStale`, `setLocale`, `share`, `exportAll`, `usage`, `migrateLocal` (and `WDS.fillGaps`). Every async method unlocks first when the store is locked. The full
+`showHistory`, `onConflict`, `onStale`, `setLocale`, `share`, `exportAll`, `usage`, `migrateLocal`. Every async method unlocks first when the store is locked. The full
 description is PLAN.md 8.1.
 
 * Values: JSON values, or `Blob`/`File`/`ArrayBuffer`/`Uint8Array` (stored as bytes). Names: any non-empty string up to 1024 bytes;
@@ -35,14 +35,13 @@ description is PLAN.md 8.1.
 * `set(name, value, {mime?})` resolves with `{name, version, size, resolution, value?, deleted?}`. `resolution`: `saved`, `mine`, `theirs` or `merged`; `value` is
   present for `theirs` (the kept version, unless it was a deletion) and for `merged` (what was stored).
 * `get(name, {fresh?})`, `getRecord(name, {fresh?})`: `fresh: true` reads from the server and ignores the copy that `list()` keeps for a moment.
-  `getMany(names, {concurrency = 6, fresh = false})` resolves with the values in the order of `names` (`undefined` for a missing record; concurrency 1 to 16)
+  `getMany(names, {fresh = false})` resolves with the values in the order of `names` (`undefined` for a missing record; six requests at a time)
   and rejects with the first error that is not "missing", after the requests in flight settled.
 * `remove(name)` resolves with `{name, deleted, resolution, value?}`: `deleted` (removed now), `absent` (did not exist or was gone already), `mine` (conflict, deleted anyway),
   `theirs` (conflict, the other side's newer version was kept: `deleted: false`, `value` is that version).
-* Errors: `WDS.errors.*` (`ConflictError`, `OfflineError`, `QuotaError`, `AuthError`, `IntegrityError`, `VersionError`, `UsageError`).
-  `OfflineError.downloadBackup()` downloads what could not be saved.
-* Options of `WDS.connect`: `scope` (required), `baseUrl` (service URL, default the faculty server), `locale` (default `navigator.language`),
-  `notify: false` (no toasts), `watch: false` (no check for newer versions on window focus; collections are then not refreshed on focus either). `escrowPins` and `retiredEscrow` (IDs of escrow key sets) exist for tests only: a library build that has escrow pins ignores both options, so app code cannot replace the faculty keys. There is deliberately no option to inject `fetch`, storage or an Argon2 function, and the production bundle has no `WDSCore.setRandom`, `setArgon2` or `internals`, so no hook can see the passphrase or weaken the randomness.
+* Errors: `WDS.errors.*` (`ConflictError`, `OfflineError`, `QuotaError`, `AuthError`, `IntegrityError`, `VersionError`, `UsageError`), only there.
+  The notice of a failed save offers a backup download of what could not be saved.
+* Options of `WDS.connect`: `scope` (required), `baseUrl` (service URL, default the faculty server), `locale` (default `navigator.language`), `label` (a function that turns a record name into what a person sees). The library's notices cannot be switched off. `escrowPins` and `retiredEscrow` (IDs of escrow key sets) exist for tests only: a library build that has escrow pins ignores both options, so app code cannot replace the faculty keys. There is deliberately no option to inject `fetch`, storage or an Argon2 function, and the production bundle has no `WDSCore.setRandom`, `setArgon2` or `internals`, so no hook can see the passphrase or weaken the randomness.
 * `status()` has `sandbox: true` when the scope is the public sandbox (see below).
 
 ### Conflicts
@@ -63,13 +62,13 @@ The conflict object `c`: `name`, `op` (`"set"` or `"remove"`), `mine` `{value, k
 
 ### Autosave
 
-`const saver = store.autosave(name, getState, {delayMs, onStatus, onError, onReplaced, mime})`; call `saver.changed()` after every edit. Statuses: `idle`, `dirty`, `saving`, `saved`,
-`error`, `replaced`, `stopped`; `saver.stopReason`: `lock`, `removed`, `superseded`, `stop`. `await saver.flush()` resolves with the final status and never rejects; `saver.error` is the last error.
+`const saver = store.autosave(name, getState, {delayMs, onStatus, onError, onSaved, onResolved, mime})`; call `saver.changed()` after every edit. Statuses: `idle`, `dirty`, `saving`, `saved`,
+`error`, `stopped` (after a lock, a removal, a newer handle or `stop()`). `await saver.flush()` resolves with the final status and never rejects; `saver.error` is the last error.
 
-* One live handle per name: a new handle flushes and stops the old one (`superseded`), so running a start function twice is harmless.
+* One live handle per name: a new handle flushes and stops the old one, so running a start function twice is harmless.
 * `getState` may return `undefined`: nothing is written. `changed()` on a stopped handle writes nothing and calls `onError` every time.
-* `store.remove(name)` pauses the handles of that name during the request; they stop (`removed`) when the record is gone, resume when the request fails, and when the other
-  side's version was kept they resume with status `replaced` and `onReplaced(value)`.
+* `store.remove(name)` pauses the handles of that name during the request; they stop when the record is gone, resume when the request fails, and when the other
+  side's version was kept they resume and `onResolved(res)` gets it (`res.value`, like after a save that ended with the other side's version).
 * On lock (any reason) `getState()` of each unsaved handle is read once, before `onLock` handlers run (they may clear the screen), and saved (up to 8 s). What could not
   be saved is written after the next unlock of the same vault, before `onUnlock` handlers run; after unlocking another vault, or after a revocation, it is dropped
   with a notice.
@@ -93,8 +92,8 @@ One collection object exists per prefix; a later call with the same prefix repla
 |---|---|
 | `await notes.load()` / `await notes.refresh()` | the items (`refresh` re-reads the index and fires `onChange` on a difference) |
 | `notes.items()`, `notes.has(id)` | synchronous; a `UsageError` until `load()` ran (and again after a lock) |
-| `await notes.get(id, {fresh?})`, `await notes.getAll({concurrency, fresh})` | the value(s); records that are gone are skipped; `fresh: true` ignores the copy that `list()` keeps for a moment |
-| `await notes.add(value, {id?, meta?, mime?, created?})` | `{id, name, version, resolution}`; ids are 10 characters `[0-9a-z]`, or yours (1 to 200 characters, no `/`); `created` (ms) only orders the list |
+| `await notes.get(id, {fresh?})`, `await notes.getAll({fresh})` | the value(s); records that are gone are skipped; `fresh: true` ignores the copy that `list()` keeps for a moment |
+| `await notes.add(value, {meta?, mime?, created?})` | `{id, name, version, resolution}` with a new id of 10 characters `[0-9a-z]`; `created` (ms) only orders the list. Your own ids (1 to 200 characters, no `/`): `set(id, value)` |
 | `await notes.set(id, value, {meta?, mime?, created?})`, `await notes.remove(id)` | the `set`/`remove` result. `set` is an upsert: a new id gets its index entry (`created`, or now), an existing entry keeps its date and gets the new meta. Like `store.set` it writes on top of the version this page has read or written: a record that exists but that this page has not read (listed in the index only) is a conflict, decided by `onConflict` or the dialog, never overwritten silently |
 | `notes.autosave(id, getState, opts)` | an autosave handle that also keeps the index meta current (index writes at most every 10 s) |
 | `await notes.flush()` | resolves when every queued list change is on the server, rejects while it cannot be written |
@@ -108,14 +107,11 @@ device is back online, on focus, and on lock. Records under the prefix that the 
 
 ### Stable attributes (for tests and wds-verify)
 
-Every button, input, select, textarea and summary inside the library's dialogs carries `data-wds="<name>"`, and every dialog carries `data-wds-view="<view>"`
-(`loading`, `error`, `unlock`, `create`, `redeem`, `sheet`, `conflict`, `history`, `share`, `revoke`, `progress`, `notice`, `migrate`, `migrate-discard`, `migrate-differs`, `migrate-large`), set when the view is rendered.
+Every button, input, select, textarea and summary inside the library's dialogs carries `data-wds="<name>"`, and every dialog carries `data-wds-view="<view>"`, set when the view is rendered.
+The views and their controls are listed in [docs/site/integration.md](../docs/site/integration.md), section 12 (views and controls), and covered by `test/ui-attrs.spec.mjs`; the names do not change with the language.
 A dialog is never without a view: it opens as `loading` (busy) and gets its real view when the controls are in place. A request that does not answer within 30 s fails like a lost
 connection (`OfflineError`, code `timeout`), and a dialog that cannot go on (a failed request, a view that cannot be built) shows the view `error` with a `retry` button, so a dialog never waits for ever
-(`test/dialog-stress.spec.mjs` reloads and unlocks with slow, failing and stalled requests). A dialog that waits (view `loading` or `progress`, or a submit in flight such as Argon2id and the request) carries `aria-busy="true"`: view present and no `aria-busy` means ready for input. Examples:
-`unlock-submit`, `to-create`, `passphrase`, `passphrase-repeat`, `create-submit`, `sheet-confirm`, `sheet-continue`, `conflict-mine`, `conflict-theirs`, `invite-create`,
-`revoke-confirm`, `migrate-yes`, `migrate-backup`, `migrate-no`, `migrate-skip-ack` (only when rows are left out with `h.skip`), `migrate-discard`, `migrate-discard-confirm`, `migrate-discard-back`, `migrate-differs-keep-vault`, `migrate-differs-keep-both`, `migrate-differs-later`, `migrate-large-download` (with `data-wds-index`), `migrate-large-ack`, `migrate-delete`, `migrate-keep`. Toasts have `data-wds-toast="<key>"` (the migration uses `migration`) and the buttons `toast-action` and `toast-dismiss`. The names do not change with the language; they are listed in the
-header comment of `src/wds-ui.js` and covered by `test/ui-attrs.spec.mjs`.
+(`test/dialog-stress.spec.mjs` reloads and unlocks with slow, failing and stalled requests). A dialog that waits (view `loading` or `progress`, the share dialog until its roster is refreshed, or a submit in flight such as Argon2id and the request) carries `aria-busy="true"`: view present and no `aria-busy` means ready for input. Toasts have `data-wds-toast="<key>"` (the migration uses `migration`) and the buttons `toast-action` and `toast-dismiss`.
 
 ### Dialogs, toasts and your own modal dialogs
 
@@ -145,12 +141,9 @@ const recipeCol = store.collection("recipes/", { meta: (r) => ({ title: String(r
 const result = await store.migrateLocal({
   id: "cookbook",                                            // names this migration (lock, tag, marker): 1-40 characters [a-z0-9-]
   indexedDB: { name: "cookbook", stores: ["recipes"] },      // one object or an array; only these stores are read and emptied
-  localStorage: { keys: ["cookbook.prefs"], prefixes: [] },
+  localStorage: { keys: [], prefixes: [] },                  // keys of old DATA only; a personal preference (theme, language) stays in localStorage and is not named
   map(old, h) {
-    const items = old.rows("recipes").map((row) => ({ col: recipeCol, id: h.id(row.key), value: row.value, from: row }));
-    const prefs = old.json("cookbook.prefs") || {};
-    // only what is a setting of the person; the last search or filter stays behind
-    return { items, settings: { record: "settings", value: { units: prefs.units, view: prefs.view }, from: "cookbook.prefs" } };
+    return { items: old.rows("recipes").map((row) => ({ col: recipeCol, id: h.id(row.key), value: row.value, from: row })) };
   },
 });
 ```
@@ -165,34 +158,29 @@ what `map` made of it (name, value, meta, date, type; files by size, type, name 
 person edited or deleted since; only an entry that `map` now makes differently (a new or changed old row, or a corrected `map`) is new. Rows and files are compared by a cheap fingerprint at every start (no file is
 read); every copy is checked byte for byte, and the bytes of every file are compared once more right before the delete.
 
-* **Statuses** (`result.status`): `nothing` (no old data: no dialog, no request), `busy` (another tab runs it; load normally), `skipped` (`why: "not-owner"`; a member's vault is not
-  a place for private old data; a notice with a backup button is shown once per page, and not again after the person dismissed it), `declined` (Not now / Escape / close; nothing written, asked again next start), `discarded` (the person chose
-  "Do not take over; delete the old data" and confirmed: nothing was written, the old data is deleted, `deleted: "kept"` in a sandbox), `failed`
-  (`why` for developers; nothing deleted; also offline, quota, locked, and every mistake in `map` or in one user's data: the message is in the console, the person gets a notice with a backup button), `partial` (`tooLarge` entries that were left out and kept, or `why: "differs"` with `differs` names that are not decided),
-  `migrated` (`deleted`: `"deleted"`, `"kept"` in a sandbox, `"changed"` when the old data changed meanwhile and stays; `copied`, `total`, `tooLarge` if the person deleted the rest, `again: true`
-  when only the delete was repeated). `result.sandbox` says whether the scope is a sandbox; `result.downloadBackup()` (not enumerable) saves the backup of what is still in the old storage, for an app with `notify: false`. It rejects only with `UsageError` for wrong
+* **Result** `{ status, deleted?, copies?, why? }`. `status`: `nothing` (no old data: no dialog, no request), `busy` (another tab runs it; load normally), `skipped` (`why: "not-owner"`; a member's vault is not
+  a place for private old data; a notice with a backup button is shown once per page), `declined` (Not now / Escape / close; nothing written, asked again next start), `failed`
+  (`why` for developers; nothing deleted; also offline, quota, locked, and every mistake in `map` or in one user's data: the message is in the console, the person gets a notice with a backup button), `partial` (`why: "too-large"`: entries were left out and the old data was kept), `migrated` (`deleted`: `"deleted"`, `"kept"` in a sandbox, `"changed"` when the old data changed meanwhile and stays). It rejects only with `UsageError` for wrong
   options (before anything is read) and with a cancelled unlock; a mistake that map or one user's data causes (a missing `from`, a bad id) is a `failed` result, so the page still starts for that user.
 * **Old data** `old`: `rows(name)` (`[{key, value}]`; the store name, or `"db/store"` when two databases have the same store name; `[]` for a missing database), `local` (`{key: text}` of every
-  configured key and prefix match), `keys(prefix?)`, `json(key)`. `map` gets copies of the rows: it may change them (also in a classic script) without touching the old rows; Blob/File and binary buffers are shared, do not change their bytes. `old.rows(name)` is `[]` for every configured store that does not exist in this browser.
-* **Helpers** `h`: `id(oldKey, ending?)` (the id of an entry: `<tag>-<token>` for a browser's tag, or just `j12` for the number 12 with `tagged: false`; the token is `s…` for a string key,
+  configured key and prefix match), `json(key)`. `map` gets copies of the rows: it may change them (also in a classic script) without touching the old rows; Blob/File and binary buffers are shared, do not change their bytes. `old.rows(name)` is `[]` for every configured store that does not exist in this browser.
+* **Helpers** `h`: `id(oldKey, ending?)` (the id of an entry: `<tag>-<token>` with the random 8-character tag of this browser, `localStorage["wds:migrate:<id>:tag"]`, kept after the delete, so two browsers with the same old numeric ids do not overwrite each other; the token is `s…` for a string key,
   `j…` for anything else, `b…` for binary keys; different keys never give the same id; at most 200 characters; `ending` like `".pdf"`; a reference computes the id of its target with the
   same call), `ref(storeName, oldKey, ending?)` (the target's id, or `null` when the row is gone), `blob(value, field?)` (a `Blob` from a Blob/File, `value[field]`, `value.blob`, `value.data` or a
-  `data:` URL), `created(x)` (ms from a Date, number or date string), `skip(row, why)`, `fail(row, why)` (stops the run; nothing is written).
-* **map returns** `{ items, records, settings }`: `items: [{ col, id, value, meta?, created?, mime?, from }]` (written like `col.set`), `records: [{ name, value, mime?, from }]` (like `store.set`;
-  not inside a collection's prefix, not `.wds/`), `settings: { record, value, from }` (a JSON object: the keys that the vault's record lacks are filled in, nothing is overwritten, also
-  not `null`; `WDS.fillGaps(current, old)` is the same rule). A JSON value must not hold a Blob, buffer, Map or Set (JSON would write `{}`), Dates become ISO strings. Every `h.ref` result must
+  `data:` URL), `created(x)` (ms from a Date, number or date string), `skip(row, why)`.
+* **map returns** `{ items, records }`: `items: [{ col, id, value, meta?, created?, mime?, from }]` (written like `col.set`), `records: [{ name, value, mime?, from }]` (like `store.set`;
+  not inside a collection's prefix, not `.wds/`; for a value that is meant for everyone who shares the vault, such as the units of a shared collection). `settings` is a `UsageError`: personal preferences stay in localStorage and are not named in `migrateLocal`, shared values are a record.
+  A JSON value must not hold a Blob, buffer, Map or Set (JSON would write `{}`), Dates become ISO strings. Every `h.ref` result must
   be the id of an item of this run. A reference to an entry that was left out (too large, no room) becomes `null`.
-* **tagged** (default true): every browser gets a random 8-character tag (`localStorage["wds:migrate:<id>:tag"]`, kept after the delete), so two browsers with the same old numeric ids do
-  not overwrite each other. `tagged: false` gives natural ids (`j12`): identical data written by a second browser is recognised as already there; different data is offered as "keep the
-  version in the vault / keep both (old copy as `<id>~<tag>`) / decide later" (view `migrate-differs`). Never a conflict dialog or an `onConflict` handler.
-* **Size**: entries over `max_value_bytes` and, when the vault is too full, the largest entries are left out, listed in view `migrate-large` with one download each; the old data is deleted
-  only after every file was downloaded (or the checkbox "I have saved the files or do not need them" was ticked) and the person chose Delete; Keep (or Escape) gives `status: "partial"`.
-* **Backup**: view `migrate` offers a ZIP file (`data.json` and every Blob under `files/`, not encrypted) that works without the vault. When the files do not fit into one ZIP file the data file and every file are saved as separate downloads and the dialog says so.
+* **Names that exist already**: an entry whose id (or record name) is in the vault with other content is written next to it as `<id>~<tag>-<hash>` (`<name>~<tag>-<hash>` for a record; the hash is the start of the entry's own hash), create-only and read back like every copy; it counts as copied, `copies` lists the names and the toast says how many there were. A copy of a record is invisible to the app unless it reads `copies`. Equal content counts as copied without a write.
+  Nothing is overwritten, never a conflict dialog or an `onConflict` handler.
+* **Size**: entries over `max_value_bytes` and, when the vault is too full, the largest entries are left out and listed in view `migrate-large` with one button, `migrate-large-download`, that saves them in one ZIP file; the old data is deleted
+  only after that ZIP was built and saved and the person chose Delete; Keep (or Escape) gives `status: "partial"`.
+* **Backup**: view `migrate` offers a ZIP file (`data.json` and every Blob under `files/`, not encrypted) that works without the vault.
 * **Safety**: tab locks (`navigator.locks`, `ifAvailable`: a second tab gets `busy` at once), the old database is opened without creating it (a blocked one fails after 5 s), `wds:` keys are never
   read or removed, nothing but the configured stores and keys is deleted (never `localStorage.clear()`, never `deleteDatabase`), and the delete re-reads everything: one changed row (also a file of
   the same size with other bytes) and nothing is deleted (`"changed"`). The test global `window.__WDS_MIGRATION_TEST__ = true` makes a sandbox delete too, but only in an automated browser
-  (`navigator.webdriver === true`); set it only in your own test setup (`context.addInitScript`), never in the app.
-* **Texts**: `texts: { de: { "migrate.question": "…" }, en: {…} }` (or flat keys) overrides single `migrate.*` texts. A toast with key `migration` reports the outcome.
+  (`navigator.webdriver === true`); set it only in your own test setup (`context.addInitScript`), never in the app. A toast with key `migration` reports the outcome; the library's wording (German and English) is not configurable.
 
 ### Sandbox
 

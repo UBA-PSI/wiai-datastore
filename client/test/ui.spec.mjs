@@ -105,7 +105,7 @@ test('create vault: passphrase rules, breach check, access sheet, then set/get a
 
 const idOf = (v) => v.accessId.replace(/-/g, '');
 
-test('new device: key file by choosing or dropping, key file of another app is refused, new-device notice', async ({ browser }) => {
+test('new device: key file by choosing, key file of another app is refused, new-device notice', async ({ browser }) => {
   const ctx1 = await browser.newContext();
   const page = await openApp(ctx1, w);
   const vault = await createVaultViaUi(page);
@@ -120,10 +120,8 @@ test('new device: key file by choosing or dropping, key file of another app is r
   writeFileSync(foreign, JSON.stringify(Object.assign(JSON.parse(readFileSync(vault.keyFile.path, 'utf8')), { scope: 'other-k7m2a9' })));
   await d.locator('[data-wds=keyfile]').setInputFiles(foreign);
   await expect(d.getByRole('alert').filter({ hasText: 'different app or service' })).toBeVisible();
-  // drop the right key file onto the dialog
-  const text = readFileSync(vault.keyFile.path, 'utf8');
-  const dt = await p2.evaluateHandle((t) => { const x = new DataTransfer(); x.items.add(new File([t], 'k.wds.json', { type: 'application/json' })); return x; }, text);
-  await p2.locator('dialog.wds-dialog').dispatchEvent('drop', { dataTransfer: dt });
+  // the right key file
+  await d.locator('[data-wds=keyfile]').setInputFiles(vault.keyFile.path);
   await expect(d.getByText('Key file loaded.')).toBeVisible();
   await expect(d.getByLabel('Access ID')).toHaveValue(vault.accessId);
   await d.getByLabel('Passphrase', { exact: true }).fill(vault.passphrase);
@@ -362,7 +360,6 @@ test('share: invite, redeem on another browser, redemption notice, revoke with r
   const sd2 = dialog(owner);
   await expect(sd2.getByText('Anna')).toBeVisible();
   await expect(sd2.getByText(/Joined /)).toBeVisible();
-  await expect(sd2.getByText('New: invite redeemed')).toBeVisible();
   await shot(owner, 'en-share-members');
   await sd2.getByRole('button', { name: 'Revoke', exact: true }).click();
   await expect(sd2.getByRole('heading', { name: 'Revoke access?' })).toBeVisible();
@@ -409,13 +406,13 @@ test('exportAll downloads a valid ZIP with a manifest', async ({ context }) => {
   expect(manifest.records.some((x) => /^\.wds/.test(x.name))).toBe(false);
 });
 
-test('offline: OfflineError with downloadBackup, and the notice offers the same backup', async ({ context }) => {
+test('offline: OfflineError, and the notice offers the backup', async ({ context }) => {
   const page = await openApp(context, w);
   await createVaultViaUi(page);
   await page.evaluate(() => store.set('draft', { text: 'first' }));
   await page.route('**/datastore/api/**', (route) => route.abort('internetdisconnected'));
-  const r = await page.evaluate(() => store.set('draft', { text: 'precious' }).then(() => 'saved', (e) => ({ name: e.name, backup: typeof e.downloadBackup })));
-  expect(r).toEqual({ name: 'OfflineError', backup: 'function' });
+  const r = await page.evaluate(() => store.set('draft', { text: 'precious' }).then(() => 'saved', (e) => e.name));
+  expect(r).toBe('OfflineError');
   const notice = page.getByRole('alert').filter({ hasText: 'Saving failed' });
   await expect(notice).toBeVisible();
   await shot(page, 'en-offline');

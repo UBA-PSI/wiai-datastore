@@ -18,13 +18,13 @@ before it is sent**. This page explains what you need, what to keep safe and who
 | What | What it is for | Secret? |
 |---|---|---|
 | Access ID | Names your vault. You enter it together with your passphrase on a new device. | No, but keep it with your sheet. |
-| Key file | A small file with the app and your access ID. Drag it into the app on a new device instead of typing the ID. | No. It holds no passphrase. |
+| Key file | A small file with the app and your access ID. Choose it in the app on a new device instead of typing the ID. | No. It holds no passphrase. |
 | Passphrase | Opens your data. Only in your head or your password manager. | Yes |
 | Recovery code | Lets the faculty restore access if you lose your passphrase. | Yes. Keep it apart from your computer. |
 
 ## On a new device or after clearing the browser
 
-Open the app, enter your access ID (or drop the key file) and your passphrase. The app says
+Open the app, enter your access ID (or choose the key file) and your passphrase. The app says
 "This device is new to your vault." That is normal.
 
 ## Sharing
@@ -32,7 +32,7 @@ Open the app, enter your access ID (or drop the key file) and your passphrase. T
 Owners share their whole vault: in the app choose **Share**, pick a role and create an invite code.
 
 - **Can edit**: can read and change. **Read only**: can only read.
-- Send the code over another channel than the app itself (in person, a chat). It expires after the time you chose.
+- Send the code over another channel than the app itself (in person, a chat). It expires after 2 days.
 - The other person enters the code in the app and chooses a **passphrase of their own**. You see "An invitation was redeemed."
 - **Revoke** ends someone's access at once. The app then re-encrypts all data under new keys; this takes a while for large
   vaults and continues by itself if you close the page.
@@ -79,7 +79,7 @@ If the app existed before as a version that kept its data only in your browser, 
 - The app copies the entries into your vault, reads them back from the server and compares them, and only then deletes the old copy in the browser. Nothing is overwritten in your vault, and a copy that did not work leaves the old data where it is.
 - **Download a backup first** if you want one: it is a ZIP file with all old entries and their files. It is **not encrypted**, so keep it safe or delete it after you have looked at it.
 - "Not now" changes nothing; the old data stays unencrypted in this browser and the app asks again next time.
-- If something is too large for your vault, the app lists it and lets you download each file before it deletes anything.
+- If something is too large for your vault, the app lists it and lets you download those files before it deletes anything.
 - Only the owner of a vault can do this. If you were invited into someone else's vault, the app shows a notice and leaves the old data alone; take it over in a vault of your own.
 - Open the new version the way you opened the old one (the same file in the same place, or the same web address): a browser keeps the data of every address separately.
 
