@@ -43,7 +43,6 @@ PLACEHOLDER_RE = re.compile(r"\{\{([a-z_]+)\}\}")
 
 REPO_URL = "https://github.com/UBA-PSI/wiai-datastore"
 ONERROR = "document.body.textContent='Storage service unreachable. Check your connection and reload this page.'"
-HIBP_ORIGIN = "https://api.pwnedpasswords.com"
 
 TEXT_HEADERS = {"Cache-Control": "no-cache"}
 # Documentation pages load nothing and run nothing.
@@ -59,7 +58,7 @@ def csp_policy(base: str) -> str:
     'self' is left out because its meaning on file:// differs between browsers."""
     base = base.rstrip("/")
     return ("default-src 'none'; script-src 'unsafe-inline' 'wasm-unsafe-eval' " + base + "/client/; "
-            "style-src 'unsafe-inline'; img-src data: blob:; connect-src " + base + "/api/ " + HIBP_ORIGIN + "; "
+            "style-src 'unsafe-inline'; img-src data: blob:; connect-src " + base + "/api/; "
             "base-uri 'none'; form-action 'none'")
 
 

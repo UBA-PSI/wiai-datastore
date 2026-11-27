@@ -62,10 +62,10 @@ class OperatorLock(DashCase):
     def test_admins_cannot_change_a_scope_the_operator_suspended(self):
         self.assertEqual(self.op.post(f"/scopes/{self.scope}/suspend", {}).status, 303)
         s = self.scope
-        attempts = [(f"/scopes/{s}/limits", {"max_vaults": "500"}), (f"/scopes/{s}/admins", {"admin": "mallory"}),
+        attempts = [(f"/scopes/{s}/admins", {"admin": "mallory"}),
                     (f"/scopes/{s}/settings", {"name": "Mine", "contact_email": "me@example.org"}),
-                    (f"/scopes/{s}/enrollment", {"enrollment": "open"}), (f"/scopes/{s}/join-code", {}),
-                    (f"/scopes/{s}/delete", {"confirm": s})]
+                    (f"/scopes/{s}/join-code", {}), (f"/scopes/{s}/delete", {"confirm": s}),
+                    (f"/scopes/{s}/resume", {}), (f"/scopes/{s}/suspend", {})]
         for who in (self.a, self.carol):
             for path, form in attempts:
                 self.assertEqual(who.post(path, form).status, 403, path)
@@ -84,30 +84,26 @@ class OperatorLock(DashCase):
         self.assertEqual(self.a.post(f"/scopes/{self.scope}/settings", {"name": "Renamed", "contact_email": "me@uni-bamberg.de"}).status, 303)
         self.assertEqual(self.row(self.scope)["name"], "Renamed")
 
-    def test_admin_suspension_leaves_admins_in_charge(self):
-        self.a.post(f"/scopes/{self.scope}/suspend", {})
-        self.assertEqual(self.a.post(f"/scopes/{self.scope}/settings", {"name": "Renamed", "contact_email": "me@uni-bamberg.de"}).status, 303)
-
-    def test_operator_can_take_over_an_admin_suspension(self):
-        self.a.post(f"/scopes/{self.scope}/suspend", {})
-        self.assertEqual(self.row(self.scope)["suspended_by"], "admin")
-        html = self.op.get(f"/scopes/{self.scope}").text
-        self.assertIn(f'action="/datastore/scopes/{self.scope}/suspend"', html)  # the lock control
-        r = self.op.post(f"/scopes/{self.scope}/suspend", {})
-        self.assertEqual(r.status, 303)
-        self.assertIn("notice=locked", r.headers["location"])
-        self.assertEqual(self.row(self.scope)["suspended_by"], "operator")
-        self.assertEqual(self.a.post(f"/scopes/{self.scope}/resume", {}).status, 403)
-        self.assertEqual(self.a.post(f"/scopes/{self.scope}/limits", {"max_vaults": "5"}).status, 403)
-        self.assertIn("scope_locked", [x[0] for x in self.env.sql("SELECT action FROM audit WHERE scope_id=?", (self.scope,))])
-        # an admin cannot take over anything; the lock control is not shown for an active or operator-suspended scope
+    def test_an_admin_cannot_pause_and_there_is_no_lock_to_take_over(self):
+        for who in (self.a, self.carol):
+            self.assertEqual(who.post(f"/scopes/{self.scope}/suspend", {}).status, 403)
+        self.assertEqual(self.row(self.scope)["status"], "active")
+        self.assertNotIn("suspended_by", self.row(self.scope).keys())
+        html = self.a.get(f"/scopes/{self.scope}?lang=en").text
+        self.assertNotIn(f'/scopes/{self.scope}/suspend', html)
+        self.assertNotIn("Take over", html)
+        # the operator pauses and resumes; both are audited as the operator's actions, and a second pause is not a "lock"
+        self.assertIn(f'action="/datastore/scopes/{self.scope}/suspend"', self.op.get(f"/scopes/{self.scope}").text)
+        self.assertEqual(self.op.post(f"/scopes/{self.scope}/suspend", {}).status, 303)
+        self.assertEqual(self.op.post(f"/scopes/{self.scope}/suspend", {}).status, 303)
+        self.assertEqual(self.row(self.scope)["status"], "suspended")
         self.assertNotIn(f'action="/datastore/scopes/{self.scope}/suspend"', self.op.get(f"/scopes/{self.scope}").text)
+        self.assertEqual(self.a.post(f"/scopes/{self.scope}/resume", {}).status, 403)
         self.assertEqual(self.op.post(f"/scopes/{self.scope}/resume", {}).status, 303)
         self.assertEqual(self.row(self.scope)["status"], "active")
-
-    def test_admins_do_not_see_a_lock_control(self):
-        self.a.post(f"/scopes/{self.scope}/suspend", {})
-        self.assertNotIn("Take over", self.a.get(f"/scopes/{self.scope}?lang=en").text)
+        self.assertEqual([x[0] for x in self.env.sql("SELECT action FROM audit WHERE scope_id=? AND action LIKE 'scope_%' ORDER BY id", (self.scope,))],
+                         ["scope_created", "scope_suspended", "scope_resumed"])
+        self.assertEqual(self.env.sql("SELECT actor FROM audit WHERE action='scope_suspended'")[0][0], "operator:boss")
 
     def test_operator_can_delete_a_scope(self):
         s = self.scope
@@ -118,7 +114,7 @@ class OperatorLock(DashCase):
         self.assertEqual(self.env.sql("SELECT actor FROM audit WHERE action='scope_deleted'")[0][0], "operator:boss")
         # an operator is still not a general editor
         s2 = self.make_scope(self.a, name="Second")
-        self.assertEqual(self.op.post(f"/scopes/{s2}/limits", {"max_vaults": "5"}).status, 403)
+        self.assertEqual(self.op.post(f"/scopes/{s2}/settings", {"name": "X", "contact_email": "x@uni-bamberg.de"}).status, 403)
 
 
 class AuditDetail(DashCase):
@@ -128,12 +124,12 @@ class AuditDetail(DashCase):
     def test_scope_updated_names_only_what_changed(self):
         a = self.staff()
         s = self.make_scope(a)
-        a.post(f"/scopes/{s}/settings", {"name": "My App", "description": "A test app", "contact_email": "dev@uni-bamberg.de", "hibp": "1"})
+        a.post(f"/scopes/{s}/settings", {"name": "My App", "description": "A test app", "contact_email": "dev@uni-bamberg.de"})
         self.assertEqual(self.audit(s, "scope_updated"), [])  # nothing changed, nothing logged
-        a.post(f"/scopes/{s}/settings", {"name": "Renamed", "description": "A test app", "contact_email": "new@uni-bamberg.de", "hibp": "1"})
+        a.post(f"/scopes/{s}/settings", {"name": "Renamed", "description": "A test app", "contact_email": "new@uni-bamberg.de"})
         self.assertEqual(self.audit(s, "scope_updated"), ["name, contact_email dev@uni-bamberg.de -> new@uni-bamberg.de"])
         a.post(f"/scopes/{s}/settings", {"name": "Renamed", "description": "Other", "contact_email": "new@uni-bamberg.de"})
-        self.assertEqual(self.audit(s, "scope_updated")[1], "description, hibp")
+        self.assertEqual(self.audit(s, "scope_updated")[1], "description")
 
     def test_logins_and_refused_logins_are_logged_without_ip(self):
         a = self.staff("alice")

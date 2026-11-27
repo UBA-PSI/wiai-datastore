@@ -16,7 +16,7 @@ from .scopes import soft_delete_vault
 from .service import DELETED_VAULT_TTL
 from .util import b64u_decode
 from .validate import (TYPE_SLOT, decode_envelope, normalise_join_code, valid_access_id, valid_b64u, valid_scope_id,
-                       valid_vault_id, validate_kdf, validate_recovery_contact)
+                       valid_vault_id, validate_kdf)
 from .web import client_ip, expect_keys, json_response, query_int, read_json
 
 PREFIX = "/datastore/api/v1"
@@ -36,12 +36,10 @@ def _scope_for_create(svc, scope_id):
         raise ApiError(403, "scope_suspended", "This scope is suspended.")
     if svc.read_only():
         raise read_only()
-    if row["enrollment"] == "closed":
-        raise ApiError(403, "enrollment_closed", "This scope does not accept new vaults.")
 
 
 def _create_vault(svc, ip, scope_id, body):
-    expect_keys(body, {"vault", "roster", "slots", "keyring", "recovery_hash"}, {"recovery_contact", "join_code"})
+    expect_keys(body, {"vault", "roster", "slots", "keyring", "recovery_hash"}, {"join_code"})
     vault = body["vault"]
     if not valid_vault_id(vault):
         raise bad_request("Malformed vault ID.")
@@ -65,10 +63,7 @@ def _create_vault(svc, ip, scope_id, body):
     keyring = parse_keyring(body["keyring"], roster)
     if not valid_b64u(body["recovery_hash"], 32):
         raise bad_request("recovery_hash must be 32 bytes in base64url.")
-    contact = validate_recovery_contact(body.get("recovery_contact"))
     sandbox = svc.is_sandbox(scope_id)
-    if sandbox:
-        contact = None  # accepted and discarded: the sandbox has no recovery
     join_code = body.get("join_code")
     if join_code is not None and not isinstance(join_code, str):
         raise bad_request("join_code must be a string or null.")
@@ -83,9 +78,7 @@ def _create_vault(svc, ip, scope_id, body):
                 raise sandbox_disabled()
             if scope["status"] != "active":
                 raise ApiError(403, "scope_suspended", "This scope is suspended.")
-            if scope["enrollment"] == "closed":
-                raise ApiError(403, "enrollment_closed", "This scope does not accept new vaults.")
-            if scope["enrollment"] == "join_code":
+            if not sandbox:  # only the sandbox is open; every other scope enrols with its join code
                 retry = svc.limiter.blocked(ip, None, now)
                 if retry:
                     raise rate_limited(retry)
@@ -119,8 +112,8 @@ def _create_vault(svc, ip, scope_id, body):
             escrow_slot = roster.escrow_slot
             conn.execute(
                 "INSERT INTO vaults (vault_id, scope_id, created, epoch, roster_version, head_hash, escrow_slot, recovery_hash,"
-                " recovery_contact, roster_bytes) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (vault, scope_id, now, 1, 1, roster.hash, escrow_slot, body["recovery_hash"], contact, roster_size))
+                " roster_bytes) VALUES (?,?,?,?,?,?,?,?,?)",
+                (vault, scope_id, now, 1, 1, roster.hash, escrow_slot, body["recovery_hash"], roster_size))
             conn.execute("INSERT INTO access_ids (access_id) VALUES (?)", (s["access_id"],))
             conn.execute("INSERT INTO rosters (vault_id, version, body, sig, hash, created) VALUES (?,?,?,?,?,?)",
                          (vault, 1, roster.canonical.decode("ascii"), roster.sig, roster.hash, now))

@@ -8,25 +8,24 @@ müssen und wer was sehen kann. [English version]({{base}}/docs/users.en)
 
 1. **Einen Beitrittscode** von der Person, die die App betreibt. Sie brauchen ihn einmal, um Ihren Tresor anzulegen.
 2. **Eine eigene Passphrase** mit mindestens 12 Zeichen. Vier oder mehr unzusammenhängende Wörter eignen sich gut
-   („lila Elefant marschiert langsam“). Die App weist sehr verbreitete Passphrasen (auch deutsche wie „ichliebedich123“) und solche aus bekannten Datenlecks zurück. Ist die Prüfung auf Datenlecks nicht erreichbar oder für die App abgeschaltet, verlangt sie eine stärkere Passphrase. Wenn Sie eine Passphrase wählen, prüft Ihr Browser sie beim Dienst Pwned Passwords (USA) auf bekannte Datenlecks; der Dienst erhält Ihre IP-Adresse und die ersten fünf Zeichen einer Prüfsumme der Passphrase, nie die Passphrase selbst.
+   („lila Elefant marschiert langsam“). Die App weist sehr verbreitete Passphrasen (auch deutsche wie „ichliebedich123“) und solche aus bekannten Datenlecks zurück. Ist die Prüfung auf Datenlecks nicht erreichbar, verlangt sie eine stärkere Passphrase. Wenn Sie eine Passphrase wählen, sendet Ihr Browser die ersten fünf Zeichen einer Prüfsumme der Passphrase an den Server der Fakultät, der in Ihrem Auftrag den Dienst Pwned Passwords (USA) fragt; der Dienst sieht weder die Passphrase noch Ihre IP-Adresse.
 3. **Ihr Zugangsblatt.** Nach dem Anlegen des Tresors zeigt die App es an: Ihre **Zugangskennung** (fünf Gruppen zu vier Zeichen) und
-   Ihren **Wiederherstellungscode**. Drucken oder speichern Sie das Blatt und bewahren Sie es getrennt von Ihrem Rechner auf.
+   Ihren **Notfallcode**. Drucken oder speichern Sie das Blatt und bewahren Sie es getrennt von Ihrem Rechner auf.
 
 **Niemand kann Ihre Passphrase zurücksetzen.** Der Server kennt sie nicht. Wenn Sie sie verlieren, hilft nur das
 Wiederherstellungsverfahren weiter unten.
 
-## Zugangskennung, Schlüsseldatei, Wiederherstellungscode
+## Zugangskennung, Passphrase, Notfallcode
 
 | Was | Wofür | Geheim? |
 |---|---|---|
 | Zugangskennung | Benennt Ihren Tresor. Sie geben sie auf einem neuen Gerät zusammen mit der Passphrase ein. | Nein, bewahren Sie sie beim Zugangsblatt auf. |
-| Schlüsseldatei | Kleine Datei mit der App und Ihrer Zugangskennung. Wählen Sie sie auf einem neuen Gerät in der App aus, statt die Kennung abzutippen. | Nein. Sie enthält keine Passphrase. |
 | Passphrase | Öffnet Ihre Daten. Nur im Kopf oder in Ihrem Passwortmanager. | Ja |
-| Wiederherstellungscode | Erlaubt der Fakultät, Ihren Zugang wiederherzustellen, wenn Sie die Passphrase verlieren. | Ja. Getrennt vom Rechner aufbewahren. |
+| Notfallcode | Erlaubt der Fakultät, Ihren Zugang wiederherzustellen, wenn Sie die Passphrase verlieren. | Ja. Getrennt vom Rechner aufbewahren. |
 
 ## Auf einem neuen Gerät oder nach dem Löschen des Browserspeichers
 
-Öffnen Sie die App, geben Sie Ihre Zugangskennung ein (oder wählen Sie die Schlüsseldatei aus) und Ihre Passphrase. Die App meldet:
+Öffnen Sie die App, geben Sie Ihre Zugangskennung und Ihre Passphrase ein. Die App meldet:
 „Dieses Gerät ist neu für Ihren Tresor.“ Das ist normal.
 
 ## Teilen
@@ -43,9 +42,7 @@ Eigentümerinnen und Eigentümer teilen ihren ganzen Tresor: Wählen Sie in der 
 ## Wenn zwei Personen dasselbe ändern
 
 Die App fragt nach, bevor sie etwas überschreibt. Der Standarddialog meldet „Ein anderes Gerät oder eine andere Person hat eine neuere Version
-gespeichert“ und bietet **Andere behalten**, **Meine behalten** und **Beide herunterladen** an. Apps dürfen einen eigenen Dialog zeigen, der
-dieselbe Wahl anders beschriftet (zum Beispiel **Neuere Fassung behalten** und **Meine Fassung behalten**). Wenn Sie Ihre Version behalten, bleibt die
-andere im Verlauf und lässt sich wiederherstellen. Viele Apps zeigen einen Verlauf früherer Versionen.
+gespeichert“ und bietet **Andere behalten** und **Meine behalten** an. Die Version, die Sie nicht behalten, bleibt im Verlauf und lässt sich wiederherstellen. Apps können einen Verlauf früherer Versionen zeigen.
 
 ## Was die Fakultät sehen kann
 
@@ -64,16 +61,15 @@ Kurz gesagt: **Die Daten sind Ende-zu-Ende-verschlüsselt; die Fakultät verwahr
 ## Wiederherstellung bei vergessener Passphrase
 
 1. Wenden Sie sich an die Person, die die App betreibt. Sie gibt Ihre Anfrage an den Betreiber des Dienstes weiter. Halten Sie Ihre
-   **Zugangskennung** und den **Wiederherstellungscode** bereit.
-2. Der Betreiber startet die Wiederherstellung. Mit dem Wiederherstellungscode beginnt eine **Wartezeit von 72 Stunden**. In dieser Zeit
+   **Zugangskennung** und den **Notfallcode** bereit.
+2. Der Betreiber startet die Wiederherstellung. Mit dem Notfallcode beginnt eine **Wartezeit von 72 Stunden**. In dieser Zeit
    zeigt jedes Entsperren Ihres Tresors „Für diesen Tresor wurde eine Wiederherstellung beantragt“ mit der Schaltfläche **Antrag abbrechen**. Wenn Sie sie
    nicht beantragt haben, brechen Sie ab und informieren Sie den Betreiber.
 3. Nach der Wartezeit fügt der Betreiber Ihrem Tresor einen neuen Zugang als Eigentümerin oder Eigentümer hinzu und gibt Ihnen einen Einladungscode. Sie lösen ihn
    ein und wählen eine neue Passphrase. Die App meldet „Die Fakultät hat einen Eigentümer-Zugang hinzugefügt“ und bittet um Bestätigung.
 4. Der alte Zugang wird nicht automatisch entfernt. Öffnen Sie **Tresor** und entziehen Sie ihn.
 
-Ohne Wiederherstellungscode geht es nur, wenn Sie beim Anlegen eine E-Mail-Adresse als Wiederherstellungskontakt hinterlegt haben. Die Wartezeit
-beträgt dann 7 Tage. Fehlt beides, lassen sich Ihre Daten nicht wiederherstellen.
+Ohne den Notfallcode lassen sich Ihre Daten nicht wiederherstellen.
 
 ## Daten aus einer früheren Version der App
 
@@ -87,8 +83,8 @@ Gab es die App vorher als Version, die ihre Daten nur in Ihrem Browser gespeiche
 
 ## Ihre Daten, Ihr Export
 
-Wählen Sie in der App **Tresor** und dann **Alles exportieren** oder öffnen Sie [{{base}}/export/]({{base}}/export/) in einem beliebigen Browser, geben Sie App-ID und
-Zugangskennung (oder Schlüsseldatei) sowie Ihre Passphrase ein und laden Sie alles entschlüsselt als ZIP-Datei herunter. Die Dateien sind nicht
+Wählen Sie in der App **Tresor** und dann **Alles exportieren** oder öffnen Sie [{{base}}/export/]({{base}}/export/) in einem beliebigen Browser, geben Sie App-ID,
+Zugangskennung und Ihre Passphrase ein und laden Sie alles entschlüsselt als ZIP-Datei herunter. Die Dateien sind nicht
 verschlüsselt: Bewahren Sie sie sorgfältig auf.
 
 **Dateien, die Sie aus einer App herunterladen, sind nicht verschlüsselt**, gleich was es ist: eine CSV-Tabelle, ein Anhang, eine PDF-Datei, das Export-ZIP. Sobald eine Datei auf Ihrem Rechner liegt, schützt sie nur das, was Ihren Rechner schützt.

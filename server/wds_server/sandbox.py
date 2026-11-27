@@ -83,17 +83,16 @@ def ensure_sandbox(svc) -> None:
             limits = json.dumps(sb.limits())
             if row is None:
                 conn.execute(
-                    "INSERT INTO scopes (scope_id, name, status, enrollment, join_code, hibp, limits, created, description,"
-                    " contact_email, creator) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                    (sb.scope_id, sb.name, "active", "open", None, int(sb.hibp), limits, now, DESCRIPTION, "", SANDBOX_CREATOR))
+                    "INSERT INTO scopes (scope_id, name, status, join_code, limits, created, description, contact_email, creator)"
+                    " VALUES (?,?,?,?,?,?,?,?,?)",
+                    (sb.scope_id, sb.name, "active", None, limits, now, DESCRIPTION, "", SANDBOX_CREATOR))
                 svc.audit(conn, "system", "scope_created", sb.scope_id, None, "sandbox")
                 return
             if row["creator"] != SANDBOX_CREATOR:
                 raise ValueError(f"config: the scope {sb.scope_id} already exists and was not created by the [sandbox] section;"
                                  " choose another scope_id or remove that scope")
-            conn.execute("UPDATE scopes SET name=?, status='active', suspended_by=NULL, enrollment='open', join_code=NULL,"
-                         " hibp=?, limits=?, description=?, contact_email='', deleted=NULL WHERE scope_id=?",
-                         (sb.name, int(sb.hibp), limits, DESCRIPTION, sb.scope_id))
+            conn.execute("UPDATE scopes SET name=?, status='active', join_code=NULL, limits=?, description=?, contact_email='',"
+                         " deleted=NULL WHERE scope_id=?", (sb.name, limits, DESCRIPTION, sb.scope_id))
 
 
 # -- capacity --------------------------------------------------------------------------------------------------------

@@ -9,6 +9,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomBytes } from 'node:crypto';
 import { createServer } from 'node:net';
+import http from 'node:http';
 import { createRequire } from 'node:module';
 import { build } from '../build.mjs';
 
@@ -55,13 +56,34 @@ async function waitHealthy(base, child, log) {
   }
 }
 
+// The Pwned Passwords range service that the servers of this stack ask (config pwned_url): padded noise, plus the hash suffix of
+// PWNED_PASSPHRASE under its prefix. up.down = true makes it answer 500 (the server then answers its clients with 503); up.asked lists the prefixes.
+export const PWNED_PASSPHRASE = 'Tr0ub4dor-and-3-horses';
+async function startPwnedUpstream() {
+  const sha1 = createHash('sha1').update(PWNED_PASSPHRASE).digest('hex').toUpperCase();
+  const up = { asked: [], down: false, url: '', close: null };
+  const srv = http.createServer((req, res) => {
+    const prefix = req.url.split('/range/')[1] || '';
+    up.asked.push(prefix);
+    if (up.down || !/^[0-9A-F]{5}$/.test(prefix)) { res.writeHead(500); res.end('down'); return; }
+    const lines = ['0018A45C4D1DEF81644B54AB7F969B88D65:0', '00D4F6E8FA6EECAD2A3AA415EEC418D38EC:0'];
+    if (sha1.startsWith(prefix)) lines.push(sha1.slice(5) + ':42');
+    res.writeHead(200, { 'content-type': 'text/plain' });
+    res.end(lines.join('\r\n') + '\r\n');
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  up.url = 'http://127.0.0.1:' + srv.address().port + '/range/';
+  up.close = () => new Promise((r) => { srv.closeAllConnections && srv.closeAllConnections(); srv.close(() => r()); });
+  return up;
+}
+
 // A second server on the same escrow keys and bundle with a [sandbox] section (open enrollment, nightly wipe): the sandbox scope is SANDBOX_ID.
 export const SANDBOX_ID = 'sandbox-000000';
 export async function startSandboxServer(stack) {
-  const port = await freePort();
+  const port = await freePort();   // (its breach check asks the stack's stand-in as well)
   const cfg = join(stack.tmp, 'sandbox-' + port + '.ini');
   const hash = createHash('sha256').update(stack.operatorToken).digest('base64url');
-  writeFileSync(cfg, '[server]\nclient_dir = ' + stack.bundleDir + '\nread_only_threshold = 1.0\nsweep_interval = 0\npublic_base = http://127.0.0.1:' + port + '/datastore\n'
+  writeFileSync(cfg, '[server]\nclient_dir = ' + stack.bundleDir + '\nread_only_threshold = 1.0\nsweep_interval = 0\npublic_base = http://127.0.0.1:' + port + '/datastore\npwned_url = ' + stack.pwned.url + '\n'
     + '[escrow]\ncurrent_e_pub = ' + stack.escrow.current.e_pub + '\ncurrent_s_pub = ' + stack.escrow.current.s_pub + '\n'
     + 'spare_e_pub = ' + stack.escrow.spare.e_pub + '\nspare_s_pub = ' + stack.escrow.spare.s_pub + '\n[operator]\ntoken_hashes = ' + hash + '\n'
     + '[sandbox]\nscope_id = ' + SANDBOX_ID + '\nwipe_time = 03:30\ntimezone = Europe/Berlin\n');
@@ -95,7 +117,8 @@ export async function startStack() {
   const built = build({ escrowPins: pins, retiredEscrow: [], dist: bundleDir, testHooks: true });
   const operatorToken = 'wdsop.' + b64u(randomBytes(32));
   const operatorHash = b64u(createHash('sha256').update(operatorToken).digest());
-  const configText = (readOnlyThreshold, ratelimit, extraServer = '') => '[server]\nclient_dir = ' + bundleDir + '\nread_only_threshold = ' + readOnlyThreshold + '\nsweep_interval = 0\n' + extraServer
+  const pwned = await startPwnedUpstream();
+  const configText = (readOnlyThreshold, ratelimit, extraServer = '') => '[server]\nclient_dir = ' + bundleDir + '\nread_only_threshold = ' + readOnlyThreshold + '\nsweep_interval = 0\npwned_url = ' + pwned.url + '\n' + extraServer
     + '[escrow]\ncurrent_e_pub = ' + escrow.current.e_pub + '\ncurrent_s_pub = ' + escrow.current.s_pub + '\n'
     + 'spare_e_pub = ' + escrow.spare.e_pub + '\nspare_s_pub = ' + escrow.spare.s_pub + '\n[operator]\ntoken_hashes = ' + operatorHash + '\n'
     + (ratelimit ? '[ratelimit]\n' + Object.entries(ratelimit).map(([k, v]) => k + ' = ' + v + '\n').join('') : '');
@@ -106,7 +129,7 @@ export async function startStack() {
   writeFileSync(cfgReadOnly, configText(0.0001));
 
   const joinCode = 'K7M2QX9A';
-  const scopeDoc = JSON.parse(runCli(['create-scope', '--slug', 'itest', '--name', 'Integration test', '--enrollment', 'join_code', '--join-code', joinCode], cfgNormal, db));
+  const scopeDoc = JSON.parse(runCli(['create-scope', '--slug', 'itest', '--name', 'Integration test', '--join-code', joinCode], cfgNormal, db));
 
   // publicBase: the server names itself as the public address (http://127.0.0.1:<port>/datastore), as the production server
   // names https://wiai.uni-bamberg.de/datastore. The documentation and export page take their absolute URLs from it.
@@ -130,7 +153,7 @@ export async function startStack() {
   }
   const normal = await startServer();
   return {
-    tmp, db, scope: scopeDoc.scope, joinCode, pins, escrow, bundleDir, bundleFile: built.file, sri: built.sri, version: built.version,
+    tmp, db, pwned, scope: scopeDoc.scope, joinCode, pins, escrow, bundleDir, bundleFile: built.file, sri: built.sri, version: built.version,
     operatorToken, service: normal.service, origin: normal.origin, server: normal, startServer,
     // All bytes of the database files (main file and write-ahead log), for the "no plaintext at rest" check.
     dbBytes() {
@@ -138,6 +161,7 @@ export async function startStack() {
     },
     async stop() {
       await Promise.all(children.map(stopChild));
+      await pwned.close();
       rmSync(tmp, { recursive: true, force: true });
     },
   };

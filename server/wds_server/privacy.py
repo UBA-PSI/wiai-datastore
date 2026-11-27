@@ -55,7 +55,7 @@ um Apps auszuprobieren; die Bibliothek nennt sie in jedem Dialog „Testumgebung
 <ul>
 <li><strong>Löschung:</strong> Alle Tresore der Testumgebung werden jede Nacht gelöscht, gegen {esc(sb.wipe_time)} Uhr ({esc(sb.timezone)}) und bis etwa eine Stunde danach.
 Tresore, die erst nach diesem Zeitpunkt angelegt wurden, bleiben bis zur folgenden Nacht. Ist die Testumgebung voll, entfernen wir die ältesten Tresore früher, die seit mindestens {sb.evict_min_age // 60} Minuten nicht geändert wurden.</li>
-<li><strong>Keine Wiederherstellung:</strong> Für die Testumgebung gibt es kein Wiederherstellungsverfahren und keine Kontakt-E-Mail-Adresse. Technisch öffnet der
+<li><strong>Keine Wiederherstellung:</strong> Für die Testumgebung gibt es kein Wiederherstellungsverfahren. Technisch öffnet der
 Wiederherstellungsschlüssel der Fakultät (Abschnitt 4) auch Tresore der Testumgebung; der Server lehnt Wiederherstellungsanfragen für sie ab, und es gibt dafür keinen eigenen Schlüsselsatz.
 Bei Missbrauch schalten wir die Testumgebung ab oder leeren sie, wir öffnen keine Tresore.</li>
 <li><strong>Schutz vor Missbrauch:</strong> Der Server zählt im Arbeitsspeicher, wie viele Tresore ein Netzbereich (IPv4-Adresse oder IPv6-/{sb.create_ipv6_prefix}-Präfix) anlegt
@@ -77,7 +77,7 @@ the library calls it "Sandbox" in every dialog. <strong>Do not store real data t
 <ul>
 <li><strong>Deletion:</strong> Every vault of the sandbox is deleted every night, around {esc(sb.wipe_time)} ({esc(sb.timezone)}) and up to about an hour after.
 Vaults created after that time stay until the following night. When the sandbox is full, we remove the oldest vaults earlier that have not been changed for at least {sb.evict_min_age // 60} minutes.</li>
-<li><strong>No recovery:</strong> There is no recovery procedure and no contact e-mail address in the sandbox. Technically the faculty's recovery key (section 4)
+<li><strong>No recovery:</strong> There is no recovery procedure in the sandbox. Technically the faculty's recovery key (section 4)
 also opens sandbox vaults; the server refuses recovery requests for them, and there is no separate key set for it.
 In case of abuse we switch the sandbox off or empty it; we do not open vaults.</li>
 <li><strong>Protection against abuse:</strong> The server counts in memory how many vaults one network (IPv4 address or IPv6 /{sb.create_ipv6_prefix} prefix) creates
@@ -124,8 +124,7 @@ Telefon: +49 951 863-1030.</p>
 <li>Passwortprüfung: Schutz Ihrer Daten vor Passphrasen, die in bekannten Datenlecks stehen (Abschnitt 6).</li>
 </ul>
 <p>Rechtsgrundlage ist Art. 6 Abs. 1 Buchst. e und Abs. 3 DSGVO in Verbindung mit Art. 4 Abs. 1 BayDSG
-(Wahrnehmung der Aufgaben der Universität in Lehre, Forschung und Verwaltung); das gilt auch für die Passwortprüfung. Für die freiwillige Kontakt-E-Mail-Adresse zur
-Wiederherstellung ist es Ihre Einwilligung nach Art. 6 Abs. 1 Buchst. a DSGVO.</p>
+(Wahrnehmung der Aufgaben der Universität in Lehre, Forschung und Verwaltung); das gilt auch für die Passwortprüfung.</p>
 
 <h2 id="apps">3. Wenn Sie eine App nutzen (Gruppe a)</h2>
 <dl class="facts">
@@ -135,8 +134,6 @@ Eine Ausnahme ist der Wiederherstellungsschlüssel der Fakultät (Abschnitt 4).<
 Der Server kennt weder Namen der Datensätze noch Personen hinter den Zugängen.</dd>
 <dt>IP-Adresse</dt><dd>Nur im Arbeitsspeicher, um Anfragen zu begrenzen (höchstens eine Stunde). Sie wird nicht gespeichert.
 Der vorgeschaltete Server (Reverse Proxy) schreibt für <code>/datastore/</code> kein Protokoll.</dd>
-<dt>Kontakt-E-Mail (optional)</dt><dd>Wenn Sie beim Anlegen Ihres Tresors eine Adresse angeben, speichern wir sie im Klartext, damit wir Sie bei einer Wiederherstellung erreichen können.
-Sie können sie weglassen.</dd>
 <dt>Passwortprüfung</dt><dd>Siehe Abschnitt 6.</dd>
 </dl>
 <p>Wir können Tresore keiner Person zuordnen (Art. 11 DSGVO). Um Ihre Rechte auszuüben, nennen Sie uns deshalb Ihre Zugangskennung
@@ -145,7 +142,7 @@ Sie können sie weglassen.</dd>
 <h2 id="treuhand">4. Wiederherstellungsschlüssel der Fakultät (Treuhandschlüssel)</h2>
 <div class="box"><p><strong>Die Fakultät kann den Inhalt jedes Tresors entschlüsseln.</strong> Der Betreiber hält einen Wiederherstellungsschlüssel (auch Treuhand- oder Escrow-Schlüssel genannt),
 der jeden Tresor öffnet. Wir benutzen ihn nur im dokumentierten Wiederherstellungsverfahren und nur auf Ihren Wunsch, wenn Sie Ihren Zugang verloren haben.
-Vor der Wiederherstellung gilt eine Wartezeit von 72 Stunden (mit Ihrem Wiederherstellungscode) oder 7 Tagen (über die Kontakt-E-Mail-Adresse). In dieser Zeit
+Voraussetzung ist Ihr Notfallcode, und vor der Wiederherstellung gilt eine Wartezeit von 72 Stunden. In dieser Zeit
 sehen Sie als Inhaber im Tresor einen Hinweis und können die Wiederherstellung abbrechen. Jeder Schritt wird protokolliert.</p></div>
 
 <h2 id="dashboard">5. Wenn Sie sich am Dashboard anmelden (Gruppe b)</h2>
@@ -156,8 +153,6 @@ Eine Matrikelnummer wird nur zur Prüfung ausgewertet (Beschäftigte haben keine
 (technisch notwendig, keine Einwilligung erforderlich). Die Sitzung endet bei der Abmeldung, nach {idle_h} Stunden ohne Aktivität oder spätestens nach {abs_h} Stunden.</li>
 <li><strong>Anmeldecookie:</strong> Während der Anmeldung setzen wir zehn Minuten lang das Cookie <code>__Host-wds_login</code>, das die Anmeldung an Ihren Browser bindet
 (technisch notwendig, keine Einwilligung erforderlich). Danach wird es gelöscht.</li>
-<li><strong>Anzeigewunsch:</strong> Wenn Sie im Dashboard „Experteneinstellungen immer aufgeklappt zeigen“ wählen, setzen wir ein Jahr lang das Cookie <code>wds_expert</code> mit dem Wert 1
-(von Ihnen ausdrücklich gewünscht, keine Einwilligung erforderlich; keine Angaben zu Ihrer Person). Mit „Experteneinstellungen wieder zuklappen“ wird es gelöscht.</li>
 <li><strong>Angaben zu Ihren Apps:</strong> Name, Beschreibung, Kontakt-E-Mail-Adresse der App, Mit-Administratoren (Kennung oder E-Mail-Adresse), Einstellungen.</li>
 <li><strong>Protokoll der Dashboard-Aktionen:</strong> Wer hat wann was geändert (zum Beispiel Einstellungen mit alter und neuer Kontakt-E-Mail-Adresse, Löschungen),
 dazu Anmeldungen und abgewiesene Anmeldungsversuche (diese sieht nur der Betrieb). Ohne IP-Adressen.</li>
@@ -167,17 +162,19 @@ dazu Anmeldungen und abgewiesene Anmeldungsversuche (diese sieht nur der Betrieb
 <p>Wir geben keine Daten an Stellen außerhalb der Universität weiter, mit einer Ausnahme (die Passwortprüfung, unten).</p>
 <p><strong>Innerhalb der Universität</strong> sehen die Administratoren einer App einander (Kennung oder E-Mail-Adresse, Zeitpunkte) in der Administratorenliste und im Protokoll der App,
 dazu die Verwaltungsdaten der Tresore dieser App (angelegt, letzte Änderung, Größe, Zahl der Mitglieder), nie deren Inhalte. Der Betrieb sieht alle Apps und das gesamte Protokoll.</p>
-<p><strong>Die Ausnahme ist die Passwortprüfung:</strong> Wenn die App sie eingeschaltet hat, sendet Ihr Browser beim Festlegen einer Passphrase die
-ersten 5 Hexadezimalzeichen des SHA-1-Hashwerts Ihrer Passphrase und – technisch bedingt – Ihre IP-Adresse direkt an den Dienst Have I Been Pwned
-(<code>api.pwnedpasswords.com</code>, betrieben von Troy Hunt). Empfänger Ihrer Anfrage ist Cloudflare, Inc. (USA), über das der Dienst ausgeliefert wird. Ihre Passphrase selbst wird nie gesendet, und die Anfrage läuft nicht über unseren Server.
-Die USA sind ein Drittland. Die Übermittlung stützt sich auf den Angemessenheitsbeschluss der EU-Kommission zum EU-US Data Privacy Framework (Art. 45 DSGVO), soweit Cloudflare, Inc. dort zertifiziert ist.
-Zweck ist der Schutz Ihrer Daten vor bekannten, bereits veröffentlichten Passphrasen (Rechtsgrundlage wie in Abschnitt 2). Die Prüfung kann pro App abgeschaltet werden, und Apps müssen auf sie hinweisen.</p>
+<p><strong>Die Ausnahme ist die Passwortprüfung:</strong> Wenn Sie eine Passphrase wählen, sendet Ihr Browser die ersten 5 Zeichen einer Prüfsumme (SHA-1) der Passphrase an den Server der Fakultät.
+Dieser fragt in Ihrem Auftrag den Dienst Pwned Passwords (<code>api.pwnedpasswords.com</code>, betrieben von Troy Hunt) und gibt die Antwort an Ihren Browser weiter, der sie mit dem Rest der Prüfsumme vergleicht.
+Der Dienst sieht weder Ihre Passphrase noch Ihre IP-Adresse: Die Anfrage geht vom Server der Fakultät aus, Ihre IP-Adresse bleibt dort (Abschnitt 3), und die ersten 5 Zeichen werden nicht zusammen mit ihr protokolliert.
+Empfänger der Anfrage des Servers ist Cloudflare, Inc. (USA), über das der Dienst ausgeliefert wird. Die USA sind ein Drittland. Die Übermittlung stützt sich auf den Angemessenheitsbeschluss der EU-Kommission zum EU-US Data Privacy Framework (Art. 45 DSGVO), soweit Cloudflare, Inc. dort zertifiziert ist.
+Der Server hält die Antworten bis zu 24 Stunden im Arbeitsspeicher. Ist der Dienst nicht erreichbar, prüft Ihr Browser die Passphrase nur lokal.
+Zweck ist der Schutz Ihrer Daten vor bekannten, bereits veröffentlichten Passphrasen (Rechtsgrundlage wie in Abschnitt 2). Die Prüfung ist für alle Apps gleich.</p>
 
 <h2 id="dauer">7. Speicherdauer</h2>
 <ul>
 <li>Tresordaten: bis Sie den Tresor löschen oder die App gelöscht wird. Gelöschte Tresore entfernen wir endgültig {purge} Tage nach dem Löschen,
 Tresore ohne Daten {empty} Tage nach dem Anlegen.</li>
 <li>Frühere Versionen eines Datensatzes: die letzten N Versionen, N legt die App fest (Standard 10).</li>
+<li>Antworten der Passwortprüfung: bis zu 24 Stunden im Arbeitsspeicher des Servers; sie enthalten keine Angaben zu Ihrer Person.</li>
 <li>Dashboard-Sitzungen: bis zur Abmeldung oder zum Ablauf (Abschnitt 5).</li>
 <li>Protokoll der Dashboard-Aktionen: {audit_days // 365} Jahr, danach wird es gelöscht.</li>
 <li>Angaben zu einer gelöschten App: Beschreibung und Kontakt werden sofort entfernt, der übrige Eintrag mit dem endgültigen Löschen der Tresore.</li>
@@ -198,8 +195,7 @@ Telefon: +49 89 212672-0; <a href="https://www.datenschutz-bayern.de" rel="noope
 Diese Seite beschreibt nur den Speicherdienst. Verlinken Sie sie und sagen Sie Ihren Nutzenden außerdem:</p>
 <ul>
 <li>Die Fakultät hält einen Wiederherstellungsschlüssel und kann im Wiederherstellungsverfahren Inhalte entschlüsseln (Abschnitt 4).</li>
-<li>Falls Sie die Passwortprüfung eingeschaltet lassen: Sie sendet Daten an Have I Been Pwned in den USA (Abschnitt 6).</li>
-<li>Wer Zugangskennung und Wiederherstellungscode verliert, kann seine Daten nur mit Hilfe des Betreibers zurückbekommen. Wer eine Einladung weitergibt, gibt Zugriff auf die Inhalte.</li>
+<li>Wer die Passphrase vergisst, kommt nur mit dem Notfallcode und dem Verfahren des Betreibers (72 Stunden Wartezeit) wieder an seine Daten; wer Passphrase und Notfallcode verliert, verliert die Daten. Wer eine Einladung weitergibt, gibt Zugriff auf die Inhalte.</li>
 <li>Wie sich Nutzende an Sie wenden können (die Kontakt-E-Mail-Adresse im Dashboard).</li>
 </ul>
 {_sandbox_de(cfg)}
@@ -243,7 +239,7 @@ phone: +49 951 863-1030.</p>
 <li>Password check: protecting your data against passphrases that appear in known data breaches (section 6).</li>
 </ul>
 <p>The legal basis is Art. 6(1)(e) and (3) GDPR in conjunction with Art. 4(1) BayDSG (performance of the university's tasks in teaching,
-research and administration); this includes the password check. For the optional contact e-mail address used for recovery, it is your consent under Art. 6(1)(a) GDPR.</p>
+research and administration); this includes the password check.</p>
 
 <h2 id="apps">3. If you use an app (group a)</h2>
 <dl class="facts">
@@ -252,15 +248,14 @@ The exception is the faculty's recovery key (section 4).</dd>
 <dt>Metadata</dt><dd>The app (scope), vault, access and record IDs, sizes, times of creation and writing, roles, and the number of members of a vault.
 The server knows neither the names of records nor the people behind accesses.</dd>
 <dt>IP address</dt><dd>Only in memory, to limit requests (at most one hour). It is not stored. The reverse proxy writes no log for <code>/datastore/</code>.</dd>
-<dt>Contact e-mail (optional)</dt><dd>If you give an address when you create your vault, we store it in plain text so that we can reach you during a recovery. You can leave it out.</dd>
 <dt>Password check</dt><dd>See section 6.</dd>
 </dl>
 <p>We cannot link vaults to people (Art. 11 GDPR). To exercise your rights, please give us your access ID; without it we cannot find your data.</p>
 
 <h2 id="escrow">4. The faculty's recovery key (escrow key)</h2>
 <div class="box"><p><strong>The faculty can decrypt the content of every vault.</strong> The operator holds a recovery key (also called an escrow key) that opens every vault.
-We use it only in the documented recovery procedure and only at your request, when you have lost your access. Before a recovery there is a waiting period of
-72 hours (with your recovery code) or 7 days (via the contact e-mail address). During this time you, as the owner, see a notice in the vault and can cancel the recovery.
+We use it only in the documented recovery procedure and only at your request, when you have lost your access. A recovery needs your emergency code, and before it there is a waiting period of
+72 hours. During this time you, as the owner, see a notice in the vault and can cancel the recovery.
 Every step is logged.</p></div>
 
 <h2 id="dashboard">5. If you log in to the dashboard (group b)</h2>
@@ -271,8 +266,6 @@ A matriculation number is only checked (staff have none) and is not stored.</p>
 (technically necessary, no consent needed). The session ends at logout, after {idle_h} hours without activity, or after {abs_h} hours at the latest.</li>
 <li><strong>Login cookie:</strong> While you log in we set the cookie <code>__Host-wds_login</code> for ten minutes; it ties the login to your browser
 (technically necessary, no consent needed). It is deleted afterwards.</li>
-<li><strong>Display preference:</strong> If you choose "Always show the expert settings" in the dashboard we set the cookie <code>wds_expert</code> with the value 1 for one year
-(requested by you, no consent needed; it holds no personal data). "Collapse the expert settings again" deletes it.</li>
 <li><strong>Details of your apps:</strong> name, description, contact e-mail address of the app, co-admins (ID or e-mail address), settings.</li>
 <li><strong>Log of dashboard actions:</strong> who changed what and when (for example settings with the old and new contact e-mail address, deletions),
 plus logins and refused login attempts (only the operator sees these). No IP addresses.</li>
@@ -282,17 +275,19 @@ plus logins and refused login attempts (only the operator sees these). No IP add
 <p>We do not pass data to anyone outside the university, with one exception (the password check, below).</p>
 <p><strong>Inside the university,</strong> the administrators of an app see each other (ID or e-mail address, times) in the admin list and the log of that app, and the management data of the
 app's vaults (created, last write, size, number of members), never their contents. The operator sees all apps and the whole log.</p>
-<p><strong>The exception is the password check:</strong> if the app has switched it on, your browser sends the first 5 hexadecimal characters of the SHA-1 hash of your passphrase
-and, as a technical necessity, your IP address directly to the service Have I Been Pwned (<code>api.pwnedpasswords.com</code>, operated by Troy Hunt)
-when you choose a passphrase. The recipient of your request is Cloudflare, Inc. (USA), which delivers the service. Your passphrase itself is never sent, and the request does not go through our server.
-The USA is a third country. The transfer relies on the European Commission's adequacy decision for the EU-US Data Privacy Framework (Art. 45 GDPR), as far as Cloudflare, Inc. is certified under it.
-The purpose is to protect your data against known, already published passphrases (legal basis as in section 2). The check can be switched off per app, and apps must mention it.</p>
+<p><strong>The exception is the password check:</strong> when you choose a passphrase, your browser sends the first 5 characters of a checksum (SHA-1) of the passphrase to the faculty's server.
+The server asks the Pwned Passwords service (<code>api.pwnedpasswords.com</code>, operated by Troy Hunt) on your behalf and passes the answer to your browser, which compares it with the rest of the checksum.
+The service sees neither your passphrase nor your IP address: the request comes from the faculty's server, your IP address stays there (section 3), and the first 5 characters are not logged together with it.
+The recipient of the server's request is Cloudflare, Inc. (USA), which delivers the service. The USA is a third country. The transfer relies on the European Commission's adequacy decision for the EU-US Data Privacy Framework (Art. 45 GDPR), as far as Cloudflare, Inc. is certified under it.
+The server keeps the answers in memory for up to 24 hours. If the service cannot be reached, your browser checks the passphrase locally only.
+The purpose is to protect your data against known, already published passphrases (legal basis as in section 2). The check is the same for all apps.</p>
 
 <h2 id="retention">7. Storage periods</h2>
 <ul>
 <li>Vault data: until you delete the vault or the app is deleted. Deleted vaults are removed for good {purge} days after deletion;
 vaults without data {empty} days after creation.</li>
 <li>Earlier versions of a record: the last N versions, where the app sets N (default 10).</li>
+<li>Answers of the password check: up to 24 hours in the server's memory; they contain nothing about you as a person.</li>
 <li>Dashboard sessions: until logout or expiry (section 5).</li>
 <li>Log of dashboard actions: {audit_days // 365} year, then it is deleted.</li>
 <li>Details of a deleted app: description and contact are removed at once, the rest of the entry when the vaults are removed for good.</li>
@@ -312,8 +307,7 @@ phone: +49 89 212672-0; <a href="https://www.datenschutz-bayern.de" rel="noopene
 This page describes the storage service only. Link to it, and also tell your users:</p>
 <ul>
 <li>The faculty holds a recovery key and can decrypt content in the recovery procedure (section 4).</li>
-<li>If you leave the password check on, it sends data to Have I Been Pwned in the USA (section 6).</li>
-<li>Whoever loses the access ID and recovery code can only get the data back with the operator's help. Whoever passes on an invitation gives access to the content.</li>
+<li>Whoever forgets the passphrase gets the data back only with the emergency code and the operator's procedure (72-hour wait); whoever loses passphrase and emergency code loses the data. Whoever passes on an invitation gives access to the content.</li>
 <li>How users can reach you (the contact e-mail address in the dashboard).</li>
 </ul>
 {_sandbox_en(cfg)}

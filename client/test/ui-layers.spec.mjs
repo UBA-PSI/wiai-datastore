@@ -239,7 +239,7 @@ test('a closed library dialog is re-opened when the browser or the app closes it
 
 test('sandbox: the corner badge stays above an app modal and above library dialogs, and takes no click', async ({ browser }) => {
   await w.close();
-  w = await startTestWorld({ scope: { hibp: false, sandbox: { next_wipe: Math.floor(Date.now() / 1000) + 6 * 3600, last_wipe: null } } });
+  w = await startTestWorld({ scope: { sandbox: { next_wipe: Math.floor(Date.now() / 1000) + 6 * 3600, last_wipe: null } } });
   const page = await openApp(await browser.newContext(), w);
   await page.evaluate(() => { window.unlockP = store.unlock(); });
   await wds(page, 'to-create').click();

@@ -5,10 +5,19 @@ import http from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import { makeWorld } from './fake-server.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const DIST = join(HERE, '..', 'test-results', 'bundle'); // the pinless test build (global-setup.mjs), not dist/
+
+// The breach check endpoint of the real service (GET api/v1/pwned/<5 hex>): padded noise, plus the hashes in world.pwned ("password:count" pairs
+// are not needed here, a pwned entry is the SHA-1 of the passphrase). world.pwnedDown answers 503 like a service without outbound access.
+function pwnedBody(world, prefix) {
+  const lines = ['0018A45C4D1DEF81644B54AB7F969B88D65:0', '00D4F6E8FA6EECAD2A3AA415EEC418D38EC:0'];
+  for (const p of world.pwned) { const h = createHash('sha1').update(p.normalize('NFC')).digest('hex').toUpperCase(); if (h.startsWith(prefix)) lines.push(h.slice(5) + ':42'); }
+  return lines.join('\r\n');
+}
 
 export async function startWorld(opts = {}) {
   let world = null;
@@ -34,6 +43,14 @@ export async function startWorld(opts = {}) {
         res.end(readFileSync(file));
         return;
       }
+      const pw = /^\/datastore\/api\/v1\/pwned\/([0-9A-F]{5})$/.exec(url.pathname);
+      if (pw && req.method === 'GET') {
+        world.pwnedSeen.push({ prefix: pw[1], ip: req.socket.remoteAddress });
+        if (world.pwnedDown) { res.writeHead(503, cors); res.end('unavailable'); return; }
+        res.writeHead(200, Object.assign({}, cors, { 'content-type': 'text/plain' }));
+        res.end(pwnedBody(world, pw[1]));
+        return;
+      }
       const chunks = [];
       for await (const c of req) chunks.push(c);
       const body = chunks.length ? new Uint8Array(Buffer.concat(chunks)) : undefined;
@@ -55,6 +72,7 @@ export async function startWorld(opts = {}) {
   const port = web.address().port;
   const service = 'http://127.0.0.1:' + port + '/datastore/';
   world = await makeWorld(Object.assign({}, opts, { server: Object.assign({ service }, opts.server || {}) }));
+  Object.assign(world, { pwned: [], pwnedDown: false, pwnedSeen: [] });
   return {
     world, port, service, scope: world.scope, pins: world.pins,
     close: () => new Promise((r) => { web.closeAllConnections && web.closeAllConnections(); web.close(() => r()); }),

@@ -122,19 +122,6 @@ The server stores `SHA-256(token)` per slot (raw 32-byte token, not its b64u tex
 token (from Ansible configuration, of the full ASCII string `wdsop.…`). Comparisons use `hmac.compare_digest`.
 The API never reads cookies.
 
-### 2.3 Key file
-
-Non-secret JSON file the user can drag into an app on a new device. `cjson`, suggested file name
-`<scope>-<first 4 symbols of access ID>.wds.json`:
-
-```json
-{"access_id":"000G40R40M30E209185Z","scope":"notenrechner-k7m2a9","service":"https://wiai.uni-bamberg.de/datastore/","type":"wds-keyfile","v":1,"vault":"9FYJS2VF3VP7MAQYPJ5S6KQ4P9"}
-```
-
-Readers check `type`, `v`, `service` (must equal the library's built-in service URL), the scope (must equal the
-app's scope) and the check bits; unknown keys are ignored. The vault ID from the key file is compared with the vault
-ID inside the decrypted slot blob (3.3).
-
 ---
 
 ## 3. Key hierarchy
@@ -189,7 +176,7 @@ encrypted under `K_wrap` in a type 0x02 envelope. Plaintext (`cjson`):
 - `keys` holds one or two key sets. Two only while a key renewal is pending (5.4): the set listed in the head roster
   and the new set. The client uses the set whose `e_pub`/`s_pub` equal the slot's entry in the verified head roster.
   Once the roster lists the new set, the client re-wraps with only that set (`PUT /slots/{access_id}`).
-- After decrypting, the client checks `vault` (against the key file or expected vault, if known) and finds its
+- After decrypting, the client checks `vault` (against the expected vault, if known) and finds its
   slot by `slot` in the roster.
 - The escrow slot has no wrapped blob, no access ID and no token; its private keys exist only offline.
 
@@ -538,7 +525,7 @@ prunes older versions (5.3).
 
 Signed with the slot's `S` key as listed in the head roster. The owner's client verifies it against the head
 roster's `s_pub` for that slot (a statement signed with an older key is discarded), then signs a roster version
-with the new keys (6.3 b). The server keeps at most one pending renewal per slot (a new one replaces it) and clears
+with the new keys (6.3 b). A renewal is sent only with the redemption of an invite (8.4). The server keeps at most one pending renewal per slot and clears
 it when a roster version adopts it.
 
 ### 7.3 Recovery code hash
@@ -587,8 +574,8 @@ protection for that session.
   `403 forbidden`.
 - Role comes from the slot's entry in the **head roster**. A redeemed invite still listed as `invite` acts with its
   roster role. An invite that is **not yet redeemed** is accepted only on `GET /slots/{access_id}`,
-  `POST /slots/{access_id}/redeem`, `GET /vaults/{v}/roster`, and on `PUT /slots/{access_id}` and
-  `POST /slots/{access_id}/renewal` (which answer `409 not_redeemed`); on every other endpoint it answers `403
+  `POST /slots/{access_id}/redeem`, `GET /vaults/{v}/roster`, and on `PUT /slots/{access_id}`
+  (which answers `409 not_redeemed`); on every other endpoint it answers `403
   forbidden`. Whoever holds the invite code can therefore not read or write records before the redemption; the code does open
   the slot's own blob and keyring entry (the vault keys), which is why an invite that was used is withdrawn like a member,
   by a revocation (6.3). Every request that presents a valid, unexpired token marks the slot as *used*, also one that is
@@ -605,7 +592,7 @@ protection for that session.
 
 ```
 {"scope":"notenrechner-k7m2a9","name":"Notenrechner","status":"active"|"suspended",
- "enrollment":"join_code"|"open"|"closed","hibp":true,"read_only":false,
+ "enrollment":"join_code"|"open","read_only":false,
  "limits":{"history_versions":10,"max_envelope_bytes":…,"max_value_bytes":…,"vault_bytes":…},
  "kdf":{"alg":"argon2id","m":65536,"p":1,"t":3,"v":19},
  "escrow":[{"id":"…","e_pub":"…","s_pub":"…","status":"current"},{"id":"…","e_pub":"…","s_pub":"…","status":"spare"}],
@@ -622,8 +609,7 @@ redeeming answer `503 sandbox_disabled`), `wipe_at` and `timezone` (local time o
 the next scheduled wipe instant) and `last_wipe` (the instant of the last completed wipe, or `null`). Every vault of the sandbox
 that was created before a wipe instant is deleted by the first maintenance sweep after it, so a client that remembers when it
 first stored an access ID can tell that the vault is gone when that time is earlier than `last_wipe`. In the sandbox the
-scope has open enrollment, `hibp` is a setting of the server configuration, and the vault has no recovery: `recovery_contact` of
-a creation is accepted and discarded; every recovery and escrow endpoint of the operator API answers `409 sandbox_no_recovery`.
+scope has open enrollment (`enrollment` is `"open"` only there, `"join_code"` for every other scope; it is derived, not stored) and the vault has no recovery: every recovery and escrow endpoint of the operator API answers `409 sandbox_no_recovery`.
 At most `invite_slots` (default 3) invites exist per vault (`409 invite_limit`, `limit`), and an invite must expire at or before
 `next_wipe` (`400 invalid_roster`). A vault deleted by its owner is purged at once.
 
@@ -635,6 +621,17 @@ authentication failure for rate limiting, 8.7). `410 vault_deleted` for the slot
 never counted (the descriptor is public, and one person behind a shared NAT must not be able to stop everyone else
 behind it from unlocking).
 
+#### `GET /pwned/{prefix}` – breach check of the passphrase dialogs
+
+No token, no scope. `prefix` is exactly five uppercase hex characters, the start of the SHA-1 of the passphrase. The server
+fetches `https://api.pwnedpasswords.com/range/<prefix>` with `Add-Padding` on the client's behalf (configuration `[server] pwned_url`;
+empty switches the proxy off), caches the answer in memory (bounded, 24 h), and never logs the prefix. `200` with
+`text/plain`: lines `SUFFIX:COUNT` (35 uppercase hex characters, CRLF), lines with count 0 are padding; `Access-Control-Allow-Origin: *`,
+`Cache-Control: no-store`. `400 bad_request` for a malformed prefix; `429 rate_limited` (`Retry-After`; 120 per minute per client, IPv6 per /64);
+`503 pwned_unavailable` (`Retry-After: 60`) when the service is unreachable, answers malformed or the proxy is off; after one failure the server
+answers 503 at once for 60 s. The client treats everything but `200` as "unavailable" and falls back to its local estimator. The passphrase
+and the full hash never leave the browser.
+
 #### `POST /scopes/{scope}/vaults` – create vault
 
 Request:
@@ -645,17 +642,15 @@ Request:
  "slots":[{"slot":"<founder slot_id>","access_id":"…","kdf":{…argon2id…},"token_hash":"…","wrapped":"<b64u type 0x02>"}],
  "keyring":{"<founder slot_id>":"<b64u type 0x03>","<escrow slot_id>":"<b64u type 0x03>"},
  "recovery_hash":"<b64u 32>",
- "recovery_contact":"name@example.org" | null,
  "join_code":"…" | null}
 ```
 
-Server checks: scope exists and `active`; enrollment (`closed` → `403 enrollment_closed`; `join_code` mode: code
+Server checks: scope exists and `active`; join code (every scope except the sandbox: code
 compared after normalising – trim, uppercase, remove spaces and `-` – in constant time, wrong → `403
 join_code_invalid`, counts as authentication failure); `max_vaults` (`403 vault_limit_reached`; in the sandbox the server first purges
 the oldest vaults that were created and last written at least `evict_min_age` ago, and answers `403 vault_limit_reached` only when none
 qualifies); creation rate (8.7; the sandbox has two more counters, below); roster version 1 per 6.1/6.2; vault ID = derivation from the founder's `s_pub`; `slots` holds exactly the
-founder slot; `keyring` exactly the roster's slots; envelope structures; `recovery_contact` ≤ 254 bytes and contains
-`@`; uniqueness (`409 vault_exists`, `access_id_taken`). Read-only mode → `503 read_only`. The join code lives in the body,
+founder slot; `keyring` exactly the roster's slots; envelope structures; uniqueness (`409 vault_exists`, `access_id_taken`). Read-only mode → `503 read_only`. The join code lives in the body,
 so it is compared after the body has been parsed and structurally validated (a malformed body answers `400` before
 the code is looked at).
 
@@ -674,7 +669,7 @@ A vault without any record 7 days after creation is purged.
  "keyring":{"rv":n,"entry":"<b64u>"} | null,
  "epoch":e,"roster":{"version":n,"head":"<hash>"},
  "renewal_pending":false,
- "recovery":null|{"method":"code"|"contact","requested":t,"ready_at":t}}
+ "recovery":null|{"requested":t,"ready_at":t}}
 ```
 
 `kind` is the server's view: `passphrase` once redeemed. `sv` is the slot version (increments on every change of
@@ -697,11 +692,6 @@ invite key set and the new key set; `renewal` announces the new set (7.2). Serve
 (`409 already_redeemed`), not expired (`410 invite_expired`), renewal body matches slot/vault/scope and its `rv`
 is at most the head version. Atomically
 stores the new KDF, token hash, blob, pending renewal, and the redemption time. `200 {"sv": …}`.
-
-#### `POST /slots/{access_id}/renewal` – any
-
-Header `If-Match: "<sv>"`. Body `{"renewal":{…},"wrapped":"…"}` (`wrapped` with both key sets). Replaces any
-pending renewal. `200 {"sv": …}`.
 
 ### 8.5 Vault endpoints (token)
 
@@ -813,7 +803,7 @@ Read-only allow-list:
 
 | Allowed | Refused |
 |---|---|
-| all `GET`; record `DELETE` (tombstone); history purge; vault `DELETE`; `POST …/roster` without `new_slots` that is *protective* (revocation, renewal adoption, escrow switch, epoch drop); rekey `PUT`; `PUT /slots/…`; `POST …/redeem`; `POST …/renewal`; recovery endpoints; `DELETE …/recovery` | vault creation; record `PUT`; `POST …/roster` with `new_slots`; `POST …/roster` that is not protective (role change, bare epoch bump, other changes); `POST /admin/scopes` |
+| all `GET`; record `DELETE` (tombstone); history purge; vault `DELETE`; `POST …/roster` without `new_slots` that is *protective* (revocation, renewal adoption, escrow switch, epoch drop); rekey `PUT`; `PUT /slots/…`; `POST …/redeem`; recovery endpoints; `DELETE …/recovery` | vault creation; record `PUT`; `POST …/roster` with `new_slots`; `POST …/roster` that is not protective (role change, bare epoch bump, other changes); `POST /admin/scopes` |
 
 ### 8.7 Rate limits
 
@@ -880,7 +870,6 @@ state of `wds-1.0.0.js` at the time of writing) it is rebuilt freely.
 | 401 | `revoked` | – |
 | 403 | `forbidden` | – (also: an unredeemed invite token outside its four endpoints, 8.2) |
 | 403 | `scope_suspended` | – |
-| 403 | `enrollment_closed` | – |
 | 403 | `join_code_invalid` | – |
 | 403 | `vault_limit_reached` | – |
 | 403 | `recovery_code_invalid` | – |
@@ -897,7 +886,7 @@ state of `wds-1.0.0.js` at the time of writing) it is rebuilt freely.
 | 409 | `limit_below_stored_value` | `limit` (`"max_value_bytes"`), `largest_envelope_bytes`, `minimum_max_value_bytes` (operator API only, 9) |
 | 409 | `not_redeemed` | – |
 | 409 | `vault_exists`, `access_id_taken`, `slot_id_taken` | – |
-| 409 | `recovery_not_ready`, `recovery_pending`, `no_recovery_contact` | – |
+| 409 | `recovery_not_ready`, `recovery_pending` | – |
 | 409 | `sandbox_no_recovery` | – (recovery and escrow endpoints for a sandbox vault) |
 | 409 | `invite_limit` | `limit` (invites per sandbox vault) |
 | 410 | `invite_expired` | – |
@@ -912,6 +901,7 @@ state of `wds-1.0.0.js` at the time of writing) it is rebuilt freely.
 | 503 | `read_only` | – (`Retry-After` header) |
 | 503 | `sandbox_disabled` | – (the sandbox is switched off; no `Retry-After`) |
 | 503 | `sandbox_busy` | – (`Retry-After` header) |
+| 503 | `pwned_unavailable` | – (`Retry-After: 60`; only on `GET /pwned/{prefix}`) |
 | 507 | `quota_exceeded` | `limit` (`"vault_bytes"`, `"scope_bytes"`, `"roster_versions"` or `"roster_bytes"`) |
 
 The library maps them to typed errors: 401, 403 `forbidden`, 410 → `AuthError`; 412 → `ConflictError` (409
@@ -929,10 +919,10 @@ transaction); a failed operator authentication is not audited (it counts toward 
 
 | Method and path | Purpose | Request | Response |
 |---|---|---|---|
-| `POST /admin/scopes` | create scope (tests, dev CLI) | `{"slug","name","enrollment","join_code","hibp","limits"}`; `join_code` and `limits` may be `null` (defaults) | `201` operator scope object (below) |
-| `PATCH /admin/scopes/{scope}` | suspend / resume / change settings | any subset of `{"status","enrollment","join_code","hibp","limits","name"}`; a `limits` value of `null` resets that limit to the default | `200` operator scope object (below); `409 limit_below_stored_value` |
-| `GET /admin/vaults/{v}` | status | – | `200 {"vault","scope","created","deleted","epoch","roster_version","bytes","recovery","has_recovery_contact"}`; `deleted` and `recovery` may be `null` |
-| `POST /admin/vaults/{v}/recovery` | start recovery | `{"recovery_code":"<28 symbols>"}` or `{"contact":true}` | `201 {"method","requested","ready_at"}` |
+| `POST /admin/scopes` | create scope (tests, dev CLI) | `{"slug","name","join_code","limits"}`; `join_code` and `limits` may be `null` (defaults) | `201` operator scope object (below) |
+| `PATCH /admin/scopes/{scope}` | suspend / resume / change settings | any subset of `{"status","join_code","limits","name"}` (`join_code: null` generates a new code; `enrollment` and `hibp` are refused with `400`); a `limits` value of `null` resets that limit to the default | `200` operator scope object (below); `409 limit_below_stored_value` |
+| `GET /admin/vaults/{v}` | status | – | `200 {"vault","scope","created","deleted","epoch","roster_version","bytes","recovery"}`; `deleted` and `recovery` may be `null` |
+| `POST /admin/vaults/{v}/recovery` | start recovery | `{"recovery_code":"<28 symbols>"}` | `201 {"requested","ready_at"}` |
 | `DELETE /admin/vaults/{v}/recovery` | cancel | – | `200 {"cancelled":true}` |
 | `GET /admin/vaults/{v}/escrow` | material for `wds-recover` | – | `200` below |
 | `POST /admin/vaults/{v}/recovery/complete` | finish recovery | same body as `POST /vaults/{v}/roster` | `200 {"version","head","epoch"}` |
@@ -946,8 +936,7 @@ transaction); a failed operator authentication is not audited (it counts toward 
   `largest_envelope_bytes` and `minimum_max_value_bytes` (the smallest value that would be accepted). Other changes in the
   same request are not applied then (7.1).
 - **Start:** with a code, the server checks `SHA-256(code_bytes)` against `recovery_hash` (`403
-  recovery_code_invalid`, counts as a failure) and sets `ready_at = now + 259200` (72 h). With `contact`, the vault
-  needs a recovery contact (`409 no_recovery_contact`) and `ready_at = now + 604800` (7 days). One pending recovery
+  recovery_code_invalid`, counts as a failure) and sets `ready_at = now + 259200` (72 h). One pending recovery
   per vault (`409 recovery_pending`). Owners see it in `GET /slots/{access_id}` and can cancel it with `DELETE
   /vaults/{v}/recovery`.
 - **Escrow fetch** requires a recovery with `now ≥ ready_at` (`409 recovery_not_ready`). Response:
@@ -984,7 +973,7 @@ version lower than the entry's `v` is dropped. No clocks or tombstones are invol
 
 | Flow | Steps |
 |---|---|
-| Create | `GET /scopes` → generate founder E/S, vault ID, slot IDs, access ID, salt, VMK[1], NK, recovery code → Argon2id → wrap → roster v1 signed → keyring for founder + escrow → `POST …/vaults` → access sheet, key file |
+| Create | `GET /scopes` → generate founder E/S, vault ID, slot IDs, access ID, salt, VMK[1], NK, recovery code → Argon2id → wrap → roster v1 signed → keyring for founder + escrow → `POST …/vaults` → access sheet |
 | Unlock | `GET …/kdf` → Argon2id → `GET /slots/{id}` (token) → unwrap, check vault → `GET …/roster` → verify chain → open keyring entry, check commitments → records |
 | Invite | owner: new slot (E/S, invite secret, access ID), wrap under invite `K_wrap` → roster n+1 + full keyring + `new_slots` → show invite code |
 | Redeem | parse code → `GET /slots/{id}` with invite token → unwrap → new E/S, renewal statement → Argon2id → `POST …/redeem` |
@@ -1029,7 +1018,7 @@ Every nonce is fixed (`seq(12, 0x40)`, `seq(12, 0x50)`, …).
 | `ecdsa` | key, message, signature (valid) and the same with one flipped bit (invalid) |
 | `roster` | version 1 (founder + escrow) and version 2 (adds a `write` invite, signed by founder): documents, `cjson(body)`, hashes |
 | `renewal` | statement for the invite slot of roster v2, signed with its invite S key |
-| `codes` | invite code (canonical and display), recovery code `seq(17,0xa0)` (canonical, display), `recovery_hash`, key file |
+| `codes` | invite code (canonical and display), recovery code `seq(17,0xa0)` (canonical, display), `recovery_hash` |
 
 Seed values already computed while writing this spec (implementations MUST reproduce them):
 

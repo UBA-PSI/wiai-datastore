@@ -5,7 +5,8 @@
 import { test as base, expect } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { startStack, api, operatorAuth, envelopeHeader, containsBytes, makeRecoveryReady, recoverAsOperator, expireInvites, core, I, SHOTS } from './integration-env.mjs';
+import { createHash } from 'node:crypto';
+import { startStack, api, operatorAuth, PWNED_PASSPHRASE, envelopeHeader, containsBytes, makeRecoveryReady, recoverAsOperator, expireInvites, core, I, SHOTS } from './integration-env.mjs';
 
 const CANARY = 'CANARY-7f3a9c1e-plaintext-that-must-never-leave-the-browser';
 const PASS_CANARY = 'PASSCANARY-91b2d4c8';
@@ -88,14 +89,14 @@ async function openApp(ctx, stack, { via = 'file', service, ui } = {}) {
 const useService = (page, stack, service) => page.evaluate(({ scope, service: svc }) => { window.c = new WDSCore.Client({ scope, service: svc }); }, { scope: stack.scope, service });
 
 let counter = 0;
-async function createOwner(browser, stack, { via = 'file', recoveryContact } = {}) {
+async function createOwner(browser, stack, { via = 'file' } = {}) {
   const ctx = await newContext(browser);
   const page = await openApp(ctx, stack, { via });
   const passphrase = 'owner ' + (++counter) + ' ' + PASS_CANARY;
-  const r = await page.evaluate(async ({ passphrase, joinCode, recoveryContact }) => {
-    const v = await c.createVault({ passphrase, joinCode, recoveryContact });
-    return { accessId: v.accessId, vaultId: v.vaultId, recovery: v.recoveryCode.canonical, keyFile: v.keyFile.text };
-  }, { passphrase, joinCode: stack.joinCode, recoveryContact });
+  const r = await page.evaluate(async ({ passphrase, joinCode }) => {
+    const v = await c.createVault({ passphrase, joinCode });
+    return { accessId: v.accessId, vaultId: v.vaultId, recovery: v.recoveryCode.canonical };
+  }, { passphrase, joinCode: stack.joinCode });
   return { ctx, page, passphrase, ...r };
 }
 async function unlockElsewhere(browser, stack, vault, passphrase, opts = {}) {
@@ -126,7 +127,6 @@ test('the server answers: health, redirect, public scope document, bundle with C
   expect(red.headers.get('location')).toBe('/datastore/');
   const sc = await api(stack, 'GET', '/scopes/' + stack.scope);
   expect(sc.status).toBe(200);
-  expect(sc.json.enrollment).toBe('join_code');
   expect(sc.json.join_code).toBeUndefined();
   expect(sc.json.escrow.map((e) => e.id).sort()).toEqual([...stack.pins].sort());
   expect(sc.headers.get('access-control-allow-origin')).toBe('*');
@@ -270,7 +270,7 @@ test('conflict dialog in two browser contexts: the dialog offers both versions a
   await expect(dlg.getByRole('heading', { name: 'Save your access sheet' })).toBeVisible({ timeout: 60000 });
   const accessId = (await dlg.locator('[data-wds=access-id]').innerText()).trim();
   await shot(A, 'access-sheet');
-  await dlg.getByLabel('I have saved the access sheet and the recovery code.').check();
+  await dlg.getByLabel('I have saved the access sheet and the emergency code.').check();
   await dlg.getByRole('button', { name: 'Continue' }).click();
   await A.evaluate(() => window.unlockP);
   await A.evaluate(() => store.set('note', { text: 'v1 from A' }));
@@ -320,7 +320,7 @@ async function uiCreate(page, stack, passphrase) {
   await dlg.getByRole('button', { name: 'Create vault' }).click();
   await expect(dlg.getByRole('heading', { name: 'Save your access sheet' })).toBeVisible({ timeout: 60000 });
   const accessId = (await dlg.locator('[data-wds=access-id]').innerText()).trim();
-  await dlg.getByLabel('I have saved the access sheet and the recovery code.').check();
+  await dlg.getByLabel('I have saved the access sheet and the emergency code.').check();
   await dlg.getByRole('button', { name: 'Continue' }).click();
   await page.evaluate(() => window.unlockP);
   return accessId;
@@ -496,7 +496,7 @@ test('expired invites: the owner removes them on the next unlock (a used one by 
   expect(await next.page.evaluate(() => c.usage().then((u) => u.old_epoch_blobs))).toBe(0);
 });
 
-test('key renewal: the owner adopts the redeemed invite\'s new keys automatically, member and owner renewals are accepted', async ({ browser, stack }) => {
+test('key renewal: the owner adopts the redeemed invite\'s new keys automatically', async ({ browser, stack }) => {
   const o = await createOwner(browser, stack);
   await o.page.evaluate(() => c.put('shared', { hello: 'world' }));
   const inv = await invite(o, 'write');
@@ -531,28 +531,13 @@ test('key renewal: the owner adopts the redeemed invite\'s new keys automaticall
   expect(m2.status.ok.rosterVersion).toBe(rv0 + 1);
   expect(await m2.page.evaluate(() => c.put('from-member', { ok: true }).then((r) => r.version))).toBe(1);
 
-  // a later renewal by the member (POST /slots/{id}/renewal), accepted by the owner's maintenance
-  const renewed = await m2.page.evaluate(() => T(c.renewKeys()));
-  expect(renewed.err, JSON.stringify(renewed.err)).toBeUndefined();
-  roster = await api(stack, 'GET', '/vaults/' + o.vaultId + '/roster', { auth: await authOf(o2.page) });
-  expect(roster.json.slots[inv.slotId].renewal).toBeTruthy();
-  const adopted = await o2.page.evaluate(() => c.maintain().then((r) => r, (e) => ({ err: e.message })));
-  expect(adopted.err, JSON.stringify(adopted)).toBeUndefined();
-  roster = await api(stack, 'GET', '/vaults/' + o.vaultId + '/roster', { auth: await authOf(o2.page) });
-  expect(roster.json.head).toBe(rv0 + 2);
-  expect(roster.json.slots[inv.slotId].renewal).toBeNull();
+  // the manual renewal is gone: the endpoint is not part of the service any more
+  const gone = await api(stack, 'POST', '/slots/' + inv.accessId + '/renewal', { auth: mAuth, json: {} });
+  expect(gone.status).toBeGreaterThanOrEqual(400);
   const m3 = await unlockElsewhere(browser, stack, { accessId: inv.accessId }, 'member passphrase ' + PASS_CANARY);
   expect(m3.status.err, JSON.stringify(m3.status.err)).toBeUndefined();
   expect(await m3.page.evaluate(() => c.get('shared'))).toEqual({ hello: 'world' });
   expect(await m3.page.evaluate(() => c.get('from-member'))).toEqual({ ok: true });
-
-  // the owner renews its own keys (signed in directly), and a further device unlocks with the new set
-  const own = await o2.page.evaluate(() => T(c.renewKeys()));
-  expect(own.err, JSON.stringify(own.err)).toBeUndefined();
-  const o3 = await unlockElsewhere(browser, stack, o, o.passphrase);
-  expect(o3.status.err, JSON.stringify(o3.status.err)).toBeUndefined();
-  expect(o3.status.ok.rosterVersion).toBeGreaterThan(rv0 + 2);
-  expect(await o3.page.evaluate(() => c.get('from-member'))).toEqual({ ok: true });
 });
 
 test('revocation and re-encryption: interrupted and resumed, no old-epoch blob remains, history commitments still verify', async ({ browser, stack }) => {
@@ -751,7 +736,61 @@ test('the server rejects bodies that are not envelopes, even with a valid token'
   expect(notJson.status).toBe(400);
 });
 
-test('join code enforcement, enrollment states, suspended scope (operator API)', async ({ browser, stack }) => {
+test('breach check through the service: only the prefix leaves the page, answers are cached, a down upstream gives 503 and the dialog falls back to the strict rules', async ({ browser, stack }) => {
+  const sha1 = createHash('sha1').update(PWNED_PASSPHRASE).digest('hex').toUpperCase();
+  const prefix = sha1.slice(0, 5), suffix = sha1.slice(5);
+  const asked = () => stack.pwned.asked.filter((p) => p === prefix).length;
+  const body = async (svc) => { const r = await fetch(svc + 'api/v1/pwned/' + prefix); return { status: r.status, text: await r.text(), cors: r.headers.get('access-control-allow-origin') }; };
+  const first = await body(stack.service);
+  expect(first.status).toBe(200);
+  expect(first.text).toContain(suffix + ':42');
+  expect(first.cors).toBe('*');                  // the page (file://) reads the answer
+  const before = asked();
+  expect((await body(stack.service)).text).toBe(first.text);
+  expect(asked()).toBe(before);                  // the second answer comes from the cache
+  for (const bad of ['abcde', 'ABCD', 'ABCDEF', 'ZZZZZ']) expect((await fetch(stack.service + 'api/v1/pwned/' + bad)).status, bad).toBeGreaterThanOrEqual(400);
+
+  // the dialogs ask the service, show the hit, and the page never talks to another host
+  const ctx = await newContext(browser);
+  const hosts = new Set();
+  ctx.on('request', (r) => { hosts.add(new URL(r.url()).host); });
+  const page = await openApp(ctx, stack, { ui: true });
+  await page.evaluate(() => { window.unlockP = store.unlock(); });
+  let d = page.getByRole('dialog').last();
+  await d.getByRole('button', { name: 'Create a new vault' }).click();
+  await d.getByLabel('Join code').fill(stack.joinCode);
+  await d.getByLabel('Passphrase', { exact: true }).fill(PWNED_PASSPHRASE);
+  await d.getByLabel('Repeat passphrase').fill(PWNED_PASSPHRASE);
+  await d.getByRole('button', { name: 'Create vault' }).click();
+  await expect(d.getByRole('alert').filter({ hasText: 'appears 42 times in known data breaches' })).toBeVisible();
+  expect([...hosts].filter((h) => h !== new URL(stack.origin).host && h !== '')).toEqual([]);
+  await ctx.close();
+
+  // a server that cannot reach Pwned Passwords answers 503; the dialog then accepts only strong passphrases
+  const second = await stack.startServer();
+  stack.pwned.down = true;
+  try {
+    expect((await fetch(second.service + 'api/v1/pwned/AAAAA')).status).toBe(503);
+    const ctx2 = await newContext(browser);
+    const p2 = await openApp(ctx2, stack, { ui: true, service: second.service });
+    await p2.evaluate(() => { window.unlockP = store.unlock(); });
+    d = p2.getByRole('dialog').last();
+    await d.getByRole('button', { name: 'Create a new vault' }).click();
+    await d.getByLabel('Join code').fill(stack.joinCode);
+    await d.getByLabel('Passphrase', { exact: true }).fill('meinhundheisstmax');
+    await d.getByLabel('Repeat passphrase').fill('meinhundheisstmax');
+    await d.getByRole('button', { name: 'Create vault' }).click();
+    await expect(d.getByRole('alert').filter({ hasText: 'not strong enough' })).toBeVisible();
+    await d.getByLabel('Passphrase', { exact: true }).fill('purple elephants marching slowly');
+    await d.getByLabel('Repeat passphrase').fill('purple elephants marching slowly');
+    await d.getByRole('button', { name: 'Create vault' }).click();
+    await expect(d.getByRole('heading', { name: 'Save your access sheet' })).toBeVisible({ timeout: 60000 });
+    await expect(d.getByText('the breach check was not available')).toBeVisible();
+    await ctx2.close();
+  } finally { stack.pwned.down = false; await second.stop(); }
+});
+
+test('join code enforcement (the only way in), suspended scope (operator API)', async ({ browser, stack }) => {
   const ctx = await newContext(browser);
   const page = await openApp(ctx, stack);
   const pass = 'join test passphrase ' + PASS_CANARY;
@@ -770,15 +809,10 @@ test('join code enforcement, enrollment states, suspended scope (operator API)',
   expect(ok.err, JSON.stringify(ok.err)).toBeUndefined();
 
   const op = (method, path, json) => api(stack, method, path, { auth: operatorAuth(stack), json });
-  const noOp = await api(stack, 'PATCH', '/admin/scopes/' + stack.scope, { auth: 'Bearer wdsop.nope', json: { enrollment: 'closed' } });
+  const noOp = await api(stack, 'PATCH', '/admin/scopes/' + stack.scope, { auth: 'Bearer wdsop.nope', json: { status: 'suspended' } });
   expect(noOp.status).toBe(401);
-  // closed enrollment: the right code is not enough
-  expect((await op('PATCH', '/admin/scopes/' + stack.scope, { enrollment: 'closed' })).status).toBe(200);
-  const closed = await create(stack.joinCode);
-  expect([closed.err.status, closed.err.code]).toEqual([403, 'enrollment_closed']);
-  expect((await api(stack, 'GET', '/scopes/' + stack.scope)).json.enrollment).toBe('closed');
-  // suspended scope: reads and unlock still work, record writes and vault creation are refused
-  expect((await op('PATCH', '/admin/scopes/' + stack.scope, { enrollment: 'join_code', status: 'suspended' })).status).toBe(200);
+  // suspended scope (only the operator pauses an app): reads and unlock still work, record writes and vault creation are refused, even with the right code
+  expect((await op('PATCH', '/admin/scopes/' + stack.scope, { status: 'suspended' })).status).toBe(200);
   const susp = await create(stack.joinCode);
   expect([susp.err.status, susp.err.code]).toEqual([403, 'scope_suspended']);
   const st = await page.evaluate(({ accessId, passphrase }) => T(c.unlock({ accessId, passphrase })), { accessId: ok.ok.accessId, passphrase: pass });
@@ -817,7 +851,7 @@ test('read-only mode (server at its disk threshold): the allow-list of PROTOCOL.
     expect([w1.err.status, w1.err.code]).toEqual([503, 'read_only']);
     const w2 = await mp.evaluate(() => T(c.put('doc', { v: 3 })));
     expect([w2.err.status, w2.err.code]).toEqual([503, 'read_only']);
-    // the owner unlocks on the read-only server: maintenance adopts the member's renewal (a roster version without new_slots)
+    // the owner unlocks on the read-only server: maintenance adopts the renewal that the member announced when redeeming (a roster version without new_slots)
     const un = await o.page.evaluate(({ accessId, passphrase }) => T(c.unlock({ accessId, passphrase })), { accessId: o.accessId, passphrase: o.passphrase });
     expect(un.err, JSON.stringify(un.err)).toBeUndefined();
     expect((await o.page.evaluate(() => c.members())).find((x) => x.slotId === inv.slotId).kind).toBe('passphrase');
@@ -832,12 +866,10 @@ test('read-only mode (server at its disk threshold): the allow-list of PROTOCOL.
     });
     expect(hdr.status).toBe(503);
     expect(hdr.headers.get('retry-after')).toBe('3600');
-    // allowed: reads, deleting a record (tombstone), changing the passphrase, renewing keys, purging history
+    // allowed: reads, deleting a record (tombstone), changing the passphrase, purging history
     expect(await o.page.evaluate(() => c.get('doc'))).toEqual({ v: 2 });
     expect(await o.page.evaluate(() => c.delete('scratch'))).toBe(true);
     expect(await o.page.evaluate(() => c.deleteHistory('doc').then((r) => typeof r.freed))).toBe('number');
-    const mr = await mp.evaluate(() => T(c.renewKeys()));
-    expect(mr.err, JSON.stringify(mr.err)).toBeUndefined();
     const cp = await o.page.evaluate(() => T(c.changePassphrase('changed under read-only ' + 'RO3')));
     expect(cp.err, JSON.stringify(cp.err)).toBeUndefined();
     // revocation plus re-encryption (a roster version that removes a slot, then rekey PUTs) is allowed in read-only mode
@@ -901,25 +933,24 @@ test('rate limits of the real server: failures are throttled per IP, a correct t
   } finally { await rl.stop(); }
 });
 
-test('recovery requests: wrong code refused, waiting periods, founder notice, cancel by the founder or the operator', async ({ browser, stack }) => {
-  const o = await createOwner(browser, stack, { recoveryContact: 'owner@example.org' });
-  const noContact = await createOwner(browser, stack);
+test('recovery requests: wrong code refused, the waiting period, founder notice, cancel by the founder or the operator', async ({ browser, stack }) => {
+  const o = await createOwner(browser, stack);
   const op = (method, path, json) => api(stack, method, path, { auth: operatorAuth(stack), json });
   const v = o.vaultId;
-  expect((await api(stack, 'POST', '/admin/vaults/' + v + '/recovery', { auth: 'Bearer wdsop.nope', json: { contact: true } })).status).toBe(401);
+  expect((await api(stack, 'POST', '/admin/vaults/' + v + '/recovery', { auth: 'Bearer wdsop.nope', json: { recovery_code: o.recovery } })).status).toBe(401);
   const other = await I.makeRecoveryCode(); // a well-formed code that belongs to nobody
   const wrong = await op('POST', '/admin/vaults/' + v + '/recovery', { recovery_code: other.canonical });
   expect([wrong.status, wrong.json.error]).toEqual([403, 'recovery_code_invalid']);
-  const none = await op('POST', '/admin/vaults/' + noContact.vaultId + '/recovery', { contact: true });
-  expect([none.status, none.json.error]).toEqual([409, 'no_recovery_contact']);
-  expect((await op('GET', '/admin/vaults/' + v)).json.has_recovery_contact).toBe(true);
+  // there is no code-less path: no contact address is stored, so a request without the code is refused
+  const bare = await op('POST', '/admin/vaults/' + v + '/recovery', { contact: true });
+  expect(bare.status).toBeGreaterThanOrEqual(400);
+  expect((await op('GET', '/admin/vaults/' + v)).json.has_recovery_contact).toBeUndefined();
 
   // the right code (as the client printed it) starts the 72 hour wait
   const started = await op('POST', '/admin/vaults/' + v + '/recovery', { recovery_code: o.recovery });
   expect(started.status).toBe(201);
-  expect(started.json.method).toBe('code');
   expect(started.json.ready_at - started.json.requested).toBe(72 * 3600);
-  expect((await op('POST', '/admin/vaults/' + v + '/recovery', { contact: true })).json.error).toBe('recovery_pending');
+  expect((await op('POST', '/admin/vaults/' + v + '/recovery', { recovery_code: o.recovery })).json.error).toBe('recovery_pending');
   const early = await op('GET', '/admin/vaults/' + v + '/escrow');
   expect([early.status, early.json.error]).toEqual([409, 'recovery_not_ready']);
   const earlyDone = await op('POST', '/admin/vaults/' + v + '/recovery/complete', { roster: {}, keyring: {} });
@@ -927,18 +958,13 @@ test('recovery requests: wrong code refused, waiting periods, founder notice, ca
   // the founder is told on the next unlock (also a read-only or write member's slot would not see it), and cancels
   const d = await unlockElsewhere(browser, stack, o, o.passphrase);
   expect(d.status.err).toBeUndefined();
-  expect(d.status.ok.recovery).toMatchObject({ method: 'code', ready_at: started.json.ready_at });
+  expect(d.status.ok.recovery).toMatchObject({ ready_at: started.json.ready_at });
   const cancelled = await d.page.evaluate(() => T(c.cancelRecovery()));
   expect(cancelled.ok).toEqual({ cancelled: true });
   expect((await d.page.evaluate(() => T(c.cancelRecovery()))).err.status).toBe(404);
   expect((await op('GET', '/admin/vaults/' + v)).json.recovery).toBeNull();
-  // the recovery contact path waits 7 days; the operator can cancel as well
-  const viaContact = await op('POST', '/admin/vaults/' + v + '/recovery', { contact: true });
-  expect(viaContact.status).toBe(201);
-  expect(viaContact.json.method).toBe('contact');
-  expect(viaContact.json.ready_at - viaContact.json.requested).toBe(7 * 86400);
-  const d2 = await unlockElsewhere(browser, stack, o, o.passphrase);
-  expect(d2.status.ok.recovery).toMatchObject({ method: 'contact' });
+  // the operator can cancel as well
+  expect((await op('POST', '/admin/vaults/' + v + '/recovery', { recovery_code: o.recovery })).status).toBe(201);
   expect((await op('DELETE', '/admin/vaults/' + v + '/recovery')).json).toEqual({ cancelled: true });
   expect((await op('GET', '/admin/vaults/' + v)).json.recovery).toBeNull();
   // a member's token never sees the notice
@@ -1020,7 +1046,7 @@ test('faculty recovery end to end: escrow keys open the vault, a new owner is ad
 // A scope of its own: the limits tests change settings that the other tests of this run (one shared scope) must not see, and
 // lowering max_value_bytes is refused while the scope holds a larger value (see the test below).
 async function ownScope(stack, slug) {
-  const r = await api(stack, 'POST', '/admin/scopes', { auth: operatorAuth(stack), json: { slug, name: slug, enrollment: 'join_code', join_code: null, hibp: false, limits: null } });
+  const r = await api(stack, 'POST', '/admin/scopes', { auth: operatorAuth(stack), json: { slug, name: slug, join_code: null, limits: null } });
   expect(r.status, JSON.stringify(r.json)).toBe(201);
   return Object.assign(Object.create(stack), { scope: r.json.scope, joinCode: r.json.join_code });
 }
@@ -1121,7 +1147,7 @@ test('no canary plaintext in any request body the browsers sent, and none in the
   await dlg.getByLabel('Join code').fill(stack.joinCode);
   await dlg.getByRole('button', { name: 'Create vault' }).click();
   await expect(dlg.getByRole('heading', { name: 'Save your access sheet' })).toBeVisible({ timeout: 60000 });
-  await dlg.getByLabel('I have saved the access sheet and the recovery code.').check();
+  await dlg.getByLabel('I have saved the access sheet and the emergency code.').check();
   await dlg.getByRole('button', { name: 'Continue' }).click();
   await page.evaluate(() => window.unlockP);
   await page.evaluate(async ({ name, canary, bin }) => {

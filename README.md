@@ -14,7 +14,7 @@ Service: https://wiai.uni-bamberg.de/datastore/ (the path is permanent: apps har
   values are encrypted with keys that never leave the browser. The server stores ciphertext, opaque record IDs and sizes, and checks
   only the format of what it receives ([PLAN.md](PLAN.md) section 2 lists exactly what it learns).
 - **One exception by design: faculty recovery.** Every vault also wraps its key for the faculty's escrow key, so that a person who has
-  forgotten the passphrase can get access back (proved with the recovery code from the access sheet, or through a recovery contact). The recovery has a waiting period, the vault owner is notified and can
+  forgotten the passphrase can get access back (proved with the emergency code from the access sheet). The recovery has a waiting period, the vault owner is notified and can
   cancel it, and it is logged. Whoever holds the escrow private key could therefore decrypt every vault; every text about the privacy of
   an app has to say so. The public sandbox refuses every recovery.
 - **The library is pinned.** Apps load the library with a Subresource Integrity hash, so a compromised server cannot hand them a
@@ -76,7 +76,7 @@ Run a local server (the documentation is then at http://127.0.0.1:8000/datastore
 
 ```sh
 cd server
-../.venv/bin/python -m wds_server.cli create-scope --db /tmp/wds.db --config config.ini --slug demo --name Demo --enrollment open
+../.venv/bin/python -m wds_server.cli create-scope --db /tmp/wds.db --config config.ini --slug demo --name Demo
 ../.venv/bin/python -m wds_server --db /tmp/wds.db --config config.ini
 ```
 

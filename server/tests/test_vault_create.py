@@ -48,21 +48,28 @@ class CreateVault(ServerTestCase):
         self.assertEqual(r.json()["status"], "suspended")
         self.assertError(Vault(self.env, scope["scope"]).create(), 403, "scope_suspended")
 
-    def test_enrollment_closed_open_and_join_code(self):
-        closed = self.env.create_scope(slug="closed", enrollment="closed")
-        self.assertError(Vault(self.env, closed["scope"]).create(), 403, "enrollment_closed")
-        coded = self.env.create_scope(slug="coded", enrollment="join_code")
+    def test_the_join_code_is_the_only_way_in(self):
+        coded = self.env.create_scope(slug="coded")
         code = coded["join_code"]
         self.assertEqual(len(code), 8)
+        self.assertEqual(coded["enrollment"], "join_code")
         self.assertError(Vault(self.env, coded["scope"]).create(join_code="WRONGWRONG"), 403, "join_code_invalid")
-        self.assertError(Vault(self.env, coded["scope"]).create(join_code=None), 403, "join_code_invalid")
+        self.assertError(Vault(self.env, coded["scope"]).create(mutate=lambda b: b.pop("join_code")), 403, "join_code_invalid")
+        self.assertError(Vault(self.env, coded["scope"]).create(mutate=lambda b: b.update(join_code=None)), 403, "join_code_invalid")
+        # no scope is open, not even one whose code is missing from the database; no "open" or "closed" enrollment exists
+        self.env.sql("SELECT 1")
+        with self.env.svc.db.connection() as conn:
+            conn.execute("UPDATE scopes SET join_code=NULL WHERE scope_id=?", (coded["scope"],))
+        self.assertError(Vault(self.env, coded["scope"]).create(mutate=lambda b: b.pop("join_code")), 403, "join_code_invalid")
+        with self.env.svc.db.connection() as conn:
+            conn.execute("UPDATE scopes SET join_code=? WHERE scope_id=?", (code, coded["scope"]))
         display = code[:4].lower() + " - " + code[4:]
         self.assertEqual(Vault(self.env, coded["scope"]).create(join_code=display).status, 201)
         self.assertEqual(Vault(self.env, coded["scope"]).create(join_code="  " + code + " ").status, 201)
 
     def test_wrong_join_code_counts_as_auth_failure(self):
         self.env.config.rate_create = 1000
-        coded = self.env.create_scope(slug="coded", enrollment="join_code")
+        coded = self.env.create_scope(slug="coded")
         statuses = [Vault(self.env, coded["scope"]).create(join_code="NOPENOPE").status for _ in range(62)]
         self.assertEqual(statuses[:60], [403] * 60)
         self.assertEqual(statuses[60], 429)
@@ -103,13 +110,12 @@ class CreateVault(ServerTestCase):
         self.assertError(r, 503, "read_only")
         self.assertEqual(r.headers["retry-after"], "3600")
 
-    def test_recovery_contact_validation(self):
+    def test_there_is_no_recovery_contact(self):
+        """The optional contact e-mail is gone: the key is unknown, whatever its value."""
         scope = self.env.create_scope()
-        for bad in ("no-at-sign", "a@" + "b" * 260, 5):
-            r = Vault(self.env, scope["scope"]).create(mutate=lambda b, bad=bad: b.update(recovery_contact=bad))
+        for value in (None, "me@uni-bamberg.de"):
+            r = Vault(self.env, scope["scope"]).create(mutate=lambda b, value=value: b.update(recovery_contact=value))
             self.assertError(r, 400, "bad_request")
-        r = Vault(self.env, scope["scope"]).create(mutate=lambda b: b.update(recovery_contact="me@uni-bamberg.de"))
-        self.assertEqual(r.status, 201)
 
 
 class CreateValidation(ServerTestCase):

@@ -54,7 +54,6 @@ class SandboxConfig:
     name: str = "WIAI Datastore sandbox"
     wipe_time: str = "03:30"  # local time of the nightly wipe, HH:MM
     timezone: str = "Europe/Berlin"
-    hibp: bool = False
     max_value_bytes: int = 524288
     vault_bytes: int = 2097152
     scope_bytes: int = 1073741824
@@ -112,6 +111,7 @@ class Config:
     read_only_threshold: float = 0.85
     sweep_interval: int = 3600
     privacy_url: str | None = None
+    pwned_url: str = "https://api.pwnedpasswords.com/range/"  # the breach check asks this service (api_public.get_pwned); empty = off, answers 503
     help_contact: str = ""  # shown in the dashboard help box ("Questions? ..."): an e-mail address or a short text; empty = no line
     # login.psi and the dashboard (PLAN 6, 10)
     loginpsi_key_file: str | None = None
@@ -137,6 +137,8 @@ class Config:
     rate_id_window: int = 60
     rate_create: int = 30
     rate_create_window: int = 3600
+    rate_pwned: int = 120  # breach-check requests per client (IPv6 by /64) in rate_pwned_window; every request counts
+    rate_pwned_window: int = 60
     escrow: list[EscrowSet] = field(default_factory=list)
     operator_token_hashes: list[bytes] = field(default_factory=list)
     sandbox: SandboxConfig | None = None
@@ -152,6 +154,8 @@ class Config:
                 raise ValueError(f"config: default for {key} must be between 1 and its ceiling")
         if not 0 < self.read_only_threshold <= 1:
             raise ValueError("config: read_only_threshold must be in (0, 1]")
+        if self.pwned_url and not self.pwned_url.startswith(("https://", "http://")):
+            raise ValueError("config: pwned_url must be an http(s) URL ending in /range/, or empty")
         if not 60 <= self.session_idle <= self.session_absolute:
             raise ValueError("config: session_idle must be at least 60 and not above session_absolute")
         if self.sandbox is not None:
@@ -202,7 +206,7 @@ def _load_sandbox(parser) -> SandboxConfig | None:
     d = SandboxConfig(scope_id=scope_id)
     return SandboxConfig(
         scope_id=scope_id, enabled=boolean("enabled", d.enabled), name=raw("name") or d.name,
-        wipe_time=raw("wipe_time") or d.wipe_time, timezone=raw("timezone") or d.timezone, hibp=boolean("hibp", d.hibp),
+        wipe_time=raw("wipe_time") or d.wipe_time, timezone=raw("timezone") or d.timezone,
         max_value_bytes=integer("max_value_bytes", d.max_value_bytes), vault_bytes=integer("vault_bytes", d.vault_bytes),
         scope_bytes=integer("scope_bytes", d.scope_bytes), max_vaults=integer("max_vaults", d.max_vaults),
         history_versions=integer("history_versions", d.history_versions),
@@ -232,6 +236,9 @@ def load_config(path: str | Path | None) -> Config:
     cfg.sweep_interval = int(get(s, "sweep_interval", cfg.sweep_interval))
     cfg.privacy_url = get(s, "privacy_url", cfg.privacy_url)
     cfg.help_contact = (get(s, "help_contact", "") or "").strip()[:200]
+    cfg.pwned_url = (get(s, "pwned_url", cfg.pwned_url) or "").strip()
+    if cfg.pwned_url and not cfg.pwned_url.endswith("/"):
+        cfg.pwned_url += "/"
     cfg.library_latest = get(s, "library_latest", cfg.library_latest)
     deprecated = get(s, "library_deprecated", "")
     cfg.library_deprecated = [v for v in deprecated.replace(",", " ").split() if v]
@@ -257,7 +264,7 @@ def load_config(path: str | Path | None) -> Config:
 
     r = "ratelimit"
     for attr in ("rate_ip_failures", "rate_ip_window", "rate_id_failures", "rate_id_window", "rate_create",
-                 "rate_create_window"):
+                 "rate_create_window", "rate_pwned", "rate_pwned_window"):
         value = get(r, attr[len("rate_"):], None)
         if value is not None:
             setattr(cfg, attr, int(value))

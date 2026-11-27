@@ -87,15 +87,16 @@ export async function lockPage(page) {
   await loaded;
 }
 
-// HIBP stand-in: the passphrase in opts.pwned is "found"; everything else is padded noise.
+// Breach check stand-in (the service's api/v1/pwned/<prefix>): the passphrase in opts.pwned is "found"; everything else is padded noise.
+// opts.down answers like a service whose server cannot reach Pwned Passwords (503). Returns the list of prefixes asked for.
 export async function mockHibp(page, { pwned = [], down = false } = {}) {
   const seen = [];
   const sha1 = (s) => createHash('sha1').update(s.normalize('NFC')).digest('hex').toUpperCase();
-  await page.route('https://api.pwnedpasswords.com/range/*', async (route) => {
+  await page.route('**/api/v1/pwned/*', async (route) => {
     const req = route.request();
-    const prefix = req.url().split('/range/')[1];
-    seen.push({ prefix, padding: req.headers()['add-padding'] });
-    if (down) return route.abort('connectionrefused');
+    const prefix = req.url().split('/api/v1/pwned/')[1];
+    seen.push({ prefix });
+    if (down) return route.fulfill({ status: 503, contentType: 'text/plain', headers: { 'access-control-allow-origin': '*' }, body: 'unavailable' });
     const lines = ['0018A45C4D1DEF81644B54AB7F969B88D65:0', '00D4F6E8FA6EECAD2A3AA415EEC418D38EC:0'];
     pwned.forEach((p) => { const h = sha1(p); if (h.startsWith(prefix)) lines.push(h.slice(5) + ':42'); });
     return route.fulfill({ status: 200, contentType: 'text/plain', headers: { 'access-control-allow-origin': '*' }, body: lines.join('\r\n') });
@@ -110,11 +111,12 @@ export async function shot(page, name) {
 
 export function dialog(page) { return page.getByRole('dialog').last(); }
 
-// Drive the create-vault flow through the dialogs. Returns {accessId, recovery, passphrase, keyFile}.
-export async function createVaultViaUi(page, passphrase = 'purple-elephant-marching-slowly', { shots } = {}) {
+// Drive the create-vault flow through the dialogs. Returns {accessId, recovery, passphrase}. A scope with a join code needs opts.joinCode.
+export async function createVaultViaUi(page, passphrase = 'purple-elephant-marching-slowly', { shots, joinCode = 'ANYCODE1' } = {}) {
   await page.evaluate(() => { window.unlockP = store.unlock(); });
   const dlg = dialog(page);
   await dlg.getByRole('button', { name: 'Create a new vault' }).click();
+  if (await dlg.locator('[data-wds=join-code]').count()) await dlg.locator('[data-wds=join-code]').fill(joinCode);
   await dlg.getByLabel('Passphrase', { exact: true }).fill(passphrase);
   await dlg.getByLabel('Repeat passphrase').fill(passphrase);
   if (shots) await shot(page, shots + '-create');
@@ -122,24 +124,17 @@ export async function createVaultViaUi(page, passphrase = 'purple-elephant-march
   await expect(dlg.getByRole('heading', { name: 'Save your access sheet' })).toBeVisible();
   const accessId = (await dlg.locator('[data-wds=access-id]').innerText()).trim();
   const recovery = (await dlg.locator('[data-wds=recovery-code]').innerText()).trim();
-  let keyFile = null;
-  const dl = page.waitForEvent('download');
-  await dlg.getByRole('button', { name: 'Download key file' }).click();
-  const d = await dl;
-  keyFile = { name: d.suggestedFilename(), path: join(tmpDir(), 'key-' + Date.now() + '.wds.json') };
-  await d.saveAs(keyFile.path);
   if (shots) await shot(page, shots + '-sheet');
-  await dlg.getByLabel('I have saved the access sheet and the recovery code.').check();
+  await dlg.getByLabel('I have saved the access sheet and the emergency code.').check();
   await dlg.getByRole('button', { name: 'Continue' }).click();
   await page.evaluate(() => window.unlockP);
-  return { accessId, recovery, passphrase, keyFile };
+  return { accessId, recovery, passphrase };
 }
 
-export async function unlockViaUi(page, accessId, passphrase, { useKeyFile } = {}) {
+export async function unlockViaUi(page, accessId, passphrase) {
   await page.evaluate(() => { window.unlockP = store.unlock(); });
   const dlg = dialog(page);
-  if (useKeyFile) await dlg.locator('[data-wds=keyfile]').setInputFiles(useKeyFile);
-  else if (accessId) await dlg.getByLabel('Access ID').fill(accessId);
+  if (accessId) await dlg.getByLabel('Access ID').fill(accessId);
   await dlg.getByLabel('Passphrase', { exact: true }).fill(passphrase);
   await dlg.getByRole('button', { name: 'Unlock' }).click();
   await page.evaluate(() => window.unlockP);

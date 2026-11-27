@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 // wds-recover: operator recovery of a vault (PLAN 5.9, PROTOCOL 9). Run it on the operator's laptop, never on the server.
 //
-//   node tools/wds-recover.mjs start    <vault-id>                      start it with the user's recovery code, asked for on the terminal (or read from stdin)
+//   node tools/wds-recover.mjs start    <vault-id>                      start it with the user's emergency code, asked for on the terminal (or read from stdin)
 //   node tools/wds-recover.mjs start    <vault-id> -                    the same, read from stdin (echo CODE | wds-recover start <vault-id> -)
-//   node tools/wds-recover.mjs start    <vault-id> --contact            start it by the recovery contact (7 days)
 //   node tools/wds-recover.mjs status   <vault-id>                      show the vault and its pending recovery
 //   node tools/wds-recover.mjs cancel   <vault-id>                      cancel the pending recovery
 //   node tools/wds-recover.mjs complete <vault-id> --escrow-key <file>  after the waiting period: add one owner invite and print its code
@@ -17,7 +16,7 @@
 //   --yes                 complete: do not ask for confirmation
 //   --json                machine-readable output on stdout
 //
-// The recovery code is a credential. A code given as a command-line argument is visible to other processes (ps) and ends up in the shell history, so
+// The emergency code is a credential, and the only way to start a recovery (72 hours of waiting, then "complete"). A code given as a command-line argument is visible to other processes (ps) and ends up in the shell history, so
 // the tool asks for it instead; a code in the argument list still works but triggers a warning.
 // What "complete" does: fetch the escrow material with the operator token, check the roster chain, open the escrow slot's keyring
 // entry with the escrow private key, build a roster version that adds exactly one owner invite and changes nothing else, sign it
@@ -38,10 +37,7 @@ if (!I) throw new Error('wds-recover needs the development build of client/src/w
 export const DEFAULT_BASE = 'https://wiai.uni-bamberg.de/datastore';
 const DEFAULT_TOKEN_FILE = join(homedir(), '.config', 'wiai-datastore', 'operator-token');
 export const MAX_EXPIRES_HOURS = 359;
-const RECOVERY_NOTE = {
-  code: 'The founder sees "a recovery of this vault was requested" on the next unlock and can cancel it.',
-  contact: 'The recovery contact has to be confirmed by you (mail) before you run "complete".',
-};
+const RECOVERY_NOTE = 'The founder sees "a recovery of this vault was requested" on the next unlock and can cancel it.';
 
 export class ToolError extends Error {
   constructor(message, { exitCode = 1, code } = {}) { super(message); this.exitCode = exitCode; this.code = code; }
@@ -149,15 +145,10 @@ export async function cmdStatus(call, vaultId, now = () => Math.floor(Date.now()
   return { vault: v, ready: r ? left <= 0 : false, secondsLeft: r ? Math.max(0, left) : null };
 }
 
-export async function cmdStart(call, vaultId, { code, contact }) {
-  let body;
-  if (contact) body = { contact: true };
-  else {
-    let parsed;
-    try { parsed = await core.parseRecoveryCode(code); } catch (e) { throw new ToolError('that is not a recovery code (28 symbols, e.g. XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX): ' + e.message, { exitCode: 2 }); }
-    body = { recovery_code: parsed.canonical };
-  }
-  return call('POST', '/vaults/' + vaultId + '/recovery', body);
+export async function cmdStart(call, vaultId, { code }) {
+  let parsed;
+  try { parsed = await core.parseRecoveryCode(code); } catch (e) { throw new ToolError('that is not an emergency code (28 symbols, e.g. XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX): ' + e.message, { exitCode: 2 }); }
+  return call('POST', '/vaults/' + vaultId + '/recovery', { recovery_code: parsed.canonical });
 }
 
 export async function cmdCancel(call, vaultId) { return call('DELETE', '/vaults/' + vaultId + '/recovery'); }
@@ -236,11 +227,11 @@ export async function cmdComplete(call, vaultId, key, { expiresInHours = 72, dry
 // ---- command line ----
 const HELP = readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').filter((l) => l.startsWith('//')).map((l) => l.slice(3)).join('\n');
 
-// The recovery code from the terminal (hidden is not possible with readline, so it is read as one line on stderr's prompt) or from stdin.
+// The emergency code from the terminal (hidden is not possible with readline, so it is read as one line on stderr's prompt) or from stdin.
 async function readCode(io, stdin = process.stdin) {
   if (stdin.isTTY) {
     const rl = createInterface({ input: stdin, output: process.stderr });
-    try { return (await rl.question('Recovery code of the user: ')).trim(); } finally { rl.close(); }
+    try { return (await rl.question('Emergency code of the user: ')).trim(); } finally { rl.close(); }
   }
   let text = '';
   for await (const chunk of stdin) { text += chunk; if (text.length > 4096) break; }
@@ -269,23 +260,20 @@ export async function main(argv, io = { out: (s) => console.log(s), err: (s) => 
       if (json) io.out(JSON.stringify({ ...s.vault, ready: s.ready, seconds_left: s.secondsLeft })); else {
         const v = s.vault, r = v.recovery;
         io.out('vault ' + v.vault + ' in scope ' + v.scope + (v.deleted ? '  (deleted)' : ''));
-        io.out('  epoch ' + v.epoch + ', roster version ' + v.roster_version + ', ' + v.bytes + ' bytes, recovery contact: ' + (v.has_recovery_contact ? 'yes' : 'no'));
-        io.out(r ? '  recovery: pending, method ' + r.method + ', requested ' + when(r.requested) + ', ' + (s.ready ? 'READY since ' + when(r.ready_at) : 'ready at ' + when(r.ready_at) + ' (' + span(s.secondsLeft) + ' left)') : '  recovery: none pending');
+        io.out('  epoch ' + v.epoch + ', roster version ' + v.roster_version + ', ' + v.bytes + ' bytes');
+        io.out(r ? '  recovery: pending, requested ' + when(r.requested) + ', ' + (s.ready ? 'READY since ' + when(r.ready_at) : 'ready at ' + when(r.ready_at) + ' (' + span(s.secondsLeft) + ' left)') : '  recovery: none pending');
       }
       return 0;
     }
     if (command === 'start') {
-      if (flags.contact && rest.length) throw new ToolError('use either a recovery code or --contact, not both', { exitCode: 2 });
       let code = rest.join(' ');
-      if (!flags.contact) {
-        if (!rest.length || code === '-') code = await (io.readCode ? io.readCode() : readCode(io));
-        else io.err('warning: a recovery code on the command line is visible to other processes and stays in the shell history; omit it and the tool asks for it');
-        if (!code) throw new ToolError('start needs the recovery code (or --contact)', { exitCode: 2 });
-      }
-      const r = await cmdStart(call, vaultId, { code, contact: !!flags.contact });
+      if (!rest.length || code === '-') code = await (io.readCode ? io.readCode() : readCode(io));
+      else io.err('warning: an emergency code on the command line is visible to other processes and stays in the shell history; omit it and the tool asks for it');
+      if (!code) throw new ToolError('start needs the emergency code', { exitCode: 2 });
+      const r = await cmdStart(call, vaultId, { code });
       if (json) io.out(JSON.stringify(r)); else {
-        io.out('recovery started (method ' + r.method + '); waiting period ends ' + when(r.ready_at) + ' (' + span(r.ready_at - Math.floor(Date.now() / 1000)) + ')');
-        io.out(RECOVERY_NOTE[r.method]);
+        io.out('recovery started; waiting period ends ' + when(r.ready_at) + ' (' + span(r.ready_at - Math.floor(Date.now() / 1000)) + ')');
+        io.out(RECOVERY_NOTE);
         io.out('Then: wds-recover complete ' + vaultId + ' --escrow-key <file>');
       }
       return 0;

@@ -237,7 +237,6 @@ test('K_wrap, K_commit and K_state are non-extractable CryptoKeys in the session
   await ctx.founder.put('a', 1);
   await ctx.founder.changePassphrase('another good passphrase');
   assert.equal(ctx.founder.s.kWrap.extractable, false);
-  await ctx.founder.renewKeys();
   const again = newClient(ctx.world, { storage: ctx.world.storage });
   await again.unlock({ accessId: ctx.created.accessId, passphrase: 'another good passphrase' });
   assert.equal(await again.get('a'), 1);

@@ -29,7 +29,7 @@ const byWds = (page, name) => dialog(page).locator('[data-wds="' + name + '"]');
 async function createByAttrs(page, { joinCode, pass = PASS } = {}) {
   await page.evaluate(() => { window.unlockP = store.unlock(); });
   await byWds(page, 'to-create').click();
-  if (joinCode) await byWds(page, 'join-code').fill(joinCode);
+  if (await byWds(page, 'join-code').count()) await byWds(page, 'join-code').fill(joinCode || 'ANYCODE1');   // every scope but the sandbox asks for its join code
   await byWds(page, 'passphrase').fill(pass);
   await byWds(page, 'passphrase-repeat').fill(pass);
   await byWds(page, 'create-submit').click();
@@ -46,7 +46,7 @@ async function finishSheet(page) {
 for (const [lang, locale] of [['en', 'en-US'], ['de', 'de-DE']]) {
   test('dialog controls carry data-wds, views carry data-wds-view: unlock flow in ' + lang, async ({ browser }) => {
     const ctx = await browser.newContext({ locale });
-    const w2 = await startTestWorld({ scope: { enrollment: 'join_code', join_code: 'ABCDEF23' } });
+    const w2 = await startTestWorld({ scope: { join_code: 'ABCDEF23' } });
     try {
       // an unknown scope: the error view
       const bad = await openApp(await browser.newContext({ locale }), w2, { cfg: { scope: 'nope-k7m2a9' } });
@@ -58,18 +58,18 @@ for (const [lang, locale] of [['en', 'en-US'], ['de', 'de-DE']]) {
       await mockHibp(page);
       await page.evaluate(() => { window.unlockP = store.unlock(); });
       await expect(byWds(page, 'unlock-submit')).toBeVisible();
-      await check(page, 'unlock', ['access-id-input', 'keyfile', 'keyfile-button', 'passphrase', 'show-passphrase', 'unlock-submit', 'to-create', 'to-redeem', 'form-error']);
+      await check(page, 'unlock', ['access-id-input', 'passphrase', 'show-passphrase', 'unlock-submit', 'to-create', 'to-redeem', 'form-error']);
       await byWds(page, 'to-redeem').click();
       await check(page, 'redeem', ['invite-code-input', 'passphrase', 'passphrase-repeat', 'show-passphrase', 'redeem-submit', 'back', 'form-error']);
       await byWds(page, 'back').click();
       await byWds(page, 'to-create').click();
-      await check(page, 'create', ['join-code', 'passphrase', 'passphrase-repeat', 'show-passphrase', 'recovery-contact-toggle', 'recovery-contact', 'create-submit', 'back', 'form-error']);
+      await check(page, 'create', ['join-code', 'passphrase', 'passphrase-repeat', 'show-passphrase', 'create-submit', 'back', 'form-error']);
       await byWds(page, 'join-code').fill('abcd-ef23');
       await byWds(page, 'passphrase').fill(PASS); await byWds(page, 'passphrase-repeat').fill(PASS);
       await byWds(page, 'show-passphrase').check();
       await byWds(page, 'create-submit').click();
       await expect(byWds(page, 'access-id')).toBeVisible();
-      await check(page, 'sheet', ['access-id', 'recovery-code', 'sheet-keyfile', 'sheet-print', 'sheet-download', 'sheet-confirm', 'sheet-continue', 'form-error']);
+      await check(page, 'sheet', ['access-id', 'recovery-code', 'sheet-print', 'sheet-download', 'sheet-confirm', 'sheet-continue', 'form-error']);
       await finishSheet(page);
       expect(await page.evaluate(() => store.status().role)).toBe('owner');
     } finally { await w2.close(); }
@@ -89,13 +89,13 @@ test('dialog controls carry data-wds: conflict, history, the vault dialog, revok
   await other.get('note'); await other.put('note', { t: 2 });
   await page.evaluate(() => { window.p = store.set('note', { t: 3 }); });
   await expect(byWds(page, 'conflict-mine')).toBeVisible();
-  await check(page, 'conflict', ['conflict-theirs', 'conflict-mine', 'conflict-download', 'form-error']);
+  await check(page, 'conflict', ['conflict-theirs', 'conflict-mine', 'form-error']);
   await byWds(page, 'conflict-mine').click();
   await page.evaluate(() => window.p);
   await other.get('note'); await other.put('note', { t: 4 });
   await page.evaluate(() => { window.p = store.remove('note'); });
   await expect(byWds(page, 'conflict-theirs')).toBeVisible();
-  await check(page, 'conflict', ['conflict-theirs', 'conflict-mine', 'conflict-download']);
+  await check(page, 'conflict', ['conflict-theirs', 'conflict-mine']);
   await byWds(page, 'conflict-theirs').click();
   await page.evaluate(() => window.p);
 
@@ -111,7 +111,7 @@ test('dialog controls carry data-wds: conflict, history, the vault dialog, revok
   // sharing: owner with an unused invite, a redeemed member, an invite code on screen
   await page.evaluate(() => { window.shareP = store.openVault(); });
   await expect(byWds(page, 'invite-create')).toBeVisible();
-  await check(page, 'share', ['close', 'form-error', 'invite-role', 'invite-label', 'invite-create', 'me-sheet', 'me-keyfile', 'me-renew', 'me-export', 'me-lock', 'me-passphrase-toggle', 'passphrase', 'passphrase-repeat', 'show-passphrase', 'me-passphrase-submit']);
+  await check(page, 'share', ['close', 'form-error', 'invite-role', 'invite-label', 'invite-create', 'me-sheet', 'me-export', 'me-lock', 'me-passphrase-toggle', 'passphrase', 'passphrase-repeat', 'show-passphrase', 'me-passphrase-submit']);
   await byWds(page, 'invite-label').fill('Anna');
   await byWds(page, 'invite-create').click();
   await expect(byWds(page, 'invite-code')).toBeVisible();
@@ -138,7 +138,7 @@ test('dialog controls carry data-wds: conflict, history, the vault dialog, revok
   // the access sheet again, from the vault dialog
   await page.evaluate(() => { window.shareP = store.openVault(); });
   await byWds(page, 'me-sheet').click();
-  await check(page, 'sheet', ['access-id', 'sheet-keyfile', 'sheet-print', 'sheet-download', 'sheet-continue']);
+  await check(page, 'sheet', ['access-id', 'sheet-print', 'sheet-download', 'sheet-continue']);
   expect(await dialog(page).locator('[data-wds=recovery-code], [data-wds=sheet-confirm]').count()).toBe(0);
   await byWds(page, 'sheet-continue').click();
   await check(page, 'share', ['me-sheet']);
@@ -210,12 +210,12 @@ test('a read-only member: the sharing dialog has only the own-access controls', 
   await byWds(m, 'passphrase').fill('member passphrase with words'); await byWds(m, 'passphrase-repeat').fill('member passphrase with words');
   await byWds(m, 'redeem-submit').click();
   await expect(byWds(m, 'sheet-confirm')).toBeVisible();
-  await check(m, 'sheet', ['access-id', 'sheet-keyfile', 'sheet-confirm', 'sheet-continue']);
+  await check(m, 'sheet', ['access-id', 'sheet-confirm', 'sheet-continue']);
   expect(await dialog(m).locator('[data-wds=recovery-code]').count()).toBe(0);
   await finishSheet(m);
   await m.evaluate(() => { window.shareP = store.openVault(); });
-  await expect(byWds(m, 'me-keyfile')).toBeVisible();
-  const r = await check(m, 'share', ['me-sheet', 'me-keyfile', 'me-renew', 'me-export', 'me-lock', 'me-passphrase-toggle']);
+  await expect(byWds(m, 'me-sheet')).toBeVisible();
+  const r = await check(m, 'share', ['me-sheet', 'me-export', 'me-lock', 'me-passphrase-toggle']);
   expect(r.names).not.toContain('invite-create');
 });
 
@@ -224,7 +224,7 @@ test('a read-only member: the sharing dialog has only the own-access controls', 
 // ---------------------------------------------------------------------------------------------------------------------
 async function sandboxWorld(extra) {
   await w.close();
-  w = await startTestWorld({ scope: Object.assign({ hibp: false, sandbox: { next_wipe: Math.floor(Date.now() / 1000) + 6 * 3600, last_wipe: null } }, extra || {}) });
+  w = await startTestWorld({ scope: Object.assign({ sandbox: { next_wipe: Math.floor(Date.now() / 1000) + 6 * 3600, last_wipe: null } }, extra || {}) });
   return w;
 }
 const HIDE_CSS = '[data-wds=sandbox-banner],[data-wds=sandbox-badge],.wds-msg{display:none!important;visibility:hidden!important;opacity:0!important}';
@@ -251,7 +251,6 @@ for (const [lang, locale, t] of [
     await expect(dialog(page).locator('h2')).toHaveText(t.create);
     await expect(dialog(page).locator('[data-wds=sandbox-banner]')).toBeVisible();
     await expect(byWds(page, 'create-submit')).toHaveText(t.btn);
-    expect(await dialog(page).locator('[data-wds=recovery-contact], [data-wds=recovery-contact-toggle]').count()).toBe(0);
     await check(page, 'create', ['passphrase', 'passphrase-repeat', 'create-submit', 'back', 'sandbox-banner']);
     await expect(dialog(page).locator('.wds-box')).toContainText(t.escrow);   // no promise of a recovery that the sandbox does not offer
     await shot(page, lang + '-sandbox-create');
@@ -261,18 +260,15 @@ for (const [lang, locale, t] of [
     await expect(dialog(page).locator('h2')).toHaveText(t.sheet);
     await expect(dialog(page).getByText(t.note)).toBeVisible();
     expect(await dialog(page).locator('[data-wds=recovery-code]').count()).toBe(0);
-    await check(page, 'sheet', ['access-id', 'sheet-keyfile', 'sheet-confirm', 'sheet-continue', 'sandbox-banner']);
+    await check(page, 'sheet', ['access-id', 'sheet-confirm', 'sheet-continue', 'sandbox-banner']);
     await shot(page, lang + '-sandbox-sheet');
     await expect(dialog(page).locator('dl dd').first()).toHaveText('wds ui test – Test');
     expect(await byWds(page, 'access-id').evaluate((e) => getComputedStyle(e).whiteSpace)).toBe('nowrap');   // a code is not broken over two lines
-    const kf = page.waitForEvent('download');
-    await byWds(page, 'sheet-keyfile').click();
-    expect((await kf).suggestedFilename()).toMatch(/^wds-ui-test-[a-z0-9-]+-[A-Z0-9]{4}\.wds\.json$/);   // the file name carries the page, too
     const dl = page.waitForEvent('download');
     await byWds(page, 'sheet-download').click();
     const sheetHtml = await (await dl).createReadStream().then((s) => new Promise((res) => { let b = ''; s.on('data', (c) => { b += c; }); s.on('end', () => res(b)); }));
     expect(sheetHtml).toContain(t.note);
-    expect(sheetHtml).not.toMatch(/<th scope="row">(Wiederherstellungscode|Recovery code)</);   // the row of the code is gone
+    expect(sheetHtml).not.toMatch(/<th scope="row">(Notfallcode|Emergency code)</);   // the row of the code is gone
     await finishSheet(page);
     // after unlock: a corner badge stays for the whole session; the host page cannot hide it, and it takes no click
     const badge = page.locator('[data-wds=sandbox-badge]');
@@ -296,7 +292,8 @@ test('a normal scope shows none of the sandbox marks; status().sandbox is false'
   expect(await page.locator('[data-wds=sandbox-banner]').count()).toBe(0);
   await byWds(page, 'to-create').click();
   await expect(byWds(page, 'create-submit')).toHaveText('Create vault');
-  expect(await dialog(page).locator('[data-wds=recovery-contact]').count()).toBe(1);
+  expect(await dialog(page).locator('[data-wds=recovery-contact]').count()).toBe(0);   // no optional contact address any more
+  await byWds(page, 'join-code').fill('ANYCODE1');   // every scope but the sandbox asks for the join code
   await byWds(page, 'passphrase').fill(PASS); await byWds(page, 'passphrase-repeat').fill(PASS);
   await mockHibp(page);
   await byWds(page, 'create-submit').click();
@@ -421,6 +418,7 @@ test('data-wds-view is never empty or missing while a dialog is visible; aria-bu
   await expect(dialog(page)).toHaveAttribute('data-wds-view', 'unlock');
   await expect(dialog(page)).not.toHaveAttribute('aria-busy', /.*/);       // a view with its controls is ready
   await byWds(page, 'to-create').click();
+  await byWds(page, 'join-code').fill('ANYCODE1');
   await byWds(page, 'passphrase').fill(PASS); await byWds(page, 'passphrase-repeat').fill(PASS);
   w.world.server.delayMs = 400;                                            // the vault creation request takes a moment
   await byWds(page, 'create-submit').click();

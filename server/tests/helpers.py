@@ -73,6 +73,7 @@ class Env:
         self.config = cfg
         self.clock = Clock()
         self.disk = [disk]
+        self.join_codes: dict[str, str] = {}
         self.app = create_app(cfg, os.path.join(self.tmp, "test.db"), clock=self.clock, disk_probe=lambda: self.disk[0])
         self.svc = self.app.state.svc
         self.client = Client(self.app)
@@ -87,17 +88,18 @@ class Env:
         return {"Authorization": "Bearer " + self.op_token}
 
     def create_scope(self, slug="testapp", name="Test App", **kw) -> dict:
-        body = {"slug": slug, "name": name, "enrollment": kw.pop("enrollment", "open"), "join_code": None,
-                "hibp": True, "limits": None}
+        body = {"slug": slug, "name": name, "join_code": None, "limits": None}
         body.update(kw)
         r = self.client.post_json(API + "/admin/scopes", body, self.op)
         assert r.status == 201, r
-        return r.json()
+        doc = r.json()
+        self.join_codes[doc["scope"]] = doc["join_code"]  # Vault.create uses it unless a test sends another one
+        return doc
 
     def new_vault(self, scope=None, **kw) -> "Vault":
         scope = scope or self.create_scope()
         v = Vault(self, scope["scope"], **kw)
-        r = v.create(join_code=scope.get("join_code"))
+        r = v.create(join_code=scope.get("join_code") or (self.sql("SELECT join_code FROM scopes WHERE scope_id=?", (scope["scope"],)) or [[None]])[0][0])
         assert r.status == 201, r
         return v
 
@@ -206,11 +208,11 @@ class Vault:
             "slots": [{"slot": self.slot, "access_id": self.access_id, "kdf": kdf_doc(),
                        "token_hash": b64(sha256(self.token)), "wrapped": b64(envelope(2, 0, 200))}],
             "keyring": self.keyring_for(self.slots),
-            "recovery_hash": b64(sha256(self.recovery_code)), "recovery_contact": None, "join_code": join_code,
+            "recovery_hash": b64(sha256(self.recovery_code)), "join_code": join_code,
         }
 
     def create(self, join_code=None, mutate=None, ip=None):
-        body = self.create_body(join_code)
+        body = self.create_body(join_code if join_code is not None else self.env.join_codes.get(self.scope))
         if mutate:
             mutate(body)
         self.last_body = body

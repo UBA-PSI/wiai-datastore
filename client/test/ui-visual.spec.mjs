@@ -48,6 +48,7 @@ for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 800 
     await expect(dlg.getByRole('button', { name: 'Create a new vault' })).toBeVisible();
     expectGoodRows(await checkRows(page), 1);
     await dlg.getByRole('button', { name: 'Create a new vault' }).click();
+    await dlg.getByLabel('Join code').fill('ANYCODE1');
     expectGoodRows(await checkRows(page), 1);
     await dlg.getByLabel('Show passphrase').check();                              // the label is the control's name and clickable
     await expect(dlg.getByLabel('Passphrase', { exact: true })).toHaveAttribute('type', 'text');
@@ -57,7 +58,7 @@ for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 800 
     await expect(dlg.getByRole('heading', { name: 'Save your access sheet' })).toBeVisible();
     // the access sheet: the box that has to be ticked before "Continue" works
     expectGoodRows(await checkRows(page), 1);
-    const ack = dlg.getByLabel('I have saved the access sheet and the recovery code.');
+    const ack = dlg.getByLabel('I have saved the access sheet and the emergency code.');
     await ack.scrollIntoViewIfNeeded();
     await expect(ack).toBeVisible();
     expect((await ack.boundingBox()).width).toBeLessThanOrEqual(24);
@@ -95,7 +96,7 @@ test('unlocking a deleted vault says that the vault was deleted, not that an inv
 });
 
 test('a wrong join code is reported at the join code field, which takes the focus', async ({ context }) => {
-  const w2 = await startTestWorld({ scope: { enrollment: 'join_code', join_code: 'ABCDEF23' } });
+  const w2 = await startTestWorld({ scope: { join_code: 'ABCDEF23' } });
   try {
     const page = await openApp(context, w2);
     await mockHibp(page);
@@ -124,6 +125,7 @@ test('passphrases: well-known German ones are refused, and without a breach chec
   await page.evaluate(() => { window.unlockP = store.unlock(); });
   const d = dialog(page);
   await d.getByRole('button', { name: 'Create a new vault' }).click();
+  await d.getByLabel('Join code').fill('ANYCODE1');
   const pw = d.getByLabel('Passphrase', { exact: true }), rep = d.getByLabel('Repeat passphrase');
   await pw.fill('ichliebedich123'); await rep.fill('ichliebedich123');
   await d.getByRole('button', { name: 'Create vault' }).click();
@@ -147,13 +149,12 @@ test('<html lang>: dialogs follow the page language; the faculty key has its own
   const d = dialog(page);
   await expect(d.getByRole('heading', { name: 'Tresor' })).toBeVisible();
   const escrow = d.locator('[data-wds=person-escrow]');
-  await expect(escrow).toContainText('Wiederherstellungsschlüssel der Fakultät');
+  await expect(escrow).toContainText('Schlüssel der Fakultät');
+  await expect(escrow).toContainText('die Fakultät verwahrt für Notfälle einen Wiederherstellungsschlüssel');   // the one escrow sentence, as in the create form
   await expect(escrow.locator('.wds-badge')).toHaveText('Fakultät, nur zur Wiederherstellung');
   await expect(escrow).not.toContainText('Eigentümer');
   // each explanation directly below its button
-  const group = d.locator('.wds-act').filter({ has: page.getByRole('button', { name: 'Meine Schlüssel erneuern' }) });
-  await expect(group).toHaveCount(1);
-  await expect(group.locator('.wds-hint')).toContainText('Ersetzt die Schlüssel');
+  await expect(d.getByRole('button', { name: /Schlüssel erneuern|Schlüsseldatei/ })).toHaveCount(0);   // no manual renewal, no key file
   await expect(d.locator('.wds-act').filter({ has: page.getByRole('button', { name: 'Jetzt sperren' }) }).locator('.wds-hint')).toBeVisible();
   // the export reports in the language of the page
   await page.evaluate(() => store.set('a', { x: 1 }));

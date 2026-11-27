@@ -4,7 +4,7 @@
 //    documented script tag and Content-Security-Policy: no policy violation, Argon2id works, data survives a reload, export works.
 //  - A negative control shows that the policy really blocks (without 'wasm-unsafe-eval' no vault can be created).
 //  - The onerror fallback shows the message when the library cannot be loaded or its hash does not match.
-//  - docs/site/export.html: served page and a saved copy opened from file://, with typed access ID and with a key file.
+//  - docs/site/export.html: served page and a saved copy opened from file://, with typed access ID.
 import { test as base, expect } from '@playwright/test';
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -71,8 +71,8 @@ function newPage(ctx) {
 }
 async function newContext(browser, opts = {}) {
   const ctx = await browser.newContext({ acceptDownloads: true, viewport: { width: 1100, height: 800 }, locale: 'en-US', ...opts });
-  // the breach check of the passphrase dialogs: padded noise, no match (the real service is not reachable from tests)
-  await ctx.route('https://api.pwnedpasswords.com/range/*', (route) => route.fulfill({
+  // the breach check of the passphrase dialogs (the service's api/v1/pwned/<prefix>): padded noise, no match (the service has no outbound access in tests)
+  await ctx.route('**/api/v1/pwned/*', (route) => route.fulfill({
     status: 200, contentType: 'text/plain', headers: { 'access-control-allow-origin': '*' }, body: '0018A45C4D1DEF81644B54AB7F969B88D65:0\r\n' }));
   return ctx;
 }
@@ -87,12 +87,9 @@ async function createVaultThroughDialog(page, stack, passphrase = PASS) {
   await dlg.getByRole('button', { name: 'Create vault' }).click();
   await expect(dlg.getByRole('heading', { name: 'Save your access sheet' })).toBeVisible({ timeout: 60000 });
   const accessId = (await dlg.locator('[data-wds=access-id]').innerText()).trim();
-  const kf = page.waitForEvent('download');
-  await dlg.getByRole('button', { name: 'Download key file' }).click();
-  const keyFile = await (await kf).path();
-  await dlg.getByLabel('I have saved the access sheet and the recovery code.').check();
+  await dlg.getByLabel('I have saved the access sheet and the emergency code.').check();
   await dlg.getByRole('button', { name: 'Continue' }).click();
-  return { accessId, keyFile: readFileSync(keyFile, 'utf8') };
+  return { accessId };
 }
 async function unlockThroughDialog(page, accessId, passphrase = PASS) {
   const dlg = dialogOf(page);
@@ -284,7 +281,7 @@ async function makeVault(browser, stack) {
     const v = await c.createVault({ passphrase, joinCode });
     await c.put('notes/' + canary, { text: canary, n: 1 });
     await c.put('files/data.bin', new Uint8Array([1, 2, 3, 250, 251, 252]), { mime: 'application/octet-stream' });
-    return { accessId: v.accessId, keyFile: v.keyFile.text };
+    return { accessId: v.accessId };
   }, { scope: stack.scope, service: stack.docs.service, joinCode: stack.joinCode, passphrase: PASS, canary: NOTE_CANARY });
   await ctx.close();
   return made;
@@ -336,28 +333,22 @@ test('export page, served by the server: typed app ID and access ID, passphrase 
   await ctx.close();
 });
 
-test('export page with a key file, in German', async ({ browser, stack }) => {
+test('export page, in German', async ({ browser, stack }) => {
   const vault = await makeVault(browser, stack);
-  const kfPath = writeTemp(stack, 'vault.wds.json', vault.keyFile);
   const ctx = await newContext(browser, { locale: 'de-DE' });
   const page = await newPage(ctx);
   await page.goto(stack.docs.origin + '/datastore/export/');
   await expect(page.getByRole('heading', { name: 'Tresor exportieren' })).toBeVisible();
   await expect(page.locator('html')).toHaveAttribute('lang', 'de');
-  await page.locator('#keyfile').setInputFiles(kfPath);
-  await expect(page.locator('#scope')).toHaveValue(stack.scope);
-  await expect(page.locator('#access')).toHaveValue(/^[0-9A-Z]{4}(-[0-9A-Z]{4}){4}$/);
-  await expect(page.locator('#msg')).toContainText('Schlüsseldatei gelesen');
+  await expect(page.locator('#keyfile')).toHaveCount(0);
+  await page.locator('#scope').fill(stack.scope);
+  await page.locator('#access').fill(vault.accessId);
   await page.getByRole('button', { name: 'Entsperren und exportieren' }).click();
   const dlg = dialogOf(page);
   await dlg.getByLabel('Passphrase', { exact: true }).fill(PASS);
   await dlg.getByRole('button', { name: 'Entsperren' }).click();
   await expect(page.locator('#msg')).toContainText('Alles exportieren');
   await exportViaVaultDialog(page, 'Alles exportieren (ZIP, unverschlüsselt)');
-  // a key file of another service is refused
-  const other = writeTemp(stack, 'other.wds.json', vault.keyFile.replace(stack.docs.service, 'https://elsewhere.example/datastore/'));
-  await page.locator('#keyfile').setInputFiles(other);
-  await expect(page.locator('#msg')).toContainText('anderen Dienst');
   await ctx.close();
 });
 

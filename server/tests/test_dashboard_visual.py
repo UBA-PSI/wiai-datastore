@@ -40,7 +40,8 @@ class Tables(DashCase):
     def test_audit_in_words_with_a_wrapping_details_column(self):
         a = self.staff()
         scope = self.make_scope(a)
-        a.post(f"/scopes/{scope}/limits", {"max_value_bytes": "5", "vault_bytes": "", "scope_bytes": "", "max_vaults": "", "history_versions": ""})
+        with self.env.svc.db.connection() as conn:   # written by the operator's command line (wds_server.cli limits)
+            self.env.svc.audit(conn, "cli", "limits_updated", scope, None, "max_value_bytes=5242880,vault_bytes=default")
         html = a.get(f"/scopes/{scope}/audit").text
         self.assertIn("Grenzen geändert", html)
         self.assertIn("Größte Datei bzw. größter Eintrag: 5,0 MB", html)
@@ -72,44 +73,9 @@ class FieldErrors(DashCase):
         en = a.post(f"/scopes/{scope}/admins?lang=en", {"admin": "not valid!"}).text
         self.assertIn("This is not a valid university ID or e-mail address.", en)
 
-    def test_limits_error_stays_in_the_limits_form_with_the_typed_values(self):
-        a = self.staff()
-        scope = self.make_scope(a)
-        r = a.post(f"/scopes/{scope}/limits", {"max_vaults": "501", "history_versions": "7"})
-        self.assertEqual(r.status, 400)
-        form = re.search(r'<form method="post" action="[^"]*/limits">.*?</form>', r.text, re.S).group(0)
-        self.assertIn('id="limits-err"', form)
-        self.assertIn('value="501"', form)
-        self.assertIn('value="7"', form)
-
-    def test_limits_errors_say_what_is_wrong(self):
-        a = self.staff()
-        scope = self.make_scope(a)
-        r = a.post(f"/scopes/{scope}/limits", {"max_value_bytes": "-5"})
-        self.assertEqual(r.status, 400)
-        self.assertIn("Größte Datei bzw. größter Eintrag: Bitte geben Sie eine ganze Zahl von 1 bis 25 MB ein.", r.text)
-        self.assertNotIn("Bitte geben Sie eine ganze Zahl ein.", r.text)
-        r = a.post(f"/scopes/{scope}/limits", {"max_vaults": "501"})
-        self.assertIn("Höchstzahl der Tresore: Bitte geben Sie eine ganze Zahl von 1 bis 500 ein.", r.text)
-        r = a.post(f"/scopes/{scope}/limits", {"max_vaults": "abc"})
-        self.assertIn("Höchstzahl der Tresore: Bitte geben Sie eine ganze Zahl ein.", r.text)
-        r = a.post(f"/scopes/{scope}/limits?lang=en", {"max_value_bytes": "0"})
-        self.assertIn("Largest file or entry: please enter a whole number from 1 to 25 MB.", r.text)
-
-    def test_slug_pattern_is_valid_under_the_v_flag(self):
-        # Browsers compile the pattern attribute with the v flag; an unescaped hyphen at the end of a class is invalid there
-        # and the browser then silently skips the check.
-        import shutil
-        import subprocess
-        pattern = re.search(r'id="c_slug"[^>]*pattern="([^"]*)"', self.staff().get("/").text).group(1)
-        node = shutil.which("node")
-        if not node:
-            self.skipTest("node is not installed")
-        subprocess.run([node, "-e", "new RegExp('^(?:' + process.argv[1] + ')$', 'v')", pattern], check=True)
-
     def test_create_error_is_inside_the_create_form(self):
         a = self.staff()
-        r = a.post("/scopes", {"name": "App", "slug": "Bad Slug!", "contact_email": "a@uni-bamberg.de", "enrollment": "open"})
+        r = a.post("/scopes", {"name": "App", "contact_email": "not-an-address"})
         self.assertEqual(r.status, 400)
         form = re.search(r'<form method="post" action="[^"]*/scopes">.*?</form>', r.text, re.S).group(0)
         self.assertIn('id="create-err"', form)

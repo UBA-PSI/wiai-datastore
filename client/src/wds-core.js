@@ -13,7 +13,7 @@
  * API summary (all methods async unless noted; errors are WDSError subclasses, see "errors"):
  *
  *   const c = new WDSCore.Client({ scope, service?, fetch?, storage?, now?, argon2?, escrowPins? })
- *     service      API origin + mount path, default WDSCore.SERVICE_URL (the key file must name the same service)
+ *     service      API origin + mount path, default WDSCore.SERVICE_URL
  *     fetch        injectable (tests); storage: localStorage-like {getItem,setItem,removeItem}, default localStorage
  *     argon2       injectable Argon2id (default: the vendored build). escrowPins / retiredEscrow: escrow key IDs the library
  *                  accepts (tests only: a build with escrow pins ignores both options, see BUILTIN_ESCROW_PINS)
@@ -23,11 +23,11 @@
  *                  so a stalled connection can never keep a dialog waiting for ever. After a timeout of a write the client looks at
  *                  the record before it reports the failure: an answer that was lost after the server had stored the write counts as saved.
  *                  Client.defaultTimeout is a plain static (a test page sets it before the library connects; an app has no reason to).
- *   c.getScopeInfo(force?)                    GET /scopes/{scope} (kdf defaults, limits, enrollment, privacy_url)
- *   c.createVault({passphrase, joinCode?, recoveryContact?})
- *        -> {accessId, accessIdDisplay, vaultId, recoveryCode:{canonical,display}, keyFile:{text,filename}}; unlocks
- *   c.unlock({accessId, passphrase, vaultId?, maintain?})   -> status()
- *   c.redeemInvite({inviteCode, passphrase})                -> status() + keyFile; unlocks
+ *   c.getScopeInfo(force?)                    GET /scopes/{scope} (kdf defaults, limits, privacy_url)
+ *   c.createVault({passphrase, joinCode?})
+ *        -> {accessId, accessIdDisplay, vaultId, recoveryCode:{canonical,display}}; unlocks (the recovery code is the "emergency code" of the dialogs)
+ *   c.unlock({accessId, passphrase, maintain?})             -> status()
+ *   c.redeemInvite({inviteCode, passphrase})                -> status(); unlocks
  *   c.lock(); c.status() (sync): {unlocked, role, epoch, rosterVersion, rekeyPending, recoveredByFaculty, escrowRetired, newDevice,
  *        stateStatus: 'ok'|'new'|'invalid', recovery, warnings, ...}
  *   c.get(name, {fresh?}) -> value|undefined      c.getRecord(name, {fresh?}) -> {name,version,kind,mime,time,length,epoch,value}|null
@@ -45,10 +45,10 @@
  *        c.setRole(slotId, role), c.revoke(slotIds, {rekey?, maxItems?, onProgress?}) (owner; owner slots
  *        only under the rule in PLAN 5.7: an owner may revoke owner slots added by escrow, and an escrow-added owner may
  *        revoke the slots that existed before; see c.members()[i].revocable)
- *   c.resumeRekey({maxItems?, onProgress?, dropOld?}) -> {done, rekeyed}; c.adoptRenewals(); c.renewKeys();
+ *   c.resumeRekey({maxItems?, onProgress?, dropOld?}) -> {done, rekeyed}; c.adoptRenewals();
  *   c.changePassphrase(newPassphrase); c.maintain(); c.acknowledgeRecovery(); c.deleteVault()
  *   c.rememberedAccessId() / rememberedAccess() -> {id, t} / rememberAccessId(id) / forgetAccessId()   (localStorage "wds:<scope>:access_id", JSON {id, t})
- *   WDSCore.parseInviteCode / parseRecoveryCode / classifyCode / makeKeyFile / parseKeyFile / displayCode / normalizeCode
+ *   WDSCore.parseInviteCode / parseRecoveryCode / classifyCode / displayCode / normalizeCode
  *   WDSCore.internals: low-level building blocks used by tests, vectors and tools (not for app code; not in the bundle).
  */
 (function (root, factory) {
@@ -867,7 +867,7 @@
   }
 
   // ------------------------------------------------------------------------------------------------------------
-  // 4. Codes and key file
+  // 4. Codes
   // ------------------------------------------------------------------------------------------------------------
   async function makeInviteCode(accessIdBytes, secret) {
     var canonical = (await b32cEncode(accessIdBytes)) + (await b32cEncode(secret));
@@ -894,21 +894,6 @@
     var s;
     try { s = normalizeCode(input); } catch (e) { return 'unknown'; }
     return s.length === 20 ? 'access_id' : s.length === 48 ? 'invite' : s.length === 28 ? 'recovery' : 'unknown';
-  }
-  function makeKeyFile(o) { // {scope, accessId, vaultId, service?}
-    var text = cjson({ access_id: o.accessId, scope: o.scope, service: o.service || SERVICE_URL, type: 'wds-keyfile', v: 1, vault: o.vaultId });
-    return { text: text, filename: o.scope + '-' + o.accessId.slice(0, 4) + '.wds.json' };
-  }
-  async function parseKeyFile(text, o) { // {scope, service?} -> {accessId, vaultId}
-    var doc;
-    try { doc = JSON.parse(text); } catch (e) { throw new UsageError('key file is not valid JSON', { code: 'invalid_keyfile' }); }
-    if (!doc || typeof doc !== 'object' || doc.type !== 'wds-keyfile') throw new UsageError('not a key file', { code: 'invalid_keyfile' });
-    if (doc.v !== 1) throw new VersionError('unknown key file version');
-    if (doc.service !== (o.service || SERVICE_URL)) throw new UsageError('key file belongs to a different service', { code: 'invalid_keyfile' });
-    if (doc.scope !== o.scope) throw new UsageError('key file belongs to a different app', { code: 'invalid_keyfile' });
-    await checkAccessId(doc.access_id);
-    if (typeof doc.vault !== 'string' || !RE_VAULT.test(doc.vault)) throw new UsageError('key file has an invalid vault ID', { code: 'invalid_keyfile' });
-    return { accessId: doc.access_id, vaultId: doc.vault };
   }
 
   // ------------------------------------------------------------------------------------------------------------
@@ -1084,7 +1069,7 @@
   CP.forgetAccessId = function () { this.storage.removeItem('wds:' + this.scope + ':access_id'); };
 
   // ---- create vault ----
-  CP.createVault = async function (o) { // {passphrase, joinCode?, recoveryContact?}
+  CP.createVault = async function (o) { // {passphrase, joinCode?}
     var info = await this.getScopeInfo();
     var escrow = await this._pickEscrow(info);
     var kdf = await this._freshKdf();
@@ -1122,26 +1107,25 @@
       vault: vaultId, roster: roster,
       slots: [{ slot: founderSlot, access_id: accessId, kdf: kdf, token_hash: b64u(sk.tokenHash), wrapped: b64u(wrapped) }],
       keyring: keyring, recovery_hash: rec.hash,
-      recovery_contact: o.recoveryContact || null, join_code: o.joinCode || null,
+      join_code: o.joinCode || null,
     };
     await this._json('POST', '/scopes/' + scope + '/vaults', { json: req, timeout: this._patientMs() });
     await this._openSession({ accessId: accessId, ikm: kek, kdf: kdf, expectedVault: vaultId });
     this.rememberAccessId(accessId);
-    var kf = makeKeyFile({ scope: scope, accessId: accessId, vaultId: vaultId, service: this.service });
     return {
       accessId: accessId, accessIdDisplay: displayCode(accessId), vaultId: vaultId,
-      recoveryCode: { canonical: rec.canonical, display: rec.display }, keyFile: kf, role: 'owner',
+      recoveryCode: { canonical: rec.canonical, display: rec.display }, role: 'owner',
     };
   };
 
   // ---- unlock ----
-  CP.unlock = async function (o) { // {accessId, passphrase, vaultId?}
+  CP.unlock = async function (o) { // {accessId, passphrase, maintain?}
     var accessId = await checkAccessId(typeof o.accessId === 'string' ? normalizeCode(o.accessId) : o.accessId);
     var k = await this._json('GET', '/slots/' + accessId + '/kdf');
     if (k.kind === 'invite') throw new UsageError('this ID belongs to an unredeemed invite; use redeemInvite', { code: 'invite_not_redeemed' });
     var kdf = checkKdf(k.kdf);
     var kek = await argon2idKey(o.passphrase, kdf, this.argon2);
-    await this._openSession({ accessId: accessId, ikm: kek, kdf: kdf, expectedVault: o.vaultId, maintain: o.maintain });
+    await this._openSession({ accessId: accessId, ikm: kek, kdf: kdf, maintain: o.maintain });
     this.rememberAccessId(accessId);
     return this.status();
   };
@@ -1171,7 +1155,7 @@
       var auth = this._auth();
       var slotRes = await this._json('GET', '/slots/' + s.accessId, { auth: auth });
       if (slotRes.access_id !== s.accessId || slotRes.scope !== scope || typeof slotRes.vault !== 'string' || !RE_VAULT.test(slotRes.vault)) throw new IntegrityError('slot response does not match the request');
-      if (s.expectedVault && s.expectedVault !== slotRes.vault) throw new IntegrityError('vault ID differs from the key file', { code: 'vault_mismatch' });
+      if (s.expectedVault && s.expectedVault !== slotRes.vault) throw new IntegrityError('vault ID differs from the expected one', { code: 'vault_mismatch' });
       if (s.vaultId && s.vaultId !== slotRes.vault) throw new IntegrityError('vault ID changed');
       if (cjson(checkKdf(slotRes.kdf)) !== cjson(s.kdf)) throw new IntegrityError('server changed the KDF descriptor');
       var vaultId = slotRes.vault;
@@ -1718,7 +1702,7 @@
     await this._json('POST', '/slots/' + p.accessId + '/redeem', { auth: auth, json: { kdf: kdf, token_hash: b64u(sk.tokenHash), wrapped: b64u(wrapped), renewal: renewal }, timeout: this._patientMs() });
     await this._openSession({ accessId: p.accessId, ikm: kek, kdf: kdf, expectedVault: slotRes.vault, maintain: o.maintain });
     this.rememberAccessId(p.accessId);
-    return Object.assign(this.status(), { keyFile: makeKeyFile({ scope: this.scope, accessId: p.accessId, vaultId: slotRes.vault, service: this.service }) });
+    return this.status();
   };
 
   CP._rewrap = async function (keySets) {
@@ -1795,27 +1779,6 @@
       });
     });
     return { adopted: todo.length };
-  };
-  // Replace this slot's key pairs (members announce, owners sign it in directly).
-  CP.renewKeys = async function () {
-    this._need('read');
-    await this._syncHead(); // make sure the active key set is the one the head roster lists
-    var s = this.s, e = await generateKeyPair('E'), sg = await generateKeyPair('S');
-    var sets = [s.keySets[s.activeIdx], { e: e, s: sg }];
-    var wrapped = await wrapSlot({ kWrap: s.kWrap, scope: this.scope, vault: s.vaultId, accessId: s.accessId, kdf: s.kdf, slotId: s.slotId, keySets: sets });
-    if (s.role === 'owner') {
-      var r = await this._json('PUT', '/slots/' + s.accessId, { auth: this._auth(), headers: { 'If-Match': '"' + s.sv + '"' }, json: { kdf: s.kdf, token_hash: b64u(s.tokenHash), wrapped: b64u(wrapped) } });
-      s.sv = r.sv; s.wrappedStr = b64u(wrapped); s.keySets = sets; s.activeIdx = 0;
-      var slotId = s.slotId;
-      await this._commitRoster(function (body) { var sl = findSlot(body, slotId); sl.e_pub = b64u(e.pub); sl.s_pub = b64u(sg.pub); });
-      if (s.keySets.length === 2 && s.activeIdx === 1) await this._rewrap([s.keySets[1]]);
-    } else {
-      var rbody = { e_pub: b64u(e.pub), rv: s.head.body.version, s_pub: b64u(sg.pub), scope: this.scope, slot: s.slotId, type: 'renewal', v: 1, vault: s.vaultId };
-      var renewal = await signRoster(rbody, s.sPriv);
-      var r2 = await this._json('POST', '/slots/' + s.accessId + '/renewal', { auth: this._auth(), headers: { 'If-Match': '"' + s.sv + '"' }, json: { renewal: renewal, wrapped: b64u(wrapped) } });
-      s.sv = r2.sv; s.wrappedStr = b64u(wrapped); s.keySets = sets; s.activeIdx = 0;
-    }
-    return this.status();
   };
   CP.changePassphrase = async function (newPassphrase) {
     this._need('read');
@@ -2025,9 +1988,9 @@
     version: VERSION, SERVICE_URL: SERVICE_URL, Client: Client,
     errors: { WDSError: WDSError, ConflictError: ConflictError, OfflineError: OfflineError, QuotaError: QuotaError, AuthError: AuthError, IntegrityError: IntegrityError, VersionError: VersionError, RequestError: RequestError, UsageError: UsageError },
     memoryStorage: memoryStorage,
-    // codes and key file (usable without a Client)
+    // codes (usable without a Client)
     parseInviteCode: parseInviteCode, parseRecoveryCode: parseRecoveryCode, classifyCode: classifyCode, normalizeCode: normalizeCode,
-    displayCode: displayCode, makeKeyFile: makeKeyFile, parseKeyFile: parseKeyFile, checkAccessId: checkAccessId,
+    displayCode: displayCode, checkAccessId: checkAccessId,
   };
   if (!PRODUCTION) {
     api.setArgon2 = setArgon2; api.setRandom = setRandom; api.internals = internals;

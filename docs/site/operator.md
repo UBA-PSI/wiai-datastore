@@ -37,24 +37,21 @@ vault whose escrow slot names them. Two key sets exist: **current** and **spare*
 
 ## 3. Recovery of a vault
 
-When a user has lost the passphrase. The founder's own recovery code or recovery contact starts it; **you** decide whether to
-proceed. Check that the requester is who they claim (the person who runs the app can vouch; for a code-less recovery the stored
-contact address is the proof) and write the reason down: every step is audited in the database (table `audit`).
+When a user has lost the passphrase. The founder's emergency code starts it (it is the only way: there is no recovery without it); **you** decide whether to
+proceed. Check that the requester is who they claim (the person who runs the app can vouch) and write the reason down: every step is audited in the database (table `audit`).
 
-1. **Collect:** the vault ID and either the 28-character recovery code or a request by the recovery contact. The vault ID is in the user's key file
-   (field `vault`); from an access ID you find it on the server with
+1. **Collect:** the vault ID and the 28-character emergency code (the "recovery code" of the protocol and of `wds-recover`). From the access ID on the user's access sheet you find the vault ID on the server with
    `sqlite3 <database> "SELECT vault_id FROM slots WHERE access_id = '<20 characters without dashes>'"`.
 2. **Start** with `wds-recover` on your laptop (never on the server). It reads the operator token from `~/.config/wiai-datastore/operator-token`
    (`--token-file`) and talks to `{{base}}` (`--base`):
 
    ```sh
-   node tools/wds-recover.mjs start <vault-id>                  # asks for the recovery code (or: ... start <vault-id> - < code.txt); waiting period 72 hours
-   node tools/wds-recover.mjs start <vault-id> --contact          # 7 days, only if the vault has a recovery contact; confirm the contact by mail yourself
+   node tools/wds-recover.mjs start <vault-id>                  # asks for the emergency code (or: ... start <vault-id> - < code.txt); waiting period 72 hours
    node tools/wds-recover.mjs status <vault-id>                   # vault, pending recovery, ready_at
    node tools/wds-recover.mjs cancel <vault-id>                   # cancel a pending recovery
    ```
 
-   The recovery code is a credential: the tool asks for it on the terminal or reads it from stdin, because a code in the command line stays in the shell history and is visible in `ps`.
+   The emergency code is a credential: the tool asks for it on the terminal or reads it from stdin, because a code in the command line stays in the shell history and is visible in `ps`.
    The tool refuses a `--base` that is not https (localhost excepted), so the operator token never travels in clear text.
    A wrong code answers 403 and counts as a failure of the rate limiter. The same calls are `POST/DELETE {{api_url}}/admin/vaults/<vault>/recovery` and
    `GET {{api_url}}/admin/vaults/<vault>` with the operator token.
@@ -80,8 +77,7 @@ A stolen access sheet cannot be used silently: the waiting period, the notice at
 
 ## 4. Quotas and limits
 
-Operator defaults and ceilings are in `[limits.defaults]` and `[limits.ceilings]` of the configuration; scope administrators set their scope's
-limits on the dashboard within the ceilings. Sizes are in MB and GB everywhere in the documentation and on the dashboard: 1 MB = 1,048,576 bytes, 1 GB = 1,073,741,824 bytes (the configuration and the API give exact bytes, for example `max_value_bytes = 10485760`).
+Operator defaults and ceilings are in `[limits.defaults]` and `[limits.ceilings]` of the configuration. The dashboard only shows a scope's limits (read-only); you change them on request with `python -m wds_server.cli limits --db <database> --scope <scope ID> --limit max_vaults=100` (`--limit KEY=default` goes back to the default), within the ceilings. Sizes are in MB and GB everywhere in the documentation and on the dashboard: 1 MB = 1,048,576 bytes, 1 GB = 1,073,741,824 bytes (the configuration and the API give exact bytes, for example `max_value_bytes = 10485760`).
 
 | Limit | Default | Ceiling |
 |---|---|---|
@@ -91,26 +87,26 @@ limits on the dashboard within the ceilings. Sizes are in MB and GB everywhere i
 | `max_vaults` per scope | 50 | 500 |
 | `history_versions` per record | 10 | 50 |
 
-- The sum of all scopes' byte limits must stay below 70 % of the data disk; the dashboard refuses limits beyond that. Grow the disk before
+- The sum of all scopes' byte limits must stay below 70 % of the data disk; the command refuses limits beyond that. Grow the disk before
   raising ceilings.
 - Every scope counts with its `scope_bytes` against that budget, suspended ones too, so one person could use it up by creating empty scopes. The dashboard therefore
   allows each person at most 5 active (not deleted) scopes; operators are exempt. If the budget is used up anyway, open the scope in the operator view and delete it
   (soft delete, as for its admins; the vaults are purged after 30 days).
-- A scope that the operator suspended is locked: its admins can neither resume it nor change settings, limits, admins or delete it. If the admins suspended it themselves
-  ("suspended by you or a co-admin"), the operator view offers "Take over the suspension", after which only the operator can resume it.
+- Only the operator pauses and resumes a scope; a paused scope is locked for its admins (no settings, admins or delete).
 - The audit log (table `audit`, one year) also records `login` and `login_denied` (user ID only, no IP address) and, for `scope_updated`, what changed (the contact
   e-mail with its old and new value). Logins have no scope and show up in the operator's complete audit page only.
 - Lowering `max_value_bytes` below a value that is stored is refused (`409 limit_below_stored_value`, with the smallest accepted value), so stored
   data never becomes unreadable.
-- Rate limits (`[ratelimit]`): only failed authentication counts, 60 per IP per minute, 10 per access ID and IP per minute, 30 vault creations
-  per IP per hour. Client IPs come from `X-Forwarded-For`, trusted from the reverse proxy only (`--forwarded-allow-ips`).
+- Rate limits (`[ratelimit]`): failed authentication counts, 60 per IP per minute, 10 per access ID and IP per minute, 30 vault creations
+  per IP per hour; the breach check counts every request (`pwned`, 120 per IP per minute). Client IPs come from `X-Forwarded-For`, trusted from the reverse proxy only (`--forwarded-allow-ips`).
+- **Breach check.** The passphrase dialogs ask this server (`GET {{api_url}}/pwned/<5 hex>`), which asks `api.pwnedpasswords.com` over https on their behalf (answers cached 24 hours, padded, the prefix is never logged next to an address). The server must be allowed to make that outbound connection; if it is not, the answer is 503 and the dialogs ask for a stronger passphrase instead (`pwned_url` in `[server]`, empty = off).
 - Vaults without any record are purged after 7 days; deleted vaults after 30 days; the maintenance sweep runs inside the service every hour.
 
 ## 5. Read-only mode
 
 At 85 % disk use (`read_only_threshold`) the server stops writes that grow data and answers `503 read_only`; `/healthz` reports
 `"read_only": true` and the library shows a notice. Allowed: reads, exports, deletes, history purges, logins, dashboard and operations that do not grow data
-(revocation, re-encryption, redeem, passphrase change, key renewal, recovery). Refused: vault creation, record writes, new invites.
+(revocation, re-encryption, redeem, passphrase change, recovery). Refused: vault creation, record writes, new invites.
 
 To leave read-only mode free space (purge old vaults or histories, run `python -m wds_server.cli maintenance --db <database>`) or grow the data disk. The
 state follows the disk figure; there is no switch. An alarm for the disk is part of the Ansible role.
@@ -143,7 +139,7 @@ wiai-datastore-deploy                  # the operator's deployment script (not i
 Suspect a key whenever the private file or the KeePassXC database may have leaked (lost laptop, unlocked session, malware). Assume the worst: the holder together with a copy
 of the database (or control of the server) can read every vault whose escrow slot names that set, and with the **signing** key can add an owner to a vault.
 
-1. **Contain.** Decide which set is affected. Set the scopes' enrollment to "closed" on the dashboard (or switch the service to read-only by lowering `read_only_threshold` temporarily)
+1. **Contain.** Decide which set is affected. Suspend the scopes in the operator view (or switch the service to read-only by lowering `read_only_threshold` temporarily)
    so no new vault is created under the compromised key. Review `audit` for recoveries you did not start.
 2. **If current is affected, switch to the spare.** The spare is pinned in every library, so no app update is needed for the switch: in the configuration make the
    spare keys the `current_*` keys. Generate a **new** set with `wds-keygen` as the next spare, store it apart, and put it in `spare_*`. Roll out via Ansible.
@@ -172,7 +168,6 @@ enabled = true                     ; false: the scope stays, vault creation and 
 name = WIAI Datastore sandbox
 wipe_time = 03:30                  ; local time (timezone below) of the nightly wipe
 timezone = Europe/Berlin
-hibp = false                       ; breach check of passphrases (the verifier tolerates the missing one)
 max_value_bytes = 524288
 vault_bytes = 2097152
 scope_bytes = 1073741824
@@ -187,7 +182,7 @@ create_global_window = 600
 invite_slots = 3                   ; invites per vault (open plus redeemed)
 ```
 
-- **The configuration owns the scope.** At start (and in `maintenance`) `ensure_sandbox` creates or updates the scope row from these values: status active, enrollment open without a join code, the limits, creator `config:sandbox`. A scope with the same ID that this section did not create stops the start with an error.
+- **The configuration owns the scope.** At start (and in `maintenance`) `ensure_sandbox` creates or updates the scope row from these values: status active, open without a join code, the limits, creator `config:sandbox`. A scope with the same ID that this section did not create stops the start with an error.
   Removing the section soft-deletes the scope. The dashboard shows the scope to operators read-only and never to staff; every change attempt, also through the operator API, is refused (`err_sandbox_config`, `403 sandbox_config`). Every limit must stay within the ceilings of `[limits.ceilings]`. The sum of `scope_bytes` counts against the 70 % disk budget (section 4).
 - **Nightly wipe.** The maintenance sweep runs the wipe once the scheduled instant has passed (`sweep_interval`, default hourly, so up to an hour after `wipe_time`; DST-correct through the time zone): it purges every sandbox vault, soft-deleted ones included, that was **created before** that instant, one transaction per vault, then records the instant
   in the `meta` table (`sandbox_last_wipe`) and writes the audit entry `sandbox_wiped` with the count. Vaults created after the instant stay until the next night. Afterwards a bounded `incremental_vacuum` gives space back. `access_ids` rows stay (a random identifier of 20 characters per deleted vault, about 25 bytes; they say nothing about a person), so an access ID is never reused.
@@ -195,7 +190,7 @@ invite_slots = 3                   ; invites per vault (open plus redeemed)
 - **When it is full or busy.** A vault creation or a write that would exceed `max_vaults` or `scope_bytes` purges the oldest vaults that were created and last written at least `evict_min_age` ago (audit `sandbox_evicted`); a vault somebody is writing to is never taken. If none qualifies the request answers 403 `vault_limit_reached`, like a normal scope (the verifier reports "sandbox unavailable").
   Creation is limited three ways: per IP bucket by `create_per_ip` per `create_window` (IPv6 clients by `create_ipv6_prefix`, default /56; 429 `rate_limited` with `Retry-After`), for the sandbox as a whole by `create_global` per `create_global_window` (503 `sandbox_busy` with `Retry-After`, so a burst never makes the sandbox evict everybody's vault), and by `[ratelimit] create`, which counts for every scope.
   A vault that its owner deletes within `create_window` gives its creation back to the first two counters, so a verifier run that cleans up after itself does not use up the budget. Behind a campus NAT or in a teaching room many people share one bucket: if developers report 429, raise `create_per_ip` (and `[ratelimit] create`). An owner who deletes a sandbox vault frees its space at once.
-- **No recovery.** The recovery contact is accepted and discarded, the access sheet has no recovery code, and every recovery and escrow endpoint answers 409 `sandbox_no_recovery` for sandbox vaults. Technically the escrow key also applies (the sandbox uses the same pinned keys; there is no separate key set), but there is no recovery service for it and nothing in it is worth recovering.
+- **No recovery.** The access sheet has no emergency code, and every recovery and escrow endpoint answers 409 `sandbox_no_recovery` for sandbox vaults. Technically the escrow key also applies (the sandbox uses the same pinned keys; there is no separate key set), but there is no recovery service for it and nothing in it is worth recovering.
 - **Invites** are allowed so that read-only members can be tested: at most `invite_slots` per vault (409 `invite_limit`), expiring before the next wipe (the library's vault dialog offers only "until the wipe" there, and says so when less than an hour is left; the server refuses a roster that outlives the wipe).
 - **Switch it off** with `enabled = false` (503 `sandbox_disabled`, the scope document says `enabled: false`) or by removing the section, after an incident or abuse. `python -m wds_server.cli sandbox status --db <database> --config <config>` shows vaults, bytes, next and last wipe; `sandbox wipe` purges every sandbox vault now and sets the marker to now.
 - **Abuse and logging.** There are no request logs. The audit log has `scope_created`, `sandbox_evicted` and `sandbox_wiped` rows without IP addresses; the IP bucket counters live in memory only. The privacy page has its own section "Testumgebung / The sandbox" (shown only when a sandbox is configured). Abuse (the sandbox used for real data, as free storage, or as a drop for files that are passed on) is limited by the nightly wipe, the quotas and the creation limits.

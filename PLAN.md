@@ -35,7 +35,7 @@ and changes made during the implementation are recorded, in order, in [`IMPLEMEN
   example app), rounds F and G (the "Literaturliste"; in round G porting.md Example 1 still had its shape) and round H (an equipment
   inventory unrelated to the examples: IndexedDB with composite keys, photos, a JSON backup; 31 passed, 0 failed, 0 warnings including
   `--migration-delete`). All passed wds-verify in the sandbox. Round H then cut the library and the guides down (IMPLEMENTATION-LOG).
-- *Round I (complexity reduction; the principle: a small, app-agnostic core, and edge cases go to the app developer's Claude):* lock = reload (no `onLock`/`onUnlock`), one `onConflict` handler, one `onChange` event, `store.openVault()` as the one place for members, access sheet, export and lock, non-interactive notices and a sandbox corner badge, language from `<html lang>`, `get` returning a Blob or a JSON value, a smaller `migrateLocal`, one documented `wds-verify` use; the guides are at most 350 and 150 lines and `llms.txt` holds the only copy of the rules (IMPLEMENTATION-LOG, round I). The round's review then fixed the base of a save (the version the page last read or wrote; a re-read while an autosave editor holds text does not move it), sent `theirs`/`merged` of an autosave through `onChange({ remote: true })` only, made a second `onChange`/`onConflict` handler a `UsageError`, made a failed security check and a redeemed invitation dialogs with OK, emptied the page before the lock's reload (Firefox form restore), let a cancelled re-unlock offer the backup, split `migrateLocal` into copy (first start) and delete (second start, after asking), removed the real-scope test path (`readJoinCode`, `deleteVault`, the prompt's test-vault paragraphs, the dashboard's test hint) and made the sandbox wds-verify's default target. The other owner decisions of the round (key file, breach check, prompt form, enrollment modes, recovery contact, manual key renewal, "Download both", wording, dashboard knobs) are open (§16).
+- *Round I (complexity reduction; the principle: a small, app-agnostic core, and edge cases go to the app developer's Claude):* lock = reload (no `onLock`/`onUnlock`), one `onConflict` handler, one `onChange` event, `store.openVault()` as the one place for members, access sheet, export and lock, non-interactive notices and a sandbox corner badge, language from `<html lang>`, `get` returning a Blob or a JSON value, a smaller `migrateLocal`, one documented `wds-verify` use; the guides are at most 350 and 150 lines and `llms.txt` holds the only copy of the rules (IMPLEMENTATION-LOG, round I). The round's review then fixed the base of a save (the version the page last read or wrote; a re-read while an autosave editor holds text does not move it), sent `theirs`/`merged` of an autosave through `onChange({ remote: true })` only, made a second `onChange`/`onConflict` handler a `UsageError`, made a failed security check and a redeemed invitation dialogs with OK, emptied the page before the lock's reload (Firefox form restore), let a cancelled re-unlock offer the backup, split `migrateLocal` into copy (first start) and delete (second start, after asking), removed the real-scope test path (`readJoinCode`, `deleteVault`, the prompt's test-vault paragraphs, the dashboard's test hint) and made the sandbox wds-verify's default target. The owner decisions of the round were then applied (round J, IMPLEMENTATION-LOG): no key file; the breach check through the datastore server (`GET /pwned/<prefix>`); one English text for Claude that is also the CLAUDE.md section; the join code as the only enrollment (the sandbox is open); no recovery contact (the emergency code with the 72 h wait is the only recovery path); no manual key renewal; no "Download both"; "Notfallcode" for what a person sees; fewer dashboard knobs (§16).
 - *Pending:* escrow private keys
   into KeePassXC (current and spare apart) and deletion of the generated files; review of the privacy page by the data
   protection officer; freezing library version 1.0.0; a pilot with one real app; the open points in §16.
@@ -52,7 +52,7 @@ HTTP endpoints and error codes exactly. Where this document and `PROTOCOL.md` di
 |---|---|
 | Clients | Single-file HTML apps via `file://`, localhost, Electron. No File System Access API. |
 | Address | `https://wiai.uni-bamberg.de/datastore/` (path on an existing host the operator controls; operator decision: no own subdomain, a later move would be handled then, §16). |
-| Unlock | Access ID + own passphrase (min. 12 characters, strength estimate, HIBP Pwned Passwords check done by the browser directly, never via our backend). Argon2id in the browser. |
+| Unlock | Access ID + own passphrase (min. 12 characters, strength estimate, breach check against Pwned Passwords through the datastore server, which sends only the first five characters of the SHA-1 and never sees the passphrase). Argon2id in the browser. |
 | Key loss | Faculty escrow, always on. Escrow key set (plus a spare set) only in the operator's KeePassXC. |
 | Scope creation | Self-service on the dashboard (§10), login via login.psi. Allowed: everyone whose login.psi e-mail ends in `@uni-bamberg.de` and who has no matriculation number (= staff of all faculties; confirmed), at most 5 active scopes per person (operators exempt). Co-admins listed on a scope may log in and manage it. Operator can suspend scopes and block users. |
 | App users | Key only, no Uni login. |
@@ -63,7 +63,7 @@ HTTP endpoints and error codes exactly. Where this document and `PROTOCOL.md` di
 | Offline | Online only, with "download backup" on failure. |
 | Library | Loaded with a single `<script src=… integrity=… crossorigin>` tag (Subresource Integrity), immutable versioned URLs. |
 | Verification | Server accepts only well-formed envelopes; static and dynamic checks via `wds-verify`, run by the developer's Claude. No gate at scope creation. |
-| Quotas | Operator sets global limits and per-scope ceilings (Ansible); scope admins set their scope's limits within the ceilings (dashboard). |
+| Quotas | Operator sets global limits and per-scope ceilings (Ansible); the operator changes a scope's limits within the ceilings with `cli limits` or `PATCH /admin/scopes`; the dashboard only shows them. |
 | Stack | Python 3.13 with `python3-starlette` 0.46.1, `python3-uvicorn` 0.32.0 and `python3-nacl` 1.5.0 **from Debian 13 packages**, no pip, no other third-party package; SQLite; own VM; unattended security upgrades. Node only on developer machines (build, tests, tools). |
 | Languages | Code, identifiers, developer docs: English. Dashboard, privacy page and end-user texts: German and English (German addresses users with "Sie"). |
 
@@ -93,8 +93,7 @@ device, weak passphrases that pass the checks, the escrow key holder, read membe
 ### 2.1 What the server learns
 
 Scope and app name; number of vaults per scope; number of records, padded sizes, write times and which records change
-together; vault members as anonymous slots with roles, and per slot whether an invite was used or redeemed; the optional
-recovery contact (an e-mail address in plaintext, given with consent). IP addresses are held in memory for the rate limiter's
+together; vault members as anonymous slots with roles, and per slot whether an invite was used or redeemed. IP addresses are held in memory for the rate limiter's
 window only; neither the server nor the reverse proxy writes a request log (§11, §12). Unauthenticated callers learn whether an access ID
 exists. It does not learn record names, contents or the persons behind slots.
 
@@ -108,14 +107,13 @@ addresses). The matriculation number from login.psi is checked and never stored.
   configuration (`[dashboard] operators`).
 - **Scope admin** – staff member who registers an app on the dashboard (role `creator`); may add up to 20 co-admins by
   Uni ID or e-mail address (role `admin`).
-- **Scope** – one registered app, public ID `<slug>-<6 random chars>`; settings, quotas, enrollment mode.
+- **Scope** – one registered app, public ID `<slug>-<6 random chars>`; settings, quotas, join code.
 - **Vault** – the encrypted data of one user and the people they share it with. Self-certifying ID (§5.6).
 - **Slot** – one access path into a vault: kind (`passphrase`, `invite`, `escrow`), role (`owner`, `write`,
   `read`), public **access ID** (96 random bits plus 4 check bits, Crockford base32, shown as `XXXX-XXXX-XXXX-XXXX-XXXX`),
   own key pairs.
 - **Record** – one encrypted value under an app-chosen name; the server only sees an HMAC-derived record ID.
-- **Access sheet** – printable page created with the vault: scope, access ID, **recovery code**, escrow notice. Also
-  offered as a small "key file" (JSON with scope and access ID, no secrets) to drag into the app on a new device.
+- **Access sheet** – printable page created with the vault: scope, access ID, **emergency code** (the "recovery code" of the protocol), escrow notice.
 
 ## 4. Network and browser facts (tested)
 
@@ -125,8 +123,7 @@ addresses). The matriculation number from login.psi is checked and never stored.
   Chromium, Firefox and WebKit load the real bundle from disk and from the server's `/datastore/client/` with SRI, run
   preflighted requests, Argon2id (WebAssembly) under the recommended CSP, and the `onerror` fallback when the hash does not
   match. Not tested: real Safari, Edge, Electron.
-- HIBP (`api.pwnedpasswords.com`) answers `Access-Control-Allow-Origin: *` and allows the `Add-Padding` header in
-  its preflight (checked).
+- Pwned Passwords is asked by the datastore server, not by the browser: outbound HTTPS to `api.pwnedpasswords.com:443` with the `Add-Padding` header. The browser only calls the datastore's own `api/v1/pwned/<prefix>`. Without that outbound connection the endpoint answers `503` and the library checks locally only.
 - Our server answers `Access-Control-Allow-Origin: *` (never `null`), no credentials; exposes `ETag, Retry-After,
   WDS-Commit`; preflight allows `Authorization, Content-Type, If-Match, If-None-Match, WDS-Commit` and `GET, PUT, POST,
   DELETE`; `Access-Control-Max-Age: 600`. The client script is served with `Access-Control-Allow-Origin: *` and
@@ -196,11 +193,11 @@ Consequences:
 ### 5.3 Passphrase rules
 
 - Own passphrase (decision): at least 12 characters, a refused list of very common German and English passwords, a
-  guessing estimate (below 40 bits refused; below 48 bits refused as well when no breach check could be made) and a HIBP check. The exact rules are in §8.5.
-- HIBP: SHA-1 of the passphrase, send the first 5 hex characters to `https://api.pwnedpasswords.com/range/<prefix>`
-  with `Add-Padding: true`, compare suffixes locally; a hit blocks the passphrase. Only on submit, never while typing,
-  8 s timeout. If HIBP is unreachable (or switched off for the scope), warn and apply the stricter local limit of 48 bits. The scope admin can switch the HIBP check off for a scope on the
-  dashboard (scope flag `hibp`, on by default; privacy: HIBP is a US service and sees IP + prefix).
+  guessing estimate (below 40 bits refused; below 48 bits refused as well when no breach check could be made) and a breach check. The exact rules are in §8.5.
+- Breach check: SHA-1 of the passphrase; the browser sends the first 5 hex characters to `GET <service>api/v1/pwned/<prefix>` of the datastore server,
+  which asks `https://api.pwnedpasswords.com/range/<prefix>` with `Add-Padding: true` on its behalf (answers cached in memory for 24 h, rate limit per client, the prefix never logged, `503` when the service is unreachable);
+  the browser compares suffixes locally; a hit blocks the passphrase. Only on submit, never while typing. If the check is unavailable (any status but 200, network error, timeout),
+  warn and apply the stricter local limit of 48 bits. Privacy: the service (USA) sees the server's address and the prefix, never the passphrase or the person's IP address; the browser talks to the datastore only.
 - Never through our backend: our server also holds salts and wrapped keys, and the 20-bit SHA-1 prefix would let it
   discard about 99.9999 % of guesses with a cheap hash before running Argon2id.
 
@@ -259,7 +256,7 @@ Record AAD: the 10 header bytes (magic, type, flags, epoch) `‖ lp(scope_id) �
 ### 5.6 Vault identity and signed roster
 
 - On creation the founder's client generates the owner slot's `S` key pair; **vault ID = base32(SHA-256(S_owner.pub))[:26]**.
-  The vault ID is also stored inside every slot's wrapped blob and printed on the access sheet and key file, so a client
+  The vault ID is also stored inside every slot's wrapped blob and printed on the access sheet, so a client
   starting from an access ID learns the vault ID from authenticated data, not from the server.
 - A roster version is `{"body": …, "sig": …}` with a canonical-JSON body (`type`, `v`, `scope`, `vault`, `version`,
   `prev` = hash of the previous body, `epoch`, `commit`, `slots`, `signer`, `time`); the roster hash is
@@ -333,8 +330,7 @@ Key renewal is automatic at redemption: the redeeming client creates new `E`/`S`
 renewal statement signed with the slot's previous `S` key (the invite's). The owner's client verifies that signature
 against the roster before signing the new keys in and re-encrypting the member's entry; until then the member uses the
 invite keys. This closes the window in which an intercepted invite code plus a database copy would decrypt future
-epochs, and the server cannot substitute keys (it has no `S` private key). Members can renew again at any time the same
-way. Passphrase changes only re-wrap.
+epochs, and the server cannot substitute keys (it has no `S` private key). There is no manual renewal (round J). Passphrase changes only re-wrap.
 
 **Revocation (owner)**
 
@@ -397,18 +393,16 @@ SQLite runs with `PRAGMA secure_delete=ON` so freed pages are overwritten. §2 s
 
 **Recovery procedure (manual, logged)**
 
-1. The user asks the operator. Normal case: they still have the access sheet with the **recovery code** (17 random bytes =
+1. The user asks the operator. Normal case: they still have the access sheet with the **emergency code** (the recovery code of the protocol; 17 random bytes =
    136 bits, 28 symbols; its SHA-256 is stored per vault at creation). Because the sheet is a bearer credential, even a correct code starts a
    **72-hour waiting period** during which the founder sees "A recovery of this vault was requested – cancel?" on
    unlock; the access sheet tells users to keep it apart from their device.
-2. Without the recovery code, recovery is only possible if the founder set an optional **recovery contact** (e-mail
-   address, stored on the server in plaintext with the user's consent) at creation: the operator mails that address and
-   the waiting period is 7 days. Without code and contact: no recovery (slots are anonymous; there is nothing to
-   verify a claim against).
+2. Without the emergency code there is no recovery (slots are anonymous; there is nothing to
+   verify a claim against). There is no recovery contact and no faster or slower alternative path.
 3. The operator runs `wds-recover` on their laptop (never on the server): fetch escrow keyring entry and roster with
    an operator API token, decrypt with the escrow key from KeePassXC, add a new owner invite slot to a roster version
    signed with the escrow signing key, hand the invite code to the user. `tools/wds-recover.mjs` has the subcommands
-   `start` (vault ID; the recovery code is asked for or read from stdin, not taken from the argument list; or `--contact`), `status`, `cancel` and `complete` (`--escrow-key <private key file of
+   `start` (vault ID; the emergency code is asked for or read from stdin, not taken from the argument list), `status`, `cancel` and `complete` (`--escrow-key <private key file of
    wds-keygen>`, read and never stored). `complete` verifies the roster chain and the keyring entry against the signed commitments,
    builds the escrow-signed version with exactly one added owner invite, runs the client's chain verifier over the result before
    uploading, and prints the invite code. Options: `--expires-in-hours` (default 72, at most 359, because the server accepts
@@ -448,14 +442,14 @@ SQLite runs with `PRAGMA secure_delete=ON` so freed pages are overwritten. §2 s
   authentication failures count: 60 per IP per minute and 10 per access ID per minute from the same IP (so a stranger
   cannot exhaust a victim's budget from elsewhere). Vault creation per IP 30 per hour (eduroam and NAT). IPv6 clients
   count per /64. Lookups of existing access IDs on `/slots/{id}/kdf` are never throttled or counted. While an IP is over
-  its budget, even a correct join code or recovery code from it is refused with `429`. Client IPs from
+  its budget, even a correct join code or emergency code from it is refused with `429`. Client IPs from
   `X-Forwarded-For` trusted from the reverse proxy only (`--forwarded-allow-ips` set to its address in production; the default is
   `127.0.0.1`). `409`, `412` and other non-authentication errors never count. Limits are configurable
   (`[ratelimit]`).
 - Token check happens before the request body is read: authentication, state and role checks run before the body is
   read, and the compare-and-swap then runs in one `BEGIN IMMEDIATE` transaction that re-verifies the slot.
-- Enrollment per scope: `join code` (**default**; users type a code the scope admin hands out, not embedded in the
-  app; 8 Crockford symbols, rotatable on the dashboard), `open` (bounded by "max vaults"), `closed`. Vaults without any
+- Enrollment: the `join code` (users type a code the scope admin hands out, not embedded in the
+  app; 8 Crockford symbols, rotatable on the dashboard) for every scope; only the sandbox is open (derived, not stored; bounded by "max vaults"). To stop new vaults the admin rotates the code or the operator pauses the app. Vaults without any
   record 7 days after creation are purged.
 
 ## 7. HTTP API v1
@@ -467,9 +461,9 @@ Errors: `{"error": "<code>", "message": "<English text>"}`.
 
 | Method + path | Purpose |
 |---|---|
-| `GET /scopes/{scope}` | Name, status, enrollment mode, `hibp` flag, read-only flag, public limits, Argon2 defaults, escrow public keys (current, spare), library version (`latest`, `deprecated`), privacy URL. |
+| `GET /scopes/{scope}` | Name, status, enrollment (`join_code`, `open` only in the sandbox), read-only flag, public limits, Argon2 defaults, escrow public keys (current, spare), library version (`latest`, `deprecated`), privacy URL. |
 | `GET /slots/{access_id}/kdf` | Salt and Argon2 parameters (404 for unknown IDs). |
-| `POST /scopes/{scope}/vaults` | Create vault: roster v1, owner slot, escrow slot, keyring entries, recovery-code hash, optional recovery contact, join code if required. |
+| `POST /scopes/{scope}/vaults` | Create vault: roster v1, owner slot, escrow slot, keyring entries, recovery-code hash, join code if required (not in the sandbox). |
 
 `GET /datastore/healthz` answers `{"status":"ok","read_only":bool}` (outside the API base).
 
@@ -482,7 +476,6 @@ Errors: `{"error": "<code>", "message": "<English text>"}`.
 | `POST /slots/{access_id}/redeem` | invite | Turn an invite into a passphrase slot. An unredeemed invite token may only read its own slot and the roster and redeem; everywhere else it is `403` (PROTOCOL.md 8.2). |
 | `GET /vaults/{v}/roster` | any | All roster versions (or since a given version). |
 | `POST /vaults/{v}/roster` | owner | New signed roster version + keyring entries (invite, key renewal, role change, escrow move, **revocation** = epoch + 1 with slots removed); compare-and-swap on the previous hash. There is no separate revocation endpoint (PROTOCOL.md 6.3). |
-| `POST /slots/{access_id}/renewal` | any | Submit new public keys, signed with the slot's current `S` key. |
 | `GET /vaults/{v}/rekey` | owner | Blobs still under old epochs (paged). |
 | `PUT /vaults/{v}/records/{rid}/versions/{n}/rekey` | owner | Replace one blob with the same version under the current epoch. |
 | `GET /vaults/{v}/records` | any | List (paged, `after`, `limit` ≤ 1000): record ID, version, padded size, updated, epoch; tombstones included. |
@@ -495,9 +488,8 @@ Errors: `{"error": "<code>", "message": "<English text>"}`.
 | `DELETE /vaults/{v}` | owner | Delete vault (soft, purged after 30 days). |
 | `GET /vaults/{v}/usage` | any | Bytes used (record envelopes), records, versions, blobs under old epochs, read-only flag, limits. |
 
-Operator API (token hash in the configuration from Ansible, PROTOCOL.md 9): `POST /admin/scopes`, `PATCH /admin/scopes/{scope}` (suspend, enrollment, join code,
-limits), `GET /admin/vaults/{v}`, `POST`/`DELETE /admin/vaults/{v}/recovery` (recovery-code proof: 72 hours; recovery contact:
-7 days), `GET /admin/vaults/{v}/escrow` (only when the waiting period is over), `POST /admin/vaults/{v}/recovery/complete`.
+Operator API (token hash in the configuration from Ansible, PROTOCOL.md 9): `POST /admin/scopes`, `PATCH /admin/scopes/{scope}` (suspend, join code, name,
+limits), `GET /admin/vaults/{v}`, `POST`/`DELETE /admin/vaults/{v}/recovery` (emergency-code proof, 72 hours), `GET /admin/vaults/{v}/escrow` (only when the waiting period is over), `POST /admin/vaults/{v}/recovery/complete`.
 Every call is audited, failed ones too.
 
 ### 7.3 Conflicts
@@ -583,7 +575,7 @@ await store.migrateLocal({ id, indexedDB, localStorage, map });   // §8.5
 
 The library remembers the version of every record it read or wrote and sends it with `If-Match` (or `If-None-Match: *` for names it believes are new). A `set` on an existing record that this page has not read is therefore a conflict too (read it, show it, then save; blind replacing is the exception). The base of a save is the version this page last **read or wrote** (a map in the UI layer, not the core's `known`): a re-read of a record whose autosave handle holds unsaved text does not move it, so a `getAll` from an `onChange` handler cannot make the next autosave overwrite another member's text silently (round I; the first attempt of `writeRecord` passes that version as `base`, later attempts use what the conflict taught the core). After an autosave lost to the other version (`theirs`) the base stays: the editor still shows the old text, so its next save meets the other version again unless the app reloaded it (a `get` in the clean state). A button save does not get this protection: render lists from `items()` and do not `get` a record that a form shows from `onChange`.
 On `412` it loads "theirs", decrypts it and calls the one handler registered with `store.onConflict(fn)` (one handler per page: a second call is a `UsageError`, `onConflict(null)` removes it; the same for `onChange`). `fn(c)` gets `c = { name, mine: { value, kind, mime, deleted }, theirs: { version, deleted, kind, mime, time, value } | null }` and returns `"mine"` (saved on top; theirs stays in the history), `"theirs"`, `{ merged: value }` or `undefined`.
-A handler that returns nothing else, throws or rejects hands over to the **built-in dialog** ("Another device or person saved a newer version": keep theirs, keep mine or download both; the other version stays in the history), never to a thrown `ConflictError`. A conflict whose theirs equals mine is no conflict. The collection index merges itself (§8.7) and never reaches the handler. The internal retry bound stays.
+A handler that returns nothing else, throws or rejects hands over to the **built-in dialog** ("Another device or person saved a newer version": keep theirs or keep mine; one line says the other version stays in the history), never to a thrown `ConflictError`. A conflict whose theirs equals mine is no conflict. The collection index merges itself (§8.7) and never reaches the handler. The internal retry bound stays.
 
 ### 8.3 Versions and compatibility
 
@@ -593,7 +585,7 @@ A handler that returns nothing else, throws or rejects hands over to the **built
   `max_value_bytes` (they are bounded by the ceiling), and the operator API and the dashboard refuse to lower
   `max_value_bytes` below the largest value stored in the scope (PROTOCOL 7.1).
 - **Export tool** (`docs/site/export.html`): a standalone page that loads the library with the same SRI tag, unlocks any
-  vault of any scope (scope ID and access ID typed in or taken from a key file) and downloads everything decrypted as the
+  vault of any scope (scope ID and access ID typed in) and downloads everything decrypted as the
   ZIP of §8.5 – for apps whose author is gone. Served at `/datastore/export/` and as a download
   (`/datastore/export/wds-export.html`) that also runs from `file://`; linked from `llms.txt`, the documentation index and
   the user guides. It decrypts in the browser; the server only serves the file.
@@ -613,27 +605,26 @@ interferes nor receives passphrases).
 
 ### 8.5 Dialogs, notices and what the library does on its own
 
-- **Unlock dialog** (one dialog, several views): unlock (access ID or dropped/chosen key file, passphrase), create vault (join
-  code when the scope requires one, passphrase twice, optional recovery contact, the escrow notice of §5.9 and the privacy
-  link), redeem invite. A pasted invite code in the ID field switches to "redeem"; a recovery code is recognised and refused.
+- **Unlock dialog** (one dialog, several views): unlock (access ID, remembered per scope, passphrase), create vault (join
+  code when the scope requires one, passphrase twice, the escrow notice of §5.9 and the privacy
+  link), redeem invite. A pasted invite code in the ID field switches to "redeem"; an emergency code is recognised and refused.
   Argon2id blocks the page for about a second; the dialog paints a "deriving your key" line first.
 - **Passphrase rules** (§5.3) are in `wds-ui.js`: at least 12 characters (code points); a refused list of very common
   passwords (exact, with look-alike digits and trailing digits stripped); a guessing estimate in bits built from the cheapest
   decomposition into literals, ~600 common English/German words and phrases ("ichliebedich", "meinschatz", club names and the like;
   umlauts also as ae/oe/ue, separators and digits ignored for the exact list), years, repeats, sequences and keyboard walks (below 40 bits
-  is refused, the meter has five levels); then the HIBP range query (`Add-Padding: true`, only the 5-character prefix, never during typing,
-  only on submit, 8 s timeout). A hit blocks; an unreachable service is reported and does not block by itself. Without a breach check (the
-  scope's `hibp` flag from `GET /scopes/{scope}` is off, or the service is unreachable) the limit is 48 bits: a well-known passphrase
+  is refused, the meter has five levels); then the breach check (the 5-character prefix to the datastore server, never during typing,
+  only on submit). A hit blocks; an unreachable check is reported and does not block by itself. Without a breach check (the
+  server answers anything but 200) the limit is 48 bits: a well-known passphrase
   would otherwise pass unseen.
-- **Access sheet** after creating a vault (and a reduced one after redeeming an invite): access ID and recovery code, key file download,
+- **Access sheet** after creating a vault (and a reduced one after redeeming an invite): access ID and emergency code,
   print (hidden iframe) and a standalone HTML download with the escrow notice; "Continue" stays disabled until the user confirms.
 - **After unlock** the library runs `maintain()` (after the notices below, because an unacknowledged faculty recovery blocks owner
   roster edits) and then, as needed: a modal for a pending recovery request with "cancel" (`DELETE /vaults/{v}/recovery`); a modal for
   an owner access added by the faculty with "I know about this" (calls `acknowledgeRecovery()`); notices for a new device (or a
   reset local safety record), outdated library version, suspended scope, read-only server, redeemed invites (a dialog with OK) and, for owners, the automatic resumption of an interrupted re-encryption with progress (status lines, §8.1).
 - **Vault dialog** (`store.openVault()`, every role, view `share`): people (you first, escrow last; role select, revoke, cancel invite; badges "New: invite redeemed" and "Added
-  by the faculty"; owner slots get a revoke button only where §5.7 allows it, with a separate confirmation text), invite form (role, optional label; kept across refreshes) with the code in groups, own access (key file, renew keys,
-  change passphrase with the same rules, show the access sheet again (without the recovery code), "Export everything (ZIP, unencrypted)" with a progress line, lock now). Revocation asks for confirmation, then shows a progress bar over the rekey loop; the
+  by the faculty"; owner slots get a revoke button only where §5.7 allows it, with a separate confirmation text), invite form (role, optional label; kept across refreshes) with the code in groups, own access (change passphrase with the same rules, show the access sheet again (without the emergency code), "Export everything (ZIP, unencrypted)" with a progress line, lock now). Revocation asks for confirmation, then shows a progress bar over the rekey loop; the
   dialog cannot be closed meanwhile. Members who are not owners see their own access, the access sheet, the export and lock.
 - **Member labels** ("Anna") are kept in the vault as the encrypted record `.wds/labels` (slot ID → text); the export hides it.
   Only the owner's UI writes it, but the server and the library let every write member write any record, so labels are
@@ -660,7 +651,7 @@ interferes nor receives passphrases).
   in any locale; `tools/README.md` has the paragraph for an app's own Playwright tests, and `tools/lib/dialog-internals.mjs` (one internal module: `createVault`, `unlock`, `confirmSheet`, `answerMigration` and the single steps) drives them for
   wds-verify and the repository tests. A scope with a join code needs the option `joinCode` of `createVault`; there is no real-scope test path (no `~/.wds/join-code`, no `deleteVault`, no test-vault paragraph in the prompt: wds-verify and the sandbox cover the paths, round I).
 - **Sandbox** (§17): when the scope document has a `sandbox` field, every dialog title is prefixed ("Sandbox: " / "Testumgebung: "),
-  every dialog shows a banner and a fixed corner badge (bottom left, `pointer-events: none`, above app and library dialogs) says that the data is deleted tonight. There is no page shift and no bar. The create view has no recovery-contact field, the access sheet no recovery code, the invite expiry is "until tonight". A wiped sandbox reloads the page and the unlock dialog says that the sandbox was emptied.
+  every dialog shows a banner and a fixed corner badge (bottom left, `pointer-events: none`, above app and library dialogs) says that the data is deleted tonight. There is no page shift and no bar. The access sheet has no emergency code, the invite expiry is "until tonight". A wiped sandbox reloads the page and the unlock dialog says that the sandbox was emptied.
 - **Server data shown by the dialogs** (scope name, privacy URL) is rendered as text; the privacy link is only used for `http(s)` URLs.
 
 ### 8.6 Build and tests
@@ -673,9 +664,9 @@ bundler) into `client/dist/wds-<version>.js` (version from `client/package.json`
 `escrowPins` (tests only; a bundle with pins ignores the option). The browser tests build their own pinless bundle into `client/test-results/bundle`, so `dist/` always holds the production build. `--freeze` marks a released version: later builds with different bytes fail. `scripts/test-client.sh` runs the node tests
 (protocol, vectors, UI helpers, build, request timeouts and lost answers: `request-timeout.test.mjs`) and the Playwright UI tests (`client/test/ui.spec.mjs`, Chromium only, `file://` page,
 in-memory fake server over HTTP): create,
-passphrase rules, unlock, key file, records, conflict, autosave, vault dialog (invite/redeem/revoke, export, lock), offline, history, recovery notices,
+passphrase rules, unlock, records, conflict, autosave, vault dialog (invite/redeem/revoke, export, lock), offline, history, recovery notices,
 German texts, accessibility, SRI, lock = reload, the top layer (`ui-layers.spec.mjs`: library dialogs above app modals, also a reused app `<dialog>`, notices that take no click, the sandbox badge) and `store.migrateLocal` (`migrate.spec.mjs`, 29 cases served over `http://127.0.0.1` in Chromium, Firefox and WebKit; WebKit runs
-in a persistent profile because an ephemeral context aborts Blob writes to IndexedDB; `migrate-unit.test.mjs` for the pure parts) and the dialogs under slow, failing and stalled requests (`dialog-stress.spec.mjs`, round G: 16 seeded rounds, a watcher for a dialog without a view, a long `loading`, more than one dialog and gaps of the page timer; a reload followed by the `unlock()` of `dialog-internals.mjs`; key files dropped on busy views; a view whose build throws).
+in a persistent profile because an ephemeral context aborts Blob writes to IndexedDB; `migrate-unit.test.mjs` for the pure parts) and the dialogs under slow, failing and stalled requests (`dialog-stress.spec.mjs`, round G: 16 seeded rounds, a watcher for a dialog without a view, a long `loading`, more than one dialog and gaps of the page timer; a reload followed by the `unlock()` of `dialog-internals.mjs`; a view whose build throws).
 
 **Integration tests** (`scripts/test-integration.sh`, `client/test/integration.spec.mjs`, config `client/playwright.integration.config.mjs`).
 They start the REAL server (project venv, temporary database, scope made with the dev CLI, escrow keys generated for the run) and
@@ -685,7 +676,7 @@ SRI). One Playwright project per engine; a browser that is not installed is skip
 (`WDS_WEBKIT_EXECUTABLE` or any installed `webkit-*` build is used when the expected WebKit build is missing). They cover: vault
 creation (join code), JSON and 5 MB binary records, list (also across list pages), history and restore, conflicts (412 paths and
 the dialog in two contexts), invite with read role and the server refusing its writes, an unredeemed invite token being useless,
-automatic and manual key renewal, revocation with interrupted and resumed re-encryption (checked through the API: no old-epoch
+automatic key renewal at redemption, revocation with interrupted and resumed re-encryption (checked through the API: no old-epoch
 blob remains, every version still passes its history commitment), passphrase change, non-envelope bodies, join code,
 enrollment/suspension, quotas and limits, read-only mode (a second server process on the same database with a threshold that is
 always exceeded), vault deletion, rate limits, the complete faculty recovery (escrow keys decrypt the keyring entry, escrow-signed
@@ -724,8 +715,8 @@ The alternative that was rejected: last-writer-wins with timestamps and tombston
 2. **SRI:** the browser refuses a library file that differs from the published hash.
 3. **CSP** recommended in every app (exact text in the developer doc):
    `default-src 'none'; script-src 'unsafe-inline' 'wasm-unsafe-eval' https://wiai.uni-bamberg.de/datastore/client/;
-   style-src 'unsafe-inline'; img-src data: blob:; connect-src https://wiai.uni-bamberg.de/datastore/api/
-   https://api.pwnedpasswords.com; base-uri 'none'; form-action 'none'` (`'wasm-unsafe-eval'` is needed for Argon2id). `'self'` is
+   style-src 'unsafe-inline'; img-src data: blob:; connect-src https://wiai.uni-bamberg.de/datastore/api/;
+   base-uri 'none'; form-action 'none'` (`'wasm-unsafe-eval'` is needed for Argon2id). `'self'` is
    left out because its meaning on `file://` differs between browsers. The text is built by `docs.csp_policy`; `wds-verify` carries the
    same string (a test compares them) and accepts only the inert additions `font-src data:`, `media-src blob: data:` and `img-src https://host`.
 4. **Server envelope checks** (§7.4).
@@ -759,8 +750,7 @@ The alternative that was rejected: last-writer-wins with timestamps and tombston
    - "Library version released" (version not frozen) is information, not a warning; "Privacy sentence" (info) says when neither the page nor
      the README next to it has the official sentence; "onerror fallback" passes for the documented handler, is info for a translated message
      and warns for a missing or different handler;
-   - scope check: the app's own scope document is fetched; breach check on without `https://api.pwnedpasswords.com` in
-     `connect-src` fails; the report prints enrollment, breach check and limits;
+   - scope check: the app's own scope document is fetched; the report prints the limits and a non-active status (the policy has no second host);
    - robust dialog handling (round F, after the flaky "dialog handling failed" warning of the second clean-room trial): a library dialog with `aria-busy` or in `loading`/`progress` is "not ready" (wait), not unexpected, one in the view `error` gets `retry` (three times at most) and every timeout names the state of the dialog (`describeDialog`, `dialogSummary`). Round G: `describeDialog` tells "no dialog" (`null`) from "the page did not answer" (`{ unresponsive: true }`, e.g. while Argon2id blocks the main thread), `viewOf` turns the latter into `''` (not ready), `formError` is one bounded `evaluate`, and `unlock`, `waitForSheet` and `answerMigration` accept "closed" only from a look that was answered; fields are filled through `fillWhenReady` (waits
      for an editable field, retries, checks the value), an error caused by the page changing under the call is retried, and a note keeps
      several lines of Playwright's call log (`briefError`). A click that something covers is named in the error (notices take no click). "Typed values neither shown nor written" names
@@ -799,11 +789,9 @@ per-response CSP nonce). Built in `server/wds_server/dashboard.py` (routes and p
 `access.py` (sessions, staff rule, roles), `scopes.py` (scope logic shared with the operator API), `ui.py` and `texts.py`
 (layout, bilingual texts), `prompt.py` (the prompt for Claude and the CLAUDE.md / AGENTS.md section), `privacy.py`.
 
-- **Staff (scope admins):** "My apps" (name, app ID, status, vaults, size) and the form to create an app. The dashboard has a **default view for lay staff** and an **expert view** (round F; the home page explains what an app and a vault are, the terms are explained where they first appear, and a link into the folded expert area opens it): the create form asks for the name, the contact e-mail (prefilled with the person's own) and an optional description, and says which standard variant it applies (vaults only with the join code, breach check on, the default limits, a short name made from the name); the slug, enrollment mode and breach check sit in a folded "More settings (for experts)". The page of an app shows "Next steps" (copy the text for Claude; hand the join code to the users; what the users need to know), the usage (vaults, storage), a help box and the app ID, then a folded `<details>` with the expert settings; "Always show the expert settings" is remembered per browser in the cookie `wds_expert` (no profile on the server); the operator sees the expert area open. The glossary is not a separate page: every term of the lay view is explained in plain words where it first appears (`texts.py`): app (a small program in the browser that stores its data encrypted on the faculty's server), vault (one person's encrypted storage), app ID (not secret, Claude writes it into the app), join code (handed on by the admin, never part of the app), passphrase, recovery code and access sheet, breach check (Pwned Passwords in the USA; receives the IP address and part of a checksum, never the passphrase), checksum, the operator ("der Betrieb", the team that runs the datastore), versions (instead of "Fassungen"). The lay view gives no terminal instructions; next to the join code one sentence says that Claude does not need it (Claude tests in the sandbox) and that it never goes into the conversation; the help box says which documents are written for Claude (English) and links the guide for users. Sizes are in MB (§10.1). Per scope (expert area): facts, the
-  script tag, the CLAUDE.md / AGENTS.md section (each copyable; the prompt is in the next steps), settings (name, description, contact, HIBP), enrollment
-  mode and join code (rotate), limits within the ceilings (byte limits entered in MB, 1 MB = 1,048,576 bytes, empty = default), co-admins (up
-  to 20, Uni ID or e-mail address; the creator cannot be removed), vaults (ID, created, last write, size, members,
-  blobs still to re-encrypt, state; delete vault, no contents), suspend and resume, the last audit entries and the full
+- **Staff (scope admins):** "My apps" (name, app ID, status, vaults, size) and the form to create an app. The dashboard has a **default view for lay staff** and an **expert view** (round F; the home page explains what an app and a vault are, the terms are explained where they first appear, and a link into the folded expert area opens it): the create form asks for the name, the contact e-mail (prefilled with the person's own) and an optional description, and says which standard variant it applies (vaults only with the join code, the default limits, a short name always made from the name). The page of an app shows "Next steps" (copy the text for Claude; hand the join code to the users; what the users need to know), the usage (vaults, storage), a help box and the app ID, then a folded `<details>` with the expert settings; the operator sees the expert area open (round J: no `wds_expert` cookie). The glossary is not a separate page: every term of the lay view is explained in plain words where it first appears (`texts.py`): app (a small program in the browser that stores its data encrypted on the faculty's server), vault (one person's encrypted storage), app ID (not secret, Claude writes it into the app), join code (handed on by the admin, never part of the app), passphrase, emergency code and access sheet, breach check (the faculty server asks Pwned Passwords in the USA on the person's behalf with part of a checksum; the service sees neither the passphrase nor the IP address), checksum, the operator ("der Betrieb", the team that runs the datastore), versions (instead of "Fassungen"). The lay view gives no terminal instructions; next to the join code one sentence says that Claude does not need it (Claude tests in the sandbox) and that it never goes into the conversation; the help box says which documents are written for Claude (English) and links the guide for users. Sizes are in MB (§10.1). Per scope (expert area): facts, the
+  script tag, the CLAUDE.md / AGENTS.md section (each copyable; the prompt is in the next steps), settings (name, description, contact), join code (rotate), the limits (read-only; the operator changes them with `python -m wds_server.cli limits`), co-admins (up
+  to 20, Uni ID or e-mail address; the creator cannot be removed), vaults (ID, created, last write, size, state; delete vault, no contents), (the operator only: pause and resume), the last audit entries and the full
   audit page, and "delete scope" after typing the scope ID.
 - **Operator:** server state (disk use, read-only mode, the disk budget of §10.1), all scopes with creator, size and
   scope limit (the sandbox with a badge; its scope page is read-only and shows the wipe schedule, because the `[sandbox]` section of
@@ -812,21 +800,13 @@ per-response CSP nonce). Built in `server/wds_server/dashboard.py` (routes and p
   recovery requests and the recovery audit; the full audit log (`/operator/audit`). The operator can open and act on
   every scope.
 
-**Prompt for Claude** (dashboard language) carries everything the developer's Claude needs and nothing it has to ask for: what the
-service is and the official privacy sentence to repeat word for word, in English and German ("Data is end-to-end encrypted; the faculty holds a recovery key for emergencies." / "Die Daten sind Ende-zu-Ende-verschlüsselt; die Fakultät verwahrt für Notfälle einen Wiederherstellungsschlüssel."; `PRIVACY_EN` / `PRIVACY_DE` in `prompt.py`; llms.txt, integration.md and users.*.md carry the same words, `test_docs.py` checks; a text in a third language uses the English one, a longer text may follow); the scope's settings with an "as of" date (scope ID, enrollment with the
-warning never to put a join code into the app, breach check mapped to "keep / remove `https://api.pwnedpasswords.com` in
-`connect-src`", limits); the pointer to `llms.txt`; the exact script tag; the `WDS.connect` line and the forbidden patterns; a porting
-line ("If the app already exists, read docs/porting.md; data the old version left in the browser is taken over with `store.migrateLocal`"); the breach-check sentence when the scope has the check on; (no test-vault paragraph: there is no real-scope test path); when the server has a sandbox, how to test against it and never to
-write its ID into the app; running wds-verify from the public repository; and the instruction to add the **CLAUDE.md / AGENTS.md
-section** (English, shown separately too) to the app's folder, keeping existing content. That section keeps the rules in the app's
-repository for later sessions: the scope, read `llms.txt` before changing storage, keep the tag, no own storage or crypto, never the
-sandbox ID, the join-code rule (only for a scope with the enrollment "join code": a secret of the staff, never in the app, the files or the chat), current settings via wds-verify, rerun wds-verify after every change. Each sentence is one line, so the copy box wraps cleanly.
+**Text for Claude** (round J: one nearly constant English text, produced by `prompt.claude_text`, that is also the CLAUDE.md / AGENTS.md section; the dashboard explains its purpose in German) holds the scope ID, the instruction to read `<base>/llms.txt` first and follow its rules, the official privacy sentence (`PRIVACY_EN`: "Data is end-to-end encrypted; the faculty holds a recovery key for emergencies."; the breach-check sentence belongs to the privacy pages and users.*.md, not to this text), the join-code rule (a secret of the staff, never in the app, the files or the chat), running wds-verify against the sandbox, and the line to keep the section in CLAUDE.md and AGENTS.md. The limits and the rules are read through the `llms.txt` link; the script tag is in `integration.md` and the dashboard's expert area, not in the text. Each sentence is one line, so the copy box wraps cleanly.
 
 Built as follows:
 
 - Routes under `/datastore/`: `/` (login page or my scopes), `/login` (start), `/_lpmiddleware/login` (callback),
   `/logout` (POST), `/scopes` (POST, create), `/scopes/{id}` and `/scopes/{id}/audit`, the form posts below a scope
-  (`settings`, `enrollment`, `join-code`, `limits`, `admins`, `admins/remove`, `vaults/{v}/delete`, `suspend`,
+  (`settings`, `join-code`, `admins`, `admins/remove`, `vaults/{v}/delete`, `suspend` and `resume` (operator only),
   `resume`, `delete`), `/operator`, `/operator/audit`, `/operator/block`, `/operator/unblock`, `/privacy`. Forms
   are `application/x-www-form-urlencoded` (at most 64 KiB, parsed with the standard library) with a per-session CSRF
   token; requests marked cross-site (`Sec-Fetch-Site`) or with a foreign `Origin` are refused. Dashboard pages send
@@ -843,8 +823,7 @@ Built as follows:
 - Sessions: `sessions` table, the cookie `__Host-wds_session` holds 32 random bytes (only the SHA-256 is stored), idle
   timeout 2 h and absolute timeout 12 h (`[dashboard] session_idle/session_absolute`). Authorisation is computed per
   request from the tables and the configuration, never cached in the session.
-- A scope an admin suspended can be resumed by an admin; one the operator suspended (or suspended through the operator API)
-  only by the operator, who can also take over an admin's suspension. Suspended apps can still read and export but not
+- Only the operator suspends and resumes a scope (`suspended_by` is gone). Suspended apps can still read and export but not
   write (`403 scope_suspended`). Deleting a scope soft-deletes its vaults (purged after 30 days), wipes description, contact
   and join code, and the scope row goes with the last vault. The byte limits of all scopes together are checked against
   70 % of the data disk when a scope is created or a limit raised; limits below the largest stored value are refused.
@@ -867,15 +846,15 @@ Built as follows:
 | Bytes per scope | 2 GB | 10 GB | ≤ ceiling |
 
 - Sizes: 1 MB = 1,048,576 bytes (2^20), 1 GB = 2^30 bytes, in the documents, the dashboard, the prompt and wds-verify; the configuration and the API carry exact bytes (`max_value_bytes` 10485760). The Argon2id memory (64 MiB) is a cryptographic parameter and keeps its binary name.
-- Defaults and ceilings come from `[limits.defaults]` and `[limits.ceilings]` in the configuration; scope admins set
-  values within the ceilings on the dashboard, the operator API (`PATCH /admin/scopes`) can do the same.
+- Defaults and ceilings come from `[limits.defaults]` and `[limits.ceilings]` in the configuration; the operator
+  changes a scope's values within the ceilings with `cli limits` or the operator API (`PATCH /admin/scopes`); the dashboard shows them read-only.
 - Data and local backups live on separate virtual disks (50 GB data disk, 50 GB backup disk, §12). The sum of all scopes'
   byte limits must stay below 70 % of the data disk (35 GB, i.e. 17 scopes at the default 2 GB); the dashboard refuses
   limits beyond that (operator can grow the disk). Disk use is measured with `statvfs` on the database directory.
 - At 85 % disk use (`read_only_threshold`) the server enters read-only mode (`503 read_only`, `Retry-After: 3600`).
   Still allowed: reads, deletes, history purges, exports, dashboard logins and pages (creating a scope is refused), and the
   operations that do not grow data – protective roster versions (revocation, renewal adoption, escrow switch, epoch
-  drop), rekey, redeem, passphrase change, key renewal, recovery (PROTOCOL 8.6).
+  drop), rekey, redeem, passphrase change, recovery (PROTOCOL 8.6).
 
 ## 11. Server
 
@@ -888,16 +867,16 @@ Built as follows:
   Starlette app (`app.py`) has one module per endpoint group (`api_public`, `api_vaults`, `api_slots`, `api_records`,
   `api_admin`, `api_static`, `docs`, `dashboard`). Database work runs in a thread pool.
 - Configuration (INI): `[sandbox]` (the public sandbox, §17), `[server]` (public base, client and docs directories, disk path, read-only threshold, sweep
-  interval, privacy URL, library latest/deprecated), `[loginpsi]` (key file, app, URL), `[dashboard]` (operators,
+  interval, privacy URL, library latest/deprecated, `pwned_url` for the breach check, empty = off), `[loginpsi]` (key file, app, URL), `[dashboard]` (operators,
   session timeouts, `dev_login`), `[privacy]` (date, backup sentences), `[limits.defaults]`, `[limits.ceilings]`,
-  `[ratelimit]`, `[escrow]` (current and spare public keys, both required), `[operator]` (token hashes).
+  `[ratelimit]` (including `pwned`/`pwned_window` for the breach check), `[escrow]` (current and spare public keys, both required), `[operator]` (token hashes).
 - SQLite in WAL mode, blobs inside SQLite, `synchronous=FULL`, `auto_vacuum=incremental`, `secure_delete=ON`,
   `foreign_keys=ON`; a pool of 16 connections. Schema migrations keyed on `PRAGMA user_version`; an older server refuses
   a newer schema.
 - Tables: migration 1 `scopes`, `vaults`, `rosters`, `slot_ids` (every slot ID ever used per vault), `slots`,
   `keyring`, `records`, `record_versions` (history and tombstones), `recoveries`, `audit`; migration 2 `access_ids`
   (every access ID ever used; never purged) and `vaults.roster_bytes`; migration 3 the dashboard columns of `scopes`
-  (description, contact e-mail, creator, suspended by), `scope_admins`, `sessions`, `blocked_users`; migration 4 the `meta` table (key/value, e.g. the last sandbox wipe). Vault byte usage is
+  (description, contact e-mail, creator, suspended by), `scope_admins`, `sessions`, `blocked_users`; migration 4 the `meta` table (key/value, e.g. the last sandbox wipe); migration 5 (round J) drops `scopes.enrollment`, `scopes.hibp`, `scopes.suspended_by`, `vaults.recovery_contact` and `recoveries.method` and cancels pending code-less recoveries. Vault byte usage is
   cached in `vaults.bytes` and adjusted in the same transaction as every write. Rate limits are in memory.
 - Maintenance runs inside the service every `sweep_interval` (default 3600 s; also `python -m wds_server.cli
   maintenance`): purge vaults without records 7 days after creation and deleted vaults after 30 days, history pruning,
@@ -957,7 +936,7 @@ filled in at request time). Their public source is the repository https://github
   scope; the script tag with its `onerror` fallback; one fixed CSP; the API table (about 18 names) with autosave; where data lives; modelling (one record per entity, collections, files as a recipe, downloading a stored file); conflicts (the dialog and one `onConflict` example); members and the vault dialog; errors; wds-verify (one command, when to write `wds-verify.json`); what to tell users; a complete minimal example app of about 90 lines with a linear start (`await store.unlock(); render(await notes.load()); store.onChange(...)`). The rules live only in llms.txt (at most 8 one-line rules); the checklist and the forbidden patterns of integration.md point to it.
   Downloads the person asks for and forms with `preventDefault` under `form-action 'none'` are allowed and say so. The code recipes run in three engines against the real server (`examples/docs-recipes.spec.mjs`).
 - `/datastore/docs/porting.md` (HTML at `/datastore/docs/porting`; at most 150 lines) – porting an existing app: the inventory table, replacing the storage calls, an import of an old export file with ids derived from the old key (get before set), `store.migrateLocal` (the call, the map contract `map(old, ref)`, the four safety facts, what the person sees, one example: a localStorage JSON, IndexedDB notes with a `data:` URL converted in a 4-line helper, a reverse `ref`), and testing in the sandbox with the `seed` block of wds-verify.
-- `/datastore/docs/users.de.md` and `users.en.md` – for app users: passphrase, access ID, key file and recovery code, new
+- `/datastore/docs/users.de.md` and `users.en.md` – for app users: passphrase, access ID and emergency code, new
   device, sharing, conflicts, what the faculty can see (escrow), recovery, export.
 - `/datastore/docs/operator.md` – places, escrow key handling, recovery, quotas, read-only mode, deploy and releasing a
   library version, backups and restore, escrow key compromise.
@@ -971,9 +950,8 @@ filled in at request time). Their public source is the repository https://github
   `wds-verify` (mock or sandbox) and puts the report into the README → share the HTML file and the join code.
 - **Trying the service without a scope:** any developer's Claude can run an app against the public sandbox (`wds-verify --target
   sandbox` or `--sandbox-copy`); data there is deleted every night.
-- **New user:** open app → "Create my vault" (join code if required) → passphrase → download/print access sheet and
-  key file → work.
-- **Other device / cleared browser:** drag in the key file or type the access ID → passphrase.
+- **New user:** open app → "Create my vault" (join code if required) → passphrase → download/print access sheet → work.
+- **Other device / cleared browser:** type the access ID (remembered per scope on a known device) → passphrase.
 - **Share:** owner → Share → role → invite code → recipient enters it, chooses a passphrase → owner sees
   "redeemed".
 - **Revoke:** owner → Vault → revoke → progress bar while re-encrypting (resumes later if interrupted).
@@ -996,12 +974,13 @@ filled in at request time). Their public source is the repository https://github
 
 ## 16. Open points
 
-- **Owner decisions of round I** (IMPLEMENTATION-LOG, round I, with a recommendation each): remove the key file (the unlock dialog already
-  remembers the last access ID per scope); route the breach check through the datastore server or remove it; one nearly constant English
+- **Owner decisions of round I, applied in round J:** no key file (the unlock dialog already
+  remembers the last access ID per scope); route the breach check through the datastore server; one nearly constant English
   prompt that is also the CLAUDE.md snippet; the join code as the only enrollment mode; no recovery contact (the recovery code with the 72 h wait
   as the only path); no manual key renewal; no "Download both" in the conflict dialog; "Notfallcode" instead of "Wiederherstellungscode";
   fewer dashboard knobs (limits read-only, no admin self-pause, no slug field, no `wds_expert` cookie, two vault-table columns fewer).
-  Until they are taken, this document describes the current state with those features.
+  Round J applied all of them (this document describes the state after it).
+- **Next:** a fifth clean-room trial on the API of round J, then freeze 1.0.0 (below).
 - **The hang of the round G trial is not proven.** One of four runs of the trial's own test timed out in `unlock()` after a reload with an
   empty `data-wds-view`; it was not reproduced. The most plausible cause, in the drive code (now `tools/lib/dialog-internals.mjs`), is fixed (IMPLEMENTATION-LOG, round G).
 - **Deferred from round D:** `wds-verify --role read` (testing an app as a read-only member) and a Claude skill/plugin for the service.
@@ -1031,14 +1010,14 @@ integration tests and did not change §9.3.
 ## 17. The public sandbox
 
 **Decision (operator).** The service offers one public scope, `sandbox-000000`, so that any developer's Claude can run an app end to end against the real service without Python and without filling a real scope
-with test vaults. It is configured in the server configuration (`[sandbox]`), not on the dashboard: enrollment open without a join code, small quotas (default 512 KB per record, 2 MB per vault, 2 versions, 500
-vaults), every vault deleted every night after the configured wipe time (03:30 Europe/Berlin; the maintenance sweep runs it, so up to an hour later), the breach check off.
+with test vaults. It is configured in the server configuration (`[sandbox]`), not on the dashboard: open without a join code, small quotas (default 512 KB per record, 2 MB per vault, 2 versions, 500
+vaults), every vault deleted every night after the configured wipe time (03:30 Europe/Berlin; the maintenance sweep runs it, so up to an hour later).
 
 - **Wipe.** At the first sweep after each scheduled instant T the server purges every sandbox vault with `created < T`, soft-deleted ones included, one transaction per vault, then records T in a `meta` table.
   `access_ids` rows stay (random, no personal data; an access ID is never reused). The scope document carries `sandbox: { enabled, wipe_at, timezone, next_wipe, last_wipe }`.
 - **No recovery, and no separate escrow key set.** A vault of the sandbox is created with the faculty's pinned escrow keys like every other vault, because the client library has one fixed set of pins and a second set would
   need a second build or a runtime exception in the library that every app would have to trust. The decision: technically the escrow key opens sandbox vaults, but the server refuses every recovery and escrow request for them
-  (`409 sandbox_no_recovery`), the contact address is discarded, the access sheet shows no recovery code, and the privacy page says that abuse is answered by switching off or wiping, never by opening a vault.
+  (`409 sandbox_no_recovery`), the access sheet shows no emergency code, and the privacy page says that abuse is answered by switching off or wiping, never by opening a vault.
 - **Labelling.** The library prefixes every dialog title ("Sandbox: ..."), shows a banner in every dialog (with inline `!important` styles, so that app CSS cannot hide it) and, after unlocking, a fixed corner badge that takes no click and shifts nothing; wds-verify
   fails an app that hides it. A remembered access ID older than the last wipe is forgotten with a notice. Invites are limited to 3 per vault and expire before the next wipe; the vault dialog offers only that choice.
 - **Capacity and abuse.** When the sandbox is full, the oldest vaults that were created and last written at least 30 minutes ago are evicted. Creation is limited per IP bucket (IPv6 /56), for the sandbox as a whole
@@ -1053,14 +1032,14 @@ Adversarial review (Fable), first round. Findings and what changed:
 | # | Finding | Resolution |
 |---|---|---|
 | 1, 4 | Crash during rotation loses data; revoked member keeps access until commit | Revocation is one atomic call that stores new keys first and deletes the slot; re-encryption afterwards, resumable (§5.8) |
-| 2 | Recovery could be requested for someone else's public access ID | Recovery code on the access sheet; without it, written confirmation plus 7-day waiting period with owner notice; old owner slot not auto-revoked (§5.9) |
+| 2 | Recovery could be requested for someone else's public access ID | Emergency code on the access sheet; without it no recovery; 72-hour waiting period with owner notice; old owner slot not auto-revoked (§5.9) |
 | 3 | Entropy checks reject valid ciphertext | Removed; structural checks only (§7.4) |
 | 5 | Eager rotation of current records only leaves history readable and costs history slots and quota | Rekey in place for current and history versions, no new history entries (§5.8); decision "re-encrypt all" |
 | 6 | Recovery and multi-owner could not update other members' keyring entries | Keyring entries encrypted to members' public keys; escrow owner-class with signing key; multi-owner defined (§5.1, §5.6, §5.7) |
 | 7 | login.psi has no groups | Staff rule via e-mail domain + no matriculation number (decision); `next` validation and single-use nonce (§6) |
 | 8 | Cookie path is no boundary | `__Host-` cookie, origin documented as trusted base (§6) |
 | 9 | Proxy logging, path pattern, redirect, headers | No request log for the path, `path: /datastore/`, redirect, headers set by the app (§11, §12) |
-| 10 | Lockouts enable denial of service; IP behind proxy; NAT; junk vaults | Flat rate limits, forwarded IPs from the proxy, 30/h, enrollment modes (§6) |
+| 10 | Lockouts enable denial of service; IP behind proxy; NAT; junk vaults | Flat rate limits, forwarded IPs from the proxy, 30/h, join code (§6) |
 | 11 | Pinning and version kill switch strand old apps | Pinned spare escrow key; reads/exports never blocked; standalone export page (§5.9, §8.3) |
 | 12 | CSP blocks WASM | `'wasm-unsafe-eval'` (§9.3) |
 | 13 | Rollback claims too strong | Persisted version state, no version reuse after tombstones, signed rosters, AAD on keyring; limits stated (§5.5) |
@@ -1068,11 +1047,11 @@ Adversarial review (Fable), first round. Findings and what changed:
 | 15 | 12-character passphrases vs. offline attack | Kept own passphrases (decision); stronger checks; risk stated in user guide (§5.2, §5.3) |
 | 16 | Disk arithmetic, history purge, blocking I/O, pip deps without updates | 2 local backups, disk cap on quota sum, purge endpoint, read-only mode at 85 %, thread pool, Debian packages (§10.1, §11) |
 | 17 | Typical mistakes in Claude-built apps | Storage/console/download scanning, `autosave`, no dialog replacement, SRI script tag instead of inlining (§8, §9) |
-| 18 | Invite interception, unknown redeemer | 48 h default expiry, redemption shown to owners, "renew my keys" (§5.8) |
+| 18 | Invite interception, unknown redeemer | 48 h default expiry, redemption shown to owners, keys renewed at redemption (§5.8) |
 | 19 | Fake KDF responses | Removed; 96-bit access IDs (§3, §7.1) |
 | 20 | Read-only limits, base64 size blow-up, rapid saves wipe history | Documented; binary records; 10-minute history floor (§5.4, §5.7, §7.3) |
-| 21 | GDPR, HIBP to US service | Open point; HIBP switchable per scope (§5.3, §16) |
-| 22 | Access ID lost with browser storage | Key file and access sheet (§3) |
+| 21 | GDPR, HIBP to US service | The check goes through the faculty server; the service sees neither passphrase nor IP (§5.3, §16) |
+| 22 | Access ID lost with browser storage | Access sheet (§3) |
 
 ### Round 2
 
@@ -1085,7 +1064,7 @@ Second adversarial review of the revised plan. Findings and what changed:
 | 3 | Rekey could rewrite history undetectably; concurrent rekeys | Immutable per-version commitments; `If-Match` on old epoch (§5.5, §5.8) |
 | 4 | Roster chain without hash link, numeric pins | Hash-chained, head hash pinned, compare-and-swap on POST; fresh-device limit stated (§5.6, §2) |
 | 5 | Owner-vs-owner eviction; escrow omittable | One human owner in v1; rosters without escrow slot rejected (§5.6, §5.7) |
-| 6 | Recovery code is a bearer credential; code-less fallback baseless; notice suppressible | 72 h waiting period even with code; code-less only via optional recovery contact; notice derived from roster chain; founder acknowledgement (§5.9) |
+| 6 | Recovery code is a bearer credential; code-less fallback baseless; notice suppressible | 72 h waiting period even with code; no code-less path; notice derived from roster chain; founder acknowledgement (§5.9) |
 | 7 | Escrow key compromise permanent for immutable libraries | Spare stored separately; response procedure; advisory banner (§5.9, §8.3) |
 | 8 | localStorage pins forgeable/absent on `file://` | No TOFU; salt/params/access ID bound in AAD with floor and ceiling; rollback state MAC'd and keyed by access ID (§5.2, §5.5, §8.4) |
 | 9 | Disk arithmetic; which operations work read-only | Separate backup disk, 70 % cap, explicit allow-list (§10.1, §12) |

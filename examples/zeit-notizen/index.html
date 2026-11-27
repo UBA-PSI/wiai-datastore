@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'wasm-unsafe-eval' https://wiai.uni-bamberg.de/datastore/client/; style-src 'unsafe-inline'; img-src data: blob:; connect-src https://wiai.uni-bamberg.de/datastore/api/ https://api.pwnedpasswords.com; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'wasm-unsafe-eval' https://wiai.uni-bamberg.de/datastore/client/; style-src 'unsafe-inline'; img-src data: blob:; connect-src https://wiai.uni-bamberg.de/datastore/api/; base-uri 'none'; form-action 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <title>Zeit &amp; Notizen</title>
@@ -340,7 +340,7 @@
 <div id="toast" role="status" aria-live="polite"></div>
 
 
-<script src="https://wiai.uni-bamberg.de/datastore/client/wds-1.0.0.js" integrity="sha384-OakUYcy0quSrlUcqoLskgTW+rd4dIweGZC30nP9kPCJJlCA9ftNI2l7m40fQf2qD" crossorigin="anonymous"
+<script src="https://wiai.uni-bamberg.de/datastore/client/wds-1.0.0.js" integrity="sha384-LTA6dE8HFduJSNkQxykdLMoy9ny4WPHx+MoS3SlKGuihQS2LSyYzM+96F4Sswe2e" crossorigin="anonymous"
         onerror="document.body.textContent='Storage service unreachable. Check your connection and reload this page.'"></script>
 <script>
 "use strict";
@@ -374,7 +374,7 @@
       err_conflict: "Die Daten wurden inzwischen anderswo geändert.", err_unknown: "Unbekannter Fehler.",
       read_only_hint: "Sie haben nur Lesezugriff auf diesen Tresor.",
       shared_hint: "Wenn andere Personen mit Ihnen arbeiten, erscheinen deren neue Einträge, sobald Sie zu diesem Fenster zurückkehren, oder nach „Neu laden“.",
-      privacy: "Die Daten sind Ende-zu-Ende-verschlüsselt; die Fakultät verwahrt für Notfälle einen Wiederherstellungsschlüssel. Wenn Sie eine Passphrase wählen, prüft Ihr Browser sie beim Dienst Pwned Passwords (USA) auf bekannte Datenlecks; der Dienst erhält Ihre IP-Adresse und die ersten fünf Zeichen einer Prüfsumme der Passphrase, nie die Passphrase selbst. Die Daten liegen auf einem Server der Fakultät WIAI (Universität Bamberg). Ihre Passphrase kennt der Server nicht; sie lässt sich nicht zurücksetzen. Mit Ihrem Wiederherstellungscode kann die Fakultät nach einem dokumentierten Verfahren den Zugang wiederherstellen.",
+      privacy: "Die Daten sind Ende-zu-Ende-verschlüsselt; die Fakultät verwahrt für Notfälle einen Wiederherstellungsschlüssel. Die Daten liegen auf einem Server der Fakultät WIAI (Universität Bamberg). Ihre Passphrase kennt der Server nicht; sie lässt sich nicht zurücksetzen. Mit Ihrem Notfallcode kann die Fakultät nach einem dokumentierten Verfahren den Zugang wiederherstellen.",
       privacy_link: "Mehr dazu",
                         load_failed: "Die Daten konnten nicht geladen werden: {msg}", retry: "Erneut versuchen",
             kept_newer: "Die neuere Fassung wurde behalten, es wurde nichts gelöscht.",
@@ -433,7 +433,7 @@
       err_conflict: "The data was changed elsewhere in the meantime.", err_unknown: "Unknown error.",
       read_only_hint: "You have read-only access to this vault.",
       shared_hint: "If other people work with you, their new entries appear when you return to this window, or after \"Reload\".",
-      privacy: "Data is end-to-end encrypted; the faculty holds a recovery key for emergencies. When you choose a passphrase, your browser checks it against known data breaches with the Pwned Passwords service (USA); the service receives your IP address and the first five characters of a checksum of the passphrase, never the passphrase itself. The data is stored on a server of the WIAI faculty (University of Bamberg). The server does not know your passphrase; it cannot be reset. With your recovery code the faculty can restore access after a documented procedure.",
+      privacy: "Data is end-to-end encrypted; the faculty holds a recovery key for emergencies. The data is stored on a server of the WIAI faculty (University of Bamberg). The server does not know your passphrase; it cannot be reset. With your emergency code the faculty can restore access after a documented procedure.",
       privacy_link: "Details",
                         load_failed: "The data could not be loaded: {msg}", retry: "Try again",
             kept_newer: "The newer version was kept, nothing was deleted.",

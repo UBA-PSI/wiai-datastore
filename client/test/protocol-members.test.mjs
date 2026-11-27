@@ -65,13 +65,9 @@ test('an unredeemed invite expires; owners can cancel it', async () => {
   await rejects(newClient(ctx.world).redeemInvite({ inviteCode: i2.code.display.slice(0, -1) + B32[B32.indexOf(last) ^ 1], passphrase: 'abc def ghi jkl' }), core.errors.UsageError);
 });
 
-test('invalid renewals are ignored, valid member renewals are adopted', async () => {
+test('invalid renewals are ignored, the renewal announced at redemption is adopted', async () => {
   const ctx = await setupVault();
-  const { member, accessId } = await addMember(ctx, 'write');
-  await ctx.founder.maintain(); // adopt the redemption renewal
-  assert.equal(ctx.founder.members().filter((m) => m.kind === 'passphrase' && m.role === 'write').length, 1);
-  // member announces fresh keys
-  await member.renewKeys();
+  const { member, accessId } = await addMember(ctx, 'write');   // the member announced fresh keys while redeeming
   assert.equal(member.s.keySets.length, 2);
   const server = ctx.world.server, vault = server.vaults.get(ctx.created.vaultId);
   const slot = Array.from(vault.slots.values()).find((s) => s.accessId === accessId);
@@ -81,31 +77,17 @@ test('invalid renewals are ignored, valid member renewals are adopted', async ()
   slot.renewal = { body: Object.assign({}, good.body, { e_pub: I.b64u(evil.pub) }), sig: good.sig };
   await ctx.founder.maintain();
   assert.ok(ctx.founder.status().warnings.some((w) => /invalid key renewal/.test(w)));
-  assert.equal(ctx.founder.status().rosterVersion, 3);
+  assert.equal(ctx.founder.status().rosterVersion, 2);
   // the genuine statement is adopted
   slot.renewal = good;
   await ctx.founder.maintain();
-  assert.equal(ctx.founder.status().rosterVersion, 4);
+  assert.equal(ctx.founder.status().rosterVersion, 3);
   // the member keeps working through the switch and cleans up its blob
   await member.put('k', 1);
   await member.maintain();
   assert.equal(member.s.keySets.length, 1);
-  assert.equal(member.status().rosterVersion, 4);
+  assert.equal(member.status().rosterVersion, 3);
   assert.equal(await ctx.founder.get('k'), 1);
-});
-
-test('owner renews its own keys', async () => {
-  const ctx = await setupVault();
-  await ctx.founder.put('a', 1);
-  const before = ctx.founder.s.head.body.slots.find((s) => s.id === ctx.founder.s.slotId).e_pub;
-  await ctx.founder.renewKeys();
-  const after = ctx.founder.s.head.body.slots.find((s) => s.id === ctx.founder.s.slotId).e_pub;
-  assert.notEqual(before, after);
-  assert.equal(ctx.founder.s.keySets.length, 1);
-  const c = newClient(ctx.world);
-  await c.unlock({ accessId: ctx.created.accessId, passphrase: ctx.passphrase });
-  assert.equal(c.status().rosterVersion, 2);
-  assert.equal(await c.get('a'), 1);
 });
 
 test('roles: write to read and back; roster edits retry after a concurrent change', async () => {

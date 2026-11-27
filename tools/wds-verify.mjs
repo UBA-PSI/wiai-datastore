@@ -134,8 +134,8 @@ export async function verify(target, flags = {}) {
   const tg = await resolveTarget(flags);
   const add = (id, level, title, detail) => ({ id, level, title, detail: detail || '' });
   let findings = [add('hashes', hashes.differs ? 'warn' : 'info', 'Library hashes', 'Published hashes from ' + hashes.source + '.' + (hashes.note ? ' ' + hashes.note : ''))].concat(st.findings);
-  if (flags['scope-check'] === 'off' || tg.name === 'mock') findings.push(add('scope-settings', 'info', 'Current scope settings', tg.name === 'mock' ? 'Scope settings not checked: the mock creates the scope it needs; the production service knows nothing of this run.' : 'Scope settings not checked (--scope-check off): neither whether the scope exists nor its breach check, enrollment and limits.'));
-  else findings = findings.concat(await scopeCheck(st.scope, st.csp, st.baseUrl, { html, readme }));
+  if (flags['scope-check'] === 'off' || tg.name === 'mock') findings.push(add('scope-settings', 'info', 'Current scope settings', tg.name === 'mock' ? 'Scope settings not checked: the mock creates the scope it needs; the production service knows nothing of this run.' : 'Scope settings not checked (--scope-check off): neither whether the scope exists nor its limits.'));
+  else findings = findings.concat(await scopeCheck(st.scope, st.baseUrl));
   if (tg.degraded) findings.push(add('dynamic-skipped', 'warn', 'Dynamic checks did not run', 'Only the static checks ran: ' + tg.reason + '. Install Python 3.13 with the server packages (tools/README.md) to run the app against a local mock, or try again when the sandbox is reachable.'));
   let info = {};
   if (tg.name === 'mock' || tg.name === 'sandbox') {

@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import json
 
+from starlette.responses import Response
+
 from .config import KDF_DEFAULT
 from .errors import ApiError, bad_request, not_found, rate_limited
 from .routing import endpoint, svc_of
 from .sandbox import sandbox_doc
 from .validate import valid_access_id
+from .pwned import PREFIX_RE
 from .web import client_ip, json_response
 
 PREFIX = "/datastore/api/v1"
@@ -21,8 +24,7 @@ def scope_doc(svc, row, *, admin: bool = False, conn=None) -> dict:
         "scope": row["scope_id"],
         "name": row["name"],
         "status": row["status"],
-        "enrollment": row["enrollment"],
-        "hibp": bool(row["hibp"]),
+        "enrollment": "open" if svc.is_sandbox(row["scope_id"]) else "join_code",  # only the sandbox is open
         "read_only": svc.read_only(),
         "limits": limits if admin else public_limits,
         "kdf": dict(KDF_DEFAULT),
@@ -77,6 +79,19 @@ async def get_kdf(request):
     return json_response(await svc.run(_get_kdf, svc, client_ip(request), access_id))
 
 
+async def get_pwned(request):
+    """Breach check (pwned.py): the answer of the Pwned Passwords range service for a five-character prefix of a SHA-1 hash."""
+    svc = svc_of(request)
+    prefix = request.path_params["prefix"]
+    if not PREFIX_RE.fullmatch(prefix):
+        raise bad_request("The prefix is five uppercase hexadecimal characters.")
+    retry = svc.limiter.pwned(client_ip(request), svc.now())
+    if retry:
+        raise rate_limited(retry)
+    body = await svc.run(svc.pwned.range, prefix)
+    return Response(body, media_type="text/plain; charset=utf-8")
+
+
 async def healthz(request):
     svc = svc_of(request)
 
@@ -96,5 +111,6 @@ def routes():
     return [
         endpoint(PREFIX + "/scopes/{scope}", GET=get_scope),
         endpoint(PREFIX + "/slots/{access_id}/kdf", GET=get_kdf),
+        endpoint(PREFIX + "/pwned/{prefix}", GET=get_pwned),
         endpoint("/datastore/healthz", GET=healthz),
     ]

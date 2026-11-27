@@ -202,7 +202,8 @@ class Library(DocsTestCase):
         csp = docs.csp_policy("https://wiai.uni-bamberg.de/datastore/")
         self.assertIn("default-src 'none'", csp)
         self.assertIn("script-src 'unsafe-inline' 'wasm-unsafe-eval' https://wiai.uni-bamberg.de/datastore/client/;", csp)
-        self.assertIn("connect-src https://wiai.uni-bamberg.de/datastore/api/ https://api.pwnedpasswords.com;", csp)
+        self.assertIn("connect-src https://wiai.uni-bamberg.de/datastore/api/;", csp)   # the datastore only: the breach check runs through its server
+        self.assertNotIn("pwnedpasswords", csp)
         self.assertNotIn("'unsafe-eval'", csp.replace("'wasm-unsafe-eval'", ""))
         self.assertNotIn("*", csp)
         # every directive is a known one
@@ -309,27 +310,24 @@ class RepositoryDocuments(unittest.TestCase):
         self.assertNotIn(PRIVACY_DE, porting)
         self.assertIn("integration.md, section 11", porting)
 
-    def test_the_breach_check_sentence_is_the_same_everywhere(self):
-        from wds_server.prompt import HIBP_DE, HIBP_EN
-        self.assertIn("Pwned Passwords", HIBP_EN)
-        self.assertIn("checksum", HIBP_EN)
-        self.assertNotIn("hash", HIBP_EN.lower())
-        self.assertIn("Prüfsumme", HIBP_DE)
-        self.assertNotIn("Hash", HIBP_DE)
-        guide = self.c.get("/datastore/docs/integration.md").text
-        self.assertEqual(guide.count(HIBP_EN), 1)  # stated once in full: the template of section 11
-        self.assertEqual(guide.count(HIBP_DE), 1)
-        self.assertIn(HIBP_EN, self.c.get("/datastore/llms.txt").text)
-        self.assertIn(HIBP_DE, self.c.get("/datastore/llms.txt").text)
-        self.assertIn(HIBP_EN, self.c.get("/datastore/docs/users.en.md").text)
-        self.assertIn(HIBP_DE, self.c.get("/datastore/docs/users.de.md").text)
-        porting = self.c.get("/datastore/docs/porting.md").text
-        self.assertNotIn(HIBP_EN, porting)
-        self.assertNotIn(HIBP_DE, porting)
-        # the example app of the repository carries both sentences in its privacy text
-        app = (REPO_DOCS.parents[1] / "examples" / "zeit-notizen" / "index.html").read_text(encoding="utf-8")
-        self.assertIn(HIBP_EN, app)
-        self.assertIn(HIBP_DE, app)
+    def test_the_breach_check_is_described_once_and_without_conditions(self):
+        """One wording for every scope (the check runs through the faculty's server); no branch on a scope setting."""
+        from wds_server.prompt import BREACH_DE, BREACH_EN
+        for sentence, needles in ((BREACH_EN, ("Pwned Passwords", "first five characters of a checksum", "faculty's server", "neither the passphrase nor your IP address")),
+                                  (BREACH_DE, ("Pwned Passwords", "ersten fünf Zeichen einer Prüfsumme", "Server der Fakultät", "weder die Passphrase noch Ihre IP-Adresse"))):
+            for needle in needles:
+                self.assertIn(needle, sentence)
+        self.assertNotIn("hash", BREACH_EN.lower())
+        self.assertNotIn("Hash", BREACH_DE)
+        for name, needles in (("users.en", ("Pwned Passwords", "first five characters of a checksum")),
+                              ("users.de", ("Pwned Passwords", "ersten fünf Zeichen einer Prüfsumme"))):
+            text = self.c.get(f"/datastore/docs/{name}.md").text
+            for needle in needles:
+                self.assertIn(needle, text, name)
+        for name in ("integration.md", "porting.md", "llms.txt", "users.en.md", "users.de.md"):
+            text = (REPO_DOCS / name).read_text(encoding="utf-8")
+            self.assertNotIn("api.pwnedpasswords.com", text, name)   # the browser never talks to it
+            self.assertNotIn("Have I Been Pwned", text, name)
 
     def test_the_guides_fit_one_read_and_llms_txt_has_no_index(self):
         for name, limit in (("integration.md", 350), ("porting.md", 150), ("llms.txt", 45)):
@@ -351,7 +349,7 @@ class RepositoryDocuments(unittest.TestCase):
         self.assertIn("llms.txt", checklist)
         # the dashboard text and the CLAUDE.md section point to the rules and do not restate them
         from wds_server import prompt
-        snippet = prompt.claude_md(sid="a-123456", base="https://x/datastore", repo_url="r", sandbox_id=None, enrollment="open")
+        snippet = prompt.claude_text(sid="a-123456", base="https://x/datastore", repo_url="r", sandbox_id=None)
         self.assertIn("read https://x/datastore/llms.txt and follow its rules", snippet)
         for restated in ("localStorage", "cryptography", "script-src", "setLocale", "onLock"):
             self.assertNotIn(restated, snippet)
@@ -399,6 +397,8 @@ class RepositoryDocuments(unittest.TestCase):
         self.assertIn("The library has no user identity", guide)
         self.assertIn("There is no unique index", guide)
         self.assertIn("{{sandbox_creation}}", (REPO_DOCS / "integration.md").read_text(encoding="utf-8"))
+        self.assertNotIn("loses passphrase and emergency code", guide)   # without the emergency code there is no recovery
+        self.assertIn("without that code the data is lost", guide)
         self.assertNotIn("remove `https://api.pwnedpasswords.com`", guide)   # one fixed policy: no branch on the scope's breach-check setting
 
     def test_users_documents_explain_the_old_data_question(self):

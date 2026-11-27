@@ -56,6 +56,9 @@ function stopChild(child) {
   });
 }
 
+// The join code of the scopes that the mock makes for an app's scope ID (only the sandbox is open; the driver types this code).
+export const MOCK_JOIN_CODE = 'K7M2QX9A';
+
 // opts: escrow {current:{e_pub,s_pub}, spare:{e_pub,s_pub}} (default: generated, returned as mock.escrow with private parts),
 //       bundle: true to build the library with the escrow pins into <tmp>/bundle (default false),
 //       python: path of the Python binary (default findPython()),
@@ -81,7 +84,7 @@ export async function startMock(opts = {}) {
     const db = join(tmp, 'wds.db');
     const cfg = join(tmp, 'config.ini');
     // The development machine's disk is often above the 85 % default; the mock must never be read-only.
-    writeFileSync(cfg, '[server]\n' + (built ? 'client_dir = ' + bundleDir + '\n' : '') + 'read_only_threshold = 1.0\nsweep_interval = 0\n'
+    writeFileSync(cfg, '[server]\n' + (built ? 'client_dir = ' + bundleDir + '\n' : '') + 'read_only_threshold = 1.0\nsweep_interval = 0\npwned_url =\n'   // no outbound access from the mock: the breach check answers 503 at once and the dialogs use the strict rules
       + '[escrow]\ncurrent_e_pub = ' + escrow.current.e_pub + '\ncurrent_s_pub = ' + escrow.current.s_pub + '\n'
       + 'spare_e_pub = ' + escrow.spare.e_pub + '\nspare_s_pub = ' + escrow.spare.s_pub + '\n'
       + '[operator]\ntoken_hashes = ' + operatorHash + '\n'
@@ -116,8 +119,9 @@ export async function startMock(opts = {}) {
         return { status: res.status, json: body };
       },
       // Create a scope (idempotent per slug within this mock); resolves the full scope id.
-      async createScope(slug, { enrollment = 'open', joinCode = null } = {}) {
-        const r = await this.admin('POST', '/scopes', { slug, name: slug, enrollment, join_code: joinCode, hibp: false, limits: null });
+      // The join code is random unless given; the answer carries it (join_code).
+      async createScope(slug, { joinCode = null } = {}) {
+        const r = await this.admin('POST', '/scopes', { slug, name: slug, join_code: joinCode, limits: null });
         if (r.status !== 201) throw new Error('creating the scope failed: ' + r.status + ' ' + JSON.stringify(r.json));
         return r.json;
       },
@@ -128,12 +132,12 @@ export async function startMock(opts = {}) {
           + 'from wds_server.config import load_config\nfrom wds_server.service import Service\nfrom wds_server.scopes import create_scope\nfrom wds_server.db import transaction\n'
           + 'svc = Service(load_config(sys.argv[3]), sys.argv[2], validate=False)\n'
           + 'with svc.db.connection() as conn:\n    with transaction(conn):\n'
-          + '        row = create_scope(svc, conn, slug=sys.argv[4][:-7], name="wds-verify mock", enrollment="open", join_code=None, hibp=False, limits=None)\n'
+          + '        row = create_scope(svc, conn, slug=sys.argv[4][:-7], name="wds-verify mock", join_code="' + MOCK_JOIN_CODE + '", limits=None)\n'
           + '        conn.execute("UPDATE scopes SET scope_id=? WHERE scope_id=?", (sys.argv[4], row["scope_id"]))\n';
         const r = spawnSync(python, ['-I', '-c', code, SERVER_DIR, db, cfg, scopeId], { encoding: 'utf8' });
         if (r.status !== 0) throw new Error('could not create the scope ' + scopeId + ' in the mock: ' + r.stderr);
       },
-      // Make the pending recovery of this mock ready (time travel over the 72 hour or 7 day waiting period).
+      // Make the pending recovery of this mock ready (time travel over the 72 hour waiting period).
       makeRecoveryReady() {
         const code = 'import sqlite3,sys,time\nc=sqlite3.connect(sys.argv[1],timeout=30)\nc.execute("UPDATE recoveries SET ready_at=? WHERE state=\'pending\'",(int(time.time())-1,))\nc.commit()\n';
         const r = spawnSync(python, ['-I', '-c', code, db], { encoding: 'utf8' });

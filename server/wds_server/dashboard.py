@@ -19,7 +19,7 @@ from starlette.routing import Route
 
 from . import access
 from . import prompt as prompt_mod
-from .config import CEILING_LIMITS, DEFAULT_LIMITS, LIMIT_KEYS
+from .config import LIMIT_KEYS
 from .docs import REPO_URL
 from .db import transaction
 from .errors import ApiError
@@ -27,8 +27,8 @@ from .loginpsi import LoginPsi, LoginRejected
 from .privacy import privacy_page
 from .sandbox import sandbox_doc
 from .texts import TEXTS
-from .scopes import (ENROLLMENTS, MAX_SCOPES_PER_CREATOR, SLUG_RE, check_disk_budget, create_scope, delete_scope,
-                     new_join_code, patch_scope, soft_delete_vault, validate_contact_email, validate_limits, validate_name)
+from .scopes import (MAX_SCOPES_PER_CREATOR, check_disk_budget, create_scope, delete_scope, new_join_code, patch_scope,
+                     soft_delete_vault, validate_contact_email, validate_name)
 from .service import AUDIT_RETENTION, DELETED_VAULT_TTL
 from .ui import BASE, TZ_NAME, Ctx, esc, render, table, tr
 from .util import b64u_encode, sha256
@@ -36,14 +36,11 @@ from .validate import valid_scope_id, valid_vault_id
 
 log = logging.getLogger("wds_server")
 
-EXPERT_COOKIE = "wds_expert"  # "1": show the expert settings opened (a display preference of this browser, no personal data)
-EXPERT_COOKIE_AGE = 365 * 86400
 SESSION_COOKIE = "__Host-wds_session"
 NONCE_COOKIE = "__Host-wds_login"
 PRE_COOKIE = "__Host-wds_pre"  # dev login only: binds the form token to the browser
 DEFAULT_NEXT = BASE + "/"
 FORM_LIMIT = 65536
-MIB = 1048576
 
 
 def whole_bytes(text: str) -> str:
@@ -52,9 +49,9 @@ def whole_bytes(text: str) -> str:
 
 
 BYTE_LIMITS = ("max_value_bytes", "vault_bytes", "scope_bytes")
-NOTICES = {"created", "saved", "limits", "code_rotated", "admin_added", "admin_removed", "vault_deleted", "suspended",
-           "resumed", "blocked", "unblocked", "locked"}
-EXPERT_NOTICES = {"saved", "limits", "admin_added", "admin_removed", "vault_deleted", "suspended"}  # results of forms in the expert area: show it opened
+NOTICES = {"created", "saved", "code_rotated", "admin_added", "admin_removed", "vault_deleted", "suspended", "resumed", "blocked",
+           "unblocked"}
+EXPERT_NOTICES = {"saved", "admin_added", "admin_removed", "vault_deleted", "suspended"}  # results of forms in the expert area: show it opened
 
 
 class DashError(Exception):
@@ -110,18 +107,6 @@ def slugify(text: str) -> str:
     text = re.sub(r"[^a-z0-9]+", "-", text).strip("-")
     text = re.sub(r"^[^a-z]+", "", text)
     return text[:30].strip("-") or "app"
-
-
-def parse_int(value: str, key: str, lo: int | None = None, hi: int | None = None, unit: str = "") -> int:
-    """A whole number; with lo and hi, one inside that range. Two different messages: not a number, and out of range."""
-    value = (value or "").strip()
-    digits = value[1:] if value[:1] == "-" else value
-    if not value.isascii() or not digits.isdigit() or len(value) > 12:
-        raise DashError(400, "err_number", key)
-    n = int(value)
-    if lo is not None and hi is not None and not lo <= n <= hi:
-        raise DashError(400, "err_range", key, lo=lo, hi=hi, unit=(" " + unit) if unit else "")
-    return n
 
 
 def actor_of(ctx: Ctx, operator_view: bool = False) -> str:
@@ -344,8 +329,7 @@ class Dashboard:
     def status_badge(self, ctx: Ctx, row) -> str:
         if row["status"] == "active":
             return f'<span class="badge good">{ctx.t("status_active")}</span>'
-        who = "operator" if row["suspended_by"] != "admin" else "admin"
-        return f'<span class="badge bad">{ctx.t("status_suspended_" + who)}</span>'
+        return f'<span class="badge bad">{ctx.t("status_suspended")}</span>'
 
     async def home(self, request, ctx: Ctx) -> Response:
         if not ctx.ident:
@@ -375,30 +359,18 @@ class Dashboard:
         if rows:
             parts.append(f'<p class="hint" id="home-table-hint">{t("home_table_hint")}</p>')
         if ident.can_create:
-            parts.append(self.create_form(ctx, values or {}, open_=bool(error) or not rows, error=error, expert=self.expert_pref(request)))
+            parts.append(self.create_form(ctx, values or {}, open_=bool(error) or not rows, error=error))
         else:
             parts.append(f'<p class="muted">{t("cannot_create")}</p>')
         return render(ctx, t("home_title"), "".join(parts), status=status)
 
-    def create_form(self, ctx: Ctx, v: dict, open_: bool, error: str | None = None, expert: bool = False) -> str:
-        """The standard variant needs three answers (name, contact, description). Slug, enrollment and breach check sit in a
-        collapsed part; the form submits their defaults when nobody opens it (join code, breach check on)."""
+    def create_form(self, ctx: Ctx, v: dict, open_: bool, error: str | None = None) -> str:
+        """Three answers: name, contact, description. The join code is made for the app; the short name of the app ID comes from the name."""
         t = ctx.t
-        enroll = v.get("enrollment", "join_code")
-        opts = "".join(f'<option value="{e}"{" selected" if e == enroll else ""}>{t("enroll_" + e)}</option>' for e in ENROLLMENTS)
-        hibp_checked = "" if v and not v.get("hibp") else " checked"
         contact = v["contact_email"] if "contact_email" in v else (ctx.ident.email or "")
         d_ = self.cfg.limit_defaults
         defaults = t("create_defaults", vault=whole_bytes(ctx.bytes(d_["vault_bytes"])), value=whole_bytes(ctx.bytes(d_["max_value_bytes"])),
                      versions=d_["history_versions"], vaults=d_["max_vaults"])
-        more_open = expert or bool(error and v and (v.get("slug") or enroll != "join_code" or not v.get("hibp")))
-        more = (f'<details class="expert" id="create-more"{" open" if more_open else ""}><summary>{t("create_more")}</summary>'
-                f'<label for="c_slug">{t("f_slug")}</label><input type="text" id="c_slug" name="slug" maxlength="30" pattern="[a-z][a-z0-9\\-]*" value="{esc(v.get("slug"))}">'
-                f'<p class="hint">{t("f_slug_hint")}</p>'
-                f'<label for="c_enroll">{t("f_enrollment")}</label><select id="c_enroll" name="enrollment">{opts}</select>'
-                f'<p class="hint">{t("f_enrollment_hint")}</p>'
-                f'<p><input type="checkbox" id="c_hibp" name="hibp" value="1"{hibp_checked}> <label class="inline" for="c_hibp">{t("f_hibp")}</label></p>'
-                f'<p class="hint">{t("f_hibp_hint")}</p></details>')
         inner = (
             f'<label for="c_name">{t("f_name")}</label><input type="text" id="c_name" name="name" required maxlength="100" value="{esc(v.get("name"))}">'
             f'<p class="hint">{t("f_name_hint")}</p>'
@@ -406,7 +378,7 @@ class Dashboard:
             f'<p class="hint">{t("f_contact_hint")}</p>'
             f'<label for="c_desc">{t("f_description")}</label><textarea id="c_desc" name="description" maxlength="1000">{esc(v.get("description"))}</textarea>'
             f'<p class="hint">{t("f_description_hint")}</p>'
-            f'<p class="box" id="create-defaults">{defaults}</p>' + more
+            f'<p class="box" id="create-defaults">{defaults}</p>'
             + (self.form_error("create", error) if error else "") + f'<button type="submit">{t("create_scope")}</button>')
         return (f'<h2>{t("create_title")}</h2><details{" open" if open_ else ""}><summary>{t("create_summary")}</summary>'
                 + ctx.form("/scopes", inner) + "</details>")
@@ -416,18 +388,14 @@ class Dashboard:
             raise DashError(401, "err_login")
         if not ctx.ident.can_create:
             raise DashError(403, "err_not_staff")
-        v = {"name": form.get("name", ""), "slug": form.get("slug", ""), "description": form.get("description", ""),
-             "contact_email": form.get("contact_email", ""), "enrollment": form.get("enrollment", "join_code"),
-             "hibp": form.get("hibp") == "1"}
+        v = {"name": form.get("name", ""), "description": form.get("description", ""), "contact_email": form.get("contact_email", "")}
 
         def work():
             if self.svc.read_only():
                 raise DashError(503, "err_read_only")
             name = validate_name(v["name"])
             contact = validate_contact_email(v["contact_email"], required=True)
-            slug = v["slug"].strip().lower() or slugify(name)
-            if not SLUG_RE.fullmatch(slug) or len(slug) > 30:
-                raise DashError(400, "err_slug")
+            slug = slugify(name)
             with self.svc.db.connection() as conn:
                 with transaction(conn):
                     if not ctx.ident.operator and conn.execute(
@@ -435,8 +403,8 @@ class Dashboard:
                             (ctx.ident.username,)).fetchone()[0] >= MAX_SCOPES_PER_CREATOR:
                         raise DashError(409, "err_scope_cap", str(MAX_SCOPES_PER_CREATOR))
                     check_disk_budget(self.svc, conn, None, {})
-                    row = create_scope(self.svc, conn, slug=slug, name=name, enrollment=v["enrollment"], hibp=v["hibp"],
-                                       description=v["description"], contact_email=contact, creator=ctx.ident.username)
+                    row = create_scope(self.svc, conn, slug=slug, name=name, description=v["description"], contact_email=contact,
+                                       creator=ctx.ident.username)
                     conn.execute("INSERT INTO scope_admins (scope_id, admin, role, added_by, added) VALUES (?,?,?,?,?)",
                                  (row["scope_id"], ctx.ident.username, "creator", ctx.ident.username, self.svc.now()))
                     self.svc.audit(conn, actor_of(ctx), "scope_created", row["scope_id"])
@@ -470,8 +438,8 @@ class Dashboard:
 
     @staticmethod
     def locked_for(ctx: Ctx, row) -> bool:
-        """True when the operator holds the scope suspended: its admins cannot change anything until the operator resumes it."""
-        return row["status"] == "suspended" and row["suspended_by"] != "admin" and not ctx.ident.operator
+        """True while the scope is paused (only the operator pauses and resumes): its admins cannot change anything."""
+        return row["status"] == "suspended" and not ctx.ident.operator
 
     def library_tag(self) -> str | None:
         try:
@@ -485,32 +453,17 @@ class Dashboard:
         except (OSError, ValueError, KeyError):
             return None
 
-    def prompt(self, ctx: Ctx, row, tag: str | None) -> tuple[str, str]:
-        """(prompt, CLAUDE.md snippet) for a scope: its settings as of today, the library tag, the porting pointer and, when
-        the server has a sandbox, how to test against it. Plain text; the page escapes it."""
-        sid = row["scope_id"]
-        base = self.cfg.public_base.rstrip("/")
-        limits = self.svc.scope_limits(row)
+    def claude_text(self, row) -> str:
+        """The text for Claude, also the CLAUDE.md / AGENTS.md section (prompt.py). Plain text; the page escapes it."""
         sb = self.cfg.sandbox
-        sandbox_id = sb.scope_id if sb else None
-        snippet = prompt_mod.claude_md(sid=sid, base=base, repo_url=REPO_URL, sandbox_id=sandbox_id, enrollment=row["enrollment"])
-        text = prompt_mod.prompt(
-            ctx.lang, sid=sid, date=ctx.date(self.svc.now()), base=base, repo_url=REPO_URL, sandbox_id=sandbox_id,
-            tag=tag or ctx.pick("(Das Skript-Tag steht in llms.txt.)", "(The script tag is in llms.txt.)"),
-            enrollment=row["enrollment"], hibp=bool(row["hibp"]), max_vaults=limits["max_vaults"],
-            max_value=whole_bytes(ctx.bytes(limits["max_value_bytes"])), vault_bytes=whole_bytes(ctx.bytes(limits["vault_bytes"])),
-            history_versions=limits["history_versions"], snippet=snippet)
-        return text, snippet
+        return prompt_mod.claude_text(sid=row["scope_id"], base=self.cfg.public_base.rstrip("/"), repo_url=REPO_URL,
+                                      sandbox_id=sb.scope_id if sb else None)
 
     def load_scope(self, ctx: Ctx, scope_id: str):
         with self.svc.db.connection() as conn:
             row, role = self.access(conn, ctx, scope_id)
             vaults = conn.execute(
-                "SELECT v.vault_id, v.created, v.last_write, v.bytes, v.roster_bytes, v.deleted, v.epoch,"
-                " (SELECT COUNT(*) FROM slots s WHERE s.vault_id=v.vault_id AND s.revoked IS NULL"
-                "   AND (s.kind='passphrase' OR s.redeemed IS NOT NULL)) AS members,"
-                " (SELECT COUNT(*) FROM record_versions rv WHERE rv.vault_id=v.vault_id AND rv.epoch IS NOT NULL"
-                "   AND rv.epoch < v.epoch) AS old_blobs"
+                "SELECT v.vault_id, v.created, v.last_write, v.bytes, v.roster_bytes, v.deleted"
                 " FROM vaults v WHERE v.scope_id=? ORDER BY v.created DESC, v.vault_id LIMIT 1000", (scope_id,)).fetchall()
             admins = conn.execute("SELECT * FROM scope_admins WHERE scope_id=? ORDER BY role, admin", (scope_id,)).fetchall()
             audit = conn.execute("SELECT * FROM audit WHERE scope_id=? ORDER BY id DESC LIMIT 15", (scope_id,)).fetchall()
@@ -521,10 +474,6 @@ class Dashboard:
         if redirect:
             return redirect
         return await self.render_scope(request, ctx, request.path_params["scope"])
-
-    def expert_pref(self, request) -> bool:
-        """The person asked this browser to show the expert settings opened (cookie wds_expert=1)."""
-        return request.cookies.get(EXPERT_COOKIE) == "1"
 
     async def render_scope(self, request, ctx: Ctx, scope_id: str, *, error: str | None = None, status: int = 200,
                            values: dict | None = None, field: str | None = None) -> Response:
@@ -537,7 +486,6 @@ class Dashboard:
         row, role, vaults, admins, audit = await self.svc.run(self.load_scope, ctx, scope_id)
         can_edit = role in ("creator", "admin") and not self.locked_for(ctx, row)
         limits = self.svc.scope_limits(row)
-        own = json.loads(row["limits"] or "{}")
         tag = self.library_tag()
         notice = request.query_params.get("notice")
         sid = row["scope_id"]
@@ -557,25 +505,17 @@ class Dashboard:
         # ---- the default view: what a person who is not a developer needs ------------------------------------------------
         if not is_sb:
             if suspended:
-                p.append(self.suspend_controls(ctx, row, role))
-            p.append(self.steps_section(ctx, row, tag, can_edit, limits))
+                p.append(self.suspend_controls(ctx, row))
+            p.append(self.steps_section(ctx, row, tag, can_edit))
             p.append(self.usage_section(ctx, row, vaults, limits, can_edit))
             p.append(self.help_section(ctx, row))
         # ---- the expert area -------------------------------------------------------------------------------------------------
         x = []
-        to_here = ctx.href("/scopes/" + sid)
-        pref_on = self.expert_pref(request)
-        x.append(ctx.form("/prefs/expert", f'<input type="hidden" name="on" value="{0 if pref_on else 1}">'
-                          f'<input type="hidden" name="next" value="{esc(to_here)}">'
-                          f'<button type="submit" class="secondary small">{t("expert_forget" if pref_on else "expert_remember")}</button> '
-                          f'<span class="hint">{t("expert_remember_hint")}</span>'))
         x.append(f'<dl class="facts">'
                  + (f'<dt>{t("col_scope_id")}</dt><dd><code id="sid">{esc(sid)}</code></dd>' if is_sb else "")
                  + f'<dt>{t("col_status")}</dt><dd>{self.status_badge(ctx, row)}</dd>'
                  f'<dt>{t("f_contact")}</dt><dd>{esc(row["contact_email"]) or "–"}</dd>'
-                 f'<dt>{t("created")}</dt><dd>{ctx.time(row["created"])}</dd>'
-                 f'<dt>{t("f_enrollment")}</dt><dd>{t("enroll_" + row["enrollment"])}</dd>'
-                 f'<dt>{t("f_hibp")}</dt><dd>{t("yes") if row["hibp"] else t("no")}</dd></dl>')
+                 f'<dt>{t("created")}</dt><dd>{ctx.time(row["created"])}</dd></dl>')
         if row["description"]:
             p_desc = f'<p>{esc(row["description"])}</p>'
             x.append(p_desc)
@@ -585,7 +525,6 @@ class Dashboard:
             x.append(self.integration_section(ctx, row, tag))
         if can_edit:
             retyped = field == "settings" and bool(values)
-            hibp_checked = " checked" if (values.get("hibp") == "1" if retyped else row["hibp"]) else ""
 
             def shown(key: str) -> str:
                 return esc(values.get(key, "") if retyped else row[key])
@@ -593,16 +532,8 @@ class Dashboard:
                 f'<label for="s_name">{t("f_name")}</label><input type="text" id="s_name" name="name" required maxlength="100" value="{shown("name")}">'
                 f'<label for="s_desc">{t("f_description")}</label><textarea id="s_desc" name="description" maxlength="1000">{shown("description")}</textarea>'
                 f'<label for="s_mail">{t("f_contact")}</label><input type="email" id="s_mail" name="contact_email" required maxlength="254" value="{shown("contact_email")}">'
-                f'<p class="hint">{t("f_contact_hint")}</p>'
-                f'<p><input type="checkbox" id="s_hibp" name="hibp" value="1"{hibp_checked}> <label class="inline" for="s_hibp">{t("f_hibp")}</label></p>'
-                f'<p class="hint">{t("f_hibp_hint")}</p>{err_for("settings")}<button type="submit">{t("save")}</button>'))
-            opts = "".join(f'<option value="{e}"{" selected" if e == row["enrollment"] else ""}>{t("enroll_" + e)}</option>' for e in ENROLLMENTS)
-            x.append(f'<h3 id="enrollment">{t("sec_enrollment")}</h3><p>{t("f_enrollment_hint")}</p>'
-                     + ctx.form(f"/scopes/{sid}/enrollment", f'<label for="e_mode">{t("f_enrollment")}</label><select id="e_mode" name="enrollment">{opts}</select>'
-                                f'<button type="submit">{t("save")}</button>'))
-            x.append(self.limits_form(ctx, row, limits, own, err_for("limits"), values if field == "limits" else {}))
-        else:
-            x.append(f'<h3 id="limits">{t("sec_limits")}</h3>' + self.limits_table(ctx, limits, own))
+                f'<p class="hint">{t("f_contact_hint")}</p>{err_for("settings")}<button type="submit">{t("save")}</button>'))
+        x.append(f'<h3 id="limits">{t("sec_limits")}</h3><p>{t("limits_hint")}</p>' + self.limits_table(ctx, limits))
         if is_sb:  # the configuration file owns the sandbox: no admin list to show or to edit
             x.append(f'<h3>{t("sec_admins")}</h3><p>{t("sandbox_admins")}</p>')
         else:
@@ -610,8 +541,8 @@ class Dashboard:
         x.append(self.vaults_section(ctx, row, vaults, can_edit))
         x.append(f'<h3>{t("sec_audit")}</h3><p class="hint">{t("audit_hint", tz=TZ_NAME)}</p>' + self.audit_table(ctx, audit)
                  + f'<p><a href="{ctx.url("/scopes/" + sid + "/audit")}">{t("audit_all")}</a></p>')
-        if not is_sb and not suspended:
-            x.append(f'<h3>{t("suspend")}</h3>' + self.suspend_controls(ctx, row, role))
+        if ctx.ident.operator and not is_sb and not suspended:  # only the operator pauses an app
+            x.append(f'<h3>{t("suspend")}</h3>' + self.suspend_controls(ctx, row))
         # the operator may delete a scope, too: it frees the disk budget
         if (can_edit or role == "operator") and not is_sb:
             x.append(f'<h3>{t("sec_danger")}</h3><p>{t("delete_scope_text", days=DELETED_VAULT_TTL // 86400)}</p>'
@@ -619,31 +550,24 @@ class Dashboard:
                                 f'<label for="d_conf">{t("delete_scope_confirm", scope=sid)}</label>'
                                 f'<input type="text" id="d_conf" name="confirm" autocomplete="off" required{self.invalid_attrs(err_for("danger"))}>'
                                 f'{err_for("danger")}<button type="submit" class="danger">{t("delete_scope")}</button>'))
-        opened = bool(ctx.ident.operator or pref_on or field or notice in EXPERT_NOTICES)
+        opened = bool(ctx.ident.operator or field or notice in EXPERT_NOTICES)
         p.append(f'<details class="expert" id="expert"{" open" if opened else ""}><summary>{t("expert_title")}</summary>'
                  f'<p class="hint">{t("expert_hint")}</p>' + "".join(x) + "</details>")
         return render(ctx, row["name"], "".join(p), status=status)
 
-    def steps_section(self, ctx: Ctx, row, tag: str | None, can_edit: bool, limits: dict) -> str:
-        """"Next steps": the text for Claude, the join code (or what the enrollment setting means), the guide for the users."""
+    def steps_section(self, ctx: Ctx, row, tag: str | None, can_edit: bool) -> str:
+        """"Next steps": the text for Claude, the join code, the guide for the users."""
         t = ctx.t
         sid = row["scope_id"]
-        prompt_text, _snippet = self.prompt(ctx, row, tag)
         copy = lambda target: (f'<button type="button" class="secondary small" data-copy="{target}" data-done="{t("copied")}">{t("copy")}</button>')
         steps = [f'<li><p class="step-title">{t("step_prompt")}</p><p class="hint">{t("claude_prompt_hint")}</p>'
-                 f'<div class="scrollbox" role="group" tabindex="0" aria-label="{t("claude_prompt")}"><pre id="prompt">{esc(prompt_text)}</pre></div>{copy("prompt")}'
+                 f'<div class="scrollbox" role="group" tabindex="0" aria-label="{t("claude_prompt")}"><pre id="prompt">{esc(self.claude_text(row))}</pre></div>{copy("prompt")}'
                  + ("" if tag else f'<div class="error">{t("no_hashes")}</div>') + "</li>"]
-        mode = row["enrollment"]
-        if mode == "join_code":
-            if can_edit:
-                steps.append(f'<li><p class="step-title">{t("step_code")}</p><p><code id="jc" class="big">{esc(row["join_code"])}</code> {copy("jc")}</p>'
-                             f'<p class="hint">{t("join_code_hint")}</p><p class="hint">{t("join_code_claude_hint")}</p>'
-                             + ctx.form(f"/scopes/{sid}/join-code", f'<button type="submit" class="secondary small">{t("rotate_code")}</button>',
-                                        confirm=t("rotate_confirm")) + "</li>")
-        elif mode == "open":
-            steps.append(f'<li><p class="step-title">{t("step_code")}</p><p>{t("step_code_open", n=limits["max_vaults"])}</p></li>')
-        else:
-            steps.append(f'<li><p class="step-title">{t("step_code")}</p><p>{t("step_code_closed")}</p></li>')
+        if can_edit:
+            steps.append(f'<li><p class="step-title">{t("step_code")}</p><p><code id="jc" class="big">{esc(row["join_code"])}</code> {copy("jc")}</p>'
+                         f'<p class="hint">{t("join_code_hint")}</p><p class="hint">{t("join_code_claude_hint")}</p>'
+                         + ctx.form(f"/scopes/{sid}/join-code", f'<button type="submit" class="secondary small">{t("rotate_code")}</button>',
+                                    confirm=t("rotate_confirm")) + "</li>")
         users = esc(BASE + "/docs/" + ctx.pick("users.de", "users.en"))
         steps.append(f'<li><p class="step-title">{t("step_users")}</p><p>{t("step_users_hint")} <a href="{users}">{t("users_doc")}</a></p></li>')
         return f'<h2 id="next-steps">{t("next_steps")}</h2><ol class="steps">{"".join(steps)}</ol>'
@@ -673,16 +597,12 @@ class Dashboard:
                 f'<p class="hint">{t("sid_hint")}</p>')
 
     def integration_section(self, ctx: Ctx, row, tag: str | None) -> str:
-        """For developers (inside the expert area): the script tag and the section for CLAUDE.md / AGENTS.md."""
+        """For developers (inside the expert area): the script tag of the library."""
         t = ctx.t
-        p: list[str] = [f'<h3 id="integration">{t("sec_integration")}</h3><p>{t("integration_intro")}</p>']
-        if tag:
-            p.append(f'<h4>{t("script_tag")}</h4><pre id="tag">{esc(tag)}</pre>'
-                     f'<button type="button" class="secondary small" data-copy="tag" data-done="{t("copied")}">{t("copy")}</button>')
-        _prompt_text, snippet = self.prompt(ctx, row, tag)
-        p.append(f'<h4>{t("claude_md_title")}</h4><p class="hint">{t("claude_md_hint")}</p><pre id="claude-md">{esc(snippet)}</pre>'
-                 f'<button type="button" class="secondary small" data-copy="claude-md" data-done="{t("copied")}">{t("copy")}</button>')
-        return "".join(p)
+        if not tag:
+            return ""
+        return (f'<h3 id="integration">{t("sec_integration")}</h3><p>{t("integration_intro")}</p><pre id="tag">{esc(tag)}</pre>'
+                f'<button type="button" class="secondary small" data-copy="tag" data-done="{t("copied")}">{t("copy")}</button>')
 
     def sandbox_facts(self, ctx: Ctx) -> str:
         """Operator view of the sandbox scope: when it is wiped next and when it was wiped last (read-only)."""
@@ -693,23 +613,19 @@ class Dashboard:
                 f'<dt>{t("sb_next_wipe")}</dt><dd>{ctx.time(doc["next_wipe"])}</dd>'
                 f'<dt>{t("sb_last_wipe")}</dt><dd>{ctx.time(doc["last_wipe"])}</dd></dl>')
 
-    def suspend_controls(self, ctx: Ctx, row, role: str) -> str:
+    def suspend_controls(self, ctx: Ctx, row) -> str:
+        """Only the operator pauses an app and ends the pause; everybody else is told who can."""
         t = ctx.t
         sid = row["scope_id"]
+        if not ctx.ident.operator:
+            return f'<p class="muted">{t("suspended_by_operator")}</p>' if row["status"] == "suspended" else ""
         if row["status"] == "active":
-            btn = ctx.form(f"/scopes/{sid}/suspend", f'<button type="submit" class="danger">{t("suspend")}</button>',
-                           confirm=t("suspend_confirm"))
+            btn = ctx.form(f"/scopes/{sid}/suspend", f'<button type="submit" class="danger">{t("suspend")}</button>', confirm=t("suspend_confirm"))
             return f'<div class="row">{btn}<span class="hint">{t("suspend_hint")}</span></div>'
-        if role == "operator" or row["suspended_by"] == "admin" or ctx.ident.operator:
-            lock = ""
-            if ctx.ident.operator and row["suspended_by"] == "admin":  # an admin suspension that the admins could undo
-                lock = (ctx.form(f"/scopes/{sid}/suspend", f'<button type="submit" class="danger">{t("lock_scope")}</button>',
-                                 confirm=t("lock_confirm")) + f'<span class="hint">{t("lock_hint")}</span>')
-            return (f'<div class="row">' + ctx.form(f"/scopes/{sid}/resume", f'<button type="submit">{t("resume")}</button>')
-                    + lock + "</div>")
-        return f'<p class="muted">{t("suspended_by_operator")}</p>'
+        return f'<div class="row">' + ctx.form(f"/scopes/{sid}/resume", f'<button type="submit">{t("resume")}</button>') + "</div>"
 
-    def limits_table(self, ctx: Ctx, limits: dict, own: dict) -> str:
+    def limits_table(self, ctx: Ctx, limits: dict) -> str:
+        """The limits of this app, read only: the operator changes them on request (python -m wds_server.cli limits)."""
         t = ctx.t
         rows = []
         for k in LIMIT_KEYS:
@@ -729,26 +645,6 @@ class Dashboard:
     @staticmethod
     def invalid_attrs(error_html: str) -> str:
         return ' aria-invalid="true"' if error_html else ""
-
-    def limits_form(self, ctx: Ctx, row, limits: dict, own: dict, error_html: str = "", typed: dict | None = None) -> str:
-        t = ctx.t
-        typed = typed or {}
-        rows = []
-        for k in LIMIT_KEYS:
-            unit = "MB" if k in BYTE_LIMITS else ""
-            div = MIB if k in BYTE_LIMITS else 1
-            ceil = -(-self.cfg.limit_ceilings[k] // div)
-            default = self.cfg.limit_defaults[k] // div
-            value = esc(typed[k]) if k in typed else (str(own[k] // div) if k in own else "")
-            field = (f'<input type="number" id="l_{k}" name="{k}" min="1" max="{ceil}" value="{value}" placeholder="{default}" '
-                     f'aria-label="{esc(t("lim_" + k))} {unit}">')
-            rows.append(tr(f'<label class="inline" for="l_{k}">{t("lim_" + k)}</label>',
-                           (self.fmt_limit(ctx, k, self.cfg.limit_defaults[k]), "num"), (self.fmt_limit(ctx, k, self.cfg.limit_ceilings[k]), "num"),
-                           (self.fmt_limit(ctx, k, limits[k]), "num"), field + (f' <span class="muted">{unit}</span>' if unit else "")))
-        tbl = table([(t("col_limit"), ""), (t("col_default"), "num"), (t("col_ceiling"), "num"), (t("col_current"), "num"),
-                     (t("col_new_value"), "")], rows)
-        return (f'<h3 id="limits">{t("sec_limits")}</h3><p>{t("limits_hint")}</p>'
-                + ctx.form(f"/scopes/{row['scope_id']}/limits", tbl + error_html + f'<button type="submit">{t("save")}</button>'))
 
     def admins_section(self, ctx: Ctx, row, admins, can_edit: bool, error_html: str = "", typed: str = "") -> str:
         t = ctx.t
@@ -779,16 +675,15 @@ class Dashboard:
                 state = f'<span class="badge bad">{t("vault_deleted")}</span> <span class="small muted">{t("purge_on", when=ctx.time(v["deleted"] + DELETED_VAULT_TTL))}</span>'
             else:
                 state = f'<span class="badge good">{t("vault_active")}</span>'
-            reenc = (f'<span class="badge warn">{t("yes")} ({v["old_blobs"]})</span>' if v["old_blobs"] else t("no"))
             action = ""
             if can_edit and not v["deleted"]:
                 action = ctx.form(f"/scopes/{sid}/vaults/{v['vault_id']}/delete", f'<button type="submit" class="danger small">{t("delete")}</button>',
                                   confirm=t("delete_vault_confirm"))
             rows.append(tr(f'<code>{esc(v["vault_id"])}</code>', ctx.time(v["created"]), ctx.time(v["last_write"]),
-                           (ctx.bytes(v["bytes"] + v["roster_bytes"]), "num"), (str(v["members"]), "num"), reenc, state, action))
+                           (ctx.bytes(v["bytes"] + v["roster_bytes"]), "num"), state, action))
         return (f'<h3 id="vaults">{t("sec_vaults")}</h3><p>{t("vaults_hint")}</p><p>{t("vault_explain")}</p>'
                 + table([(t("col_vault"), ""), (t("created"), ""), (t("col_last_write"), ""), (t("col_size"), "num"),
-                         (t("col_members"), "num"), (t("col_reencrypt"), ""), (t("col_state"), ""), ("", "")], rows, t("no_vaults")))
+                         (t("col_state"), ""), ("", "")], rows, t("no_vaults")))
 
     @staticmethod
     def audit_actor(ctx: Ctx, actor: str) -> str:
@@ -818,8 +713,6 @@ class Dashboard:
             return "; ".join(parts)
         if action in ("revocation", "roster_updated", "recovery_completed") and detail.startswith("version=") and detail[8:].isdigit():
             return t("detail_version", n=detail[8:])
-        if action == "enrollment_changed" and detail in ENROLLMENTS:
-            return t("enroll_" + detail)
         if action == "login_denied" and detail in ("not_allowed", "blocked"):
             return t("detail_" + detail)
         if action == "vault_purged" and detail in ("deleted", "empty"):
@@ -829,8 +722,7 @@ class Dashboard:
         if action == "sandbox_wiped" and detail.isdigit():
             return t("detail_sandbox_wiped", n=detail)
         if action == "scope_updated":
-            names = {"name": "f_name", "description": "f_description", "contact_email": "f_contact", "hibp": "detail_hibp",
-                     "enrollment": "f_enrollment", "limits": "sec_limits"}
+            names = {"name": "f_name", "description": "f_description", "contact_email": "f_contact", "limits": "sec_limits"}
             out = []
             for item in detail.split(", "):
                 word, _, rest = item.partition(" ")
@@ -910,11 +802,11 @@ class Dashboard:
     async def post_settings(self, request, ctx: Ctx, form) -> Response:
         def fn(conn, row, role):
             changes = {"name": form.get("name", ""), "description": form.get("description", ""),
-                       "contact_email": form.get("contact_email", ""), "hibp": form.get("hibp") == "1"}
+                       "contact_email": form.get("contact_email", "")}
             if not changes["contact_email"].strip():
                 raise DashError(400, "err_required")
             new = patch_scope(self.svc, conn, row["scope_id"], changes)
-            what = [k for k in ("name", "description", "hibp") if row[k] != new[k]]
+            what = [k for k in ("name", "description") if row[k] != new[k]]
             if row["contact_email"] != new["contact_email"]:
                 what.append(f"contact_email {row['contact_email'] or '-'} -> {new['contact_email'] or '-'}")
             if what:  # a save that changes nothing leaves no entry
@@ -922,41 +814,12 @@ class Dashboard:
 
         return await self.action(request, ctx, request.path_params["scope"], fn, "saved", field="settings", form=form)
 
-    async def post_enrollment(self, request, ctx: Ctx, form) -> Response:
-        def fn(conn, row, role):
-            patch_scope(self.svc, conn, row["scope_id"], {"enrollment": form.get("enrollment", "")})
-            self.svc.audit(conn, actor_of(ctx), "enrollment_changed", row["scope_id"], None, form.get("enrollment"))
-
-        return await self.action(request, ctx, request.path_params["scope"], fn, "saved")
-
     async def post_join_code(self, request, ctx: Ctx, form) -> Response:
         def fn(conn, row, role):
             patch_scope(self.svc, conn, row["scope_id"], {"join_code": new_join_code()})
             self.svc.audit(conn, actor_of(ctx), "join_code_rotated", row["scope_id"])
 
         return await self.action(request, ctx, request.path_params["scope"], fn, "code_rotated")
-
-    async def post_limits(self, request, ctx: Ctx, form) -> Response:
-        def fn(conn, row, role):
-            changes = {}
-            for k in LIMIT_KEYS:
-                raw = form.get(k, "").strip()
-                if raw == "":
-                    changes[k] = None
-                else:
-                    div = MIB if k in BYTE_LIMITS else 1
-                    hi = -(-self.cfg.limit_ceilings[k] // div)            # the same ceiling the form shows
-                    n = parse_int(raw, ctx.t("lim_" + k), 1, hi, "MB" if k in BYTE_LIMITS else "")
-                    changes[k] = n * div
-            merged = {k: v for k, v in json.loads(row["limits"] or "{}").items() if k not in changes}
-            merged.update({k: v for k, v in changes.items() if v is not None})
-            validate_limits(self.svc, changes, allow_reset=True)  # ceilings first, so their message wins
-            check_disk_budget(self.svc, conn, row["scope_id"], merged)  # before the update: it reads the stored limits
-            patch_scope(self.svc, conn, row["scope_id"], {"limits": changes})  # also refuses values below stored data
-            self.svc.audit(conn, actor_of(ctx), "limits_updated", row["scope_id"], None,
-                           ",".join(f"{k}={'default' if v is None else v}" for k, v in changes.items()))
-
-        return await self.action(request, ctx, request.path_params["scope"], fn, "limits", field="limits", form=form)
 
     async def post_admin_add(self, request, ctx: Ctx, form) -> Response:
         def fn(conn, row, role):
@@ -996,38 +859,25 @@ class Dashboard:
         return await self.action(request, ctx, request.path_params["scope"], fn, "vault_deleted")
 
     async def post_suspend(self, request, ctx: Ctx, form) -> Response:
+        """Only the operator pauses an app."""
         def fn(conn, row, role):
-            by = "operator" if ctx.ident.operator else "admin"
+            if not ctx.ident.operator:
+                raise DashError(403, "err_forbidden")
             if row["status"] != "suspended":
-                patch_scope(self.svc, conn, row["scope_id"], {"status": "suspended"}, suspended_by=by)
-                self.svc.audit(conn, actor_of(ctx, role == "operator"), "scope_suspended", row["scope_id"])
-            elif by == "operator" and row["suspended_by"] == "admin":  # the operator takes over: admins can no longer resume
-                patch_scope(self.svc, conn, row["scope_id"], {"status": "suspended"}, suspended_by="operator")
-                self.svc.audit(conn, actor_of(ctx, True), "scope_locked", row["scope_id"])
-                return self.redirect(ctx, "/scopes/" + row["scope_id"], "locked")
+                patch_scope(self.svc, conn, row["scope_id"], {"status": "suspended"})
+                self.svc.audit(conn, actor_of(ctx, True), "scope_suspended", row["scope_id"])
 
         return await self.action(request, ctx, request.path_params["scope"], fn, "suspended", admin=False)
 
     async def post_resume(self, request, ctx: Ctx, form) -> Response:
         def fn(conn, row, role):
+            if not ctx.ident.operator:
+                raise DashError(403, "err_forbidden")
             if row["status"] == "suspended":
-                if row["suspended_by"] != "admin" and not ctx.ident.operator:
-                    raise DashError(403, "err_suspended_operator")
                 patch_scope(self.svc, conn, row["scope_id"], {"status": "active"})
-                self.svc.audit(conn, actor_of(ctx, role == "operator"), "scope_resumed", row["scope_id"])
+                self.svc.audit(conn, actor_of(ctx, True), "scope_resumed", row["scope_id"])
 
         return await self.action(request, ctx, request.path_params["scope"], fn, "resumed", admin=False)
-
-    async def post_prefs_expert(self, request, ctx: Ctx, form) -> Response:
-        """Remember in this browser (a cookie, no database row) that the expert settings are shown opened, or forget it."""
-        if not ctx.ident:
-            raise DashError(401, "err_login")
-        target = safe_next(form.get("next")).split("#")[0]
-        if form.get("on") == "1":
-            cookie = cookie_header(EXPERT_COOKIE, "1", max_age=EXPERT_COOKIE_AGE)
-        else:
-            cookie = cookie_header(EXPERT_COOKIE, "", max_age=0)
-        return with_cookies(RedirectResponse(target + "#expert", status_code=303), cookie)
 
     async def post_scope_delete(self, request, ctx: Ctx, form) -> Response:
         def fn(conn, row, role):
@@ -1127,9 +977,9 @@ class Dashboard:
                          [tr(t("escrow_" + e.status), f'<code class="small">{esc(e.key_id)}</code>', (str(escrow[e.status]), "num")) for e in self.cfg.escrow]
                          + [tr(t("escrow_other"), "–", (str(escrow["other"]), "num"))]))
         # recoveries
-        rrows = [tr(f'<code class="small">{esc(r["vault_id"])}</code>', f'<code>{esc(r["scope_id"] or "")}</code>', esc(r["method"]),
+        rrows = [tr(f'<code class="small">{esc(r["vault_id"])}</code>', f'<code>{esc(r["scope_id"] or "")}</code>',
                     ctx.time(r["requested"]), ctx.time(r["ready_at"]), esc(r["state"]), ctx.time(r["finished"])) for r in recoveries]
-        p.append(f'<h2>{t("sec_recovery")}</h2>' + table([(t("col_vault"), ""), (t("col_scope_id"), ""), (t("col_method"), ""), (t("col_requested"), ""),
+        p.append(f'<h2>{t("sec_recovery")}</h2>' + table([(t("col_vault"), ""), (t("col_scope_id"), ""), (t("col_requested"), ""),
                  (t("col_ready"), ""), (t("col_state"), ""), (t("col_finished"), "")], rrows, t("no_recoveries"))
                  + f'<h3>{t("recovery_audit")}</h3>' + self.audit_table(ctx, audit, show_scope=True)
                  + f'<p><a href="{ctx.url("/operator/audit")}">{t("audit_all")}</a></p>')
@@ -1194,9 +1044,8 @@ class Dashboard:
             (BASE + "/operator", self.operator_page), (BASE + "/operator/audit", self.operator_audit),
         ]
         posts = [
-            (BASE + "/logout", self.logout), (BASE + "/prefs/expert", self.post_prefs_expert), (BASE + "/scopes", self.create), (scope + "/settings", self.post_settings),
-            (scope + "/enrollment", self.post_enrollment), (scope + "/join-code", self.post_join_code),
-            (scope + "/limits", self.post_limits), (scope + "/admins", self.post_admin_add),
+            (BASE + "/logout", self.logout), (BASE + "/scopes", self.create), (scope + "/settings", self.post_settings),
+            (scope + "/join-code", self.post_join_code), (scope + "/admins", self.post_admin_add),
             (scope + "/admins/remove", self.post_admin_remove), (scope + "/vaults/{vault}/delete", self.post_vault_delete),
             (scope + "/suspend", self.post_suspend), (scope + "/resume", self.post_resume), (scope + "/delete", self.post_scope_delete),
             (BASE + "/operator/block", lambda rq, c, f: self.operator_post(rq, c, f, "block")),

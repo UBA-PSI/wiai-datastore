@@ -12,7 +12,6 @@ from .util import CROCKFORD, is_int, max_envelope_bytes
 from .validate import SLUG_RE, normalise_join_code
 
 SCOPE_SUFFIX_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz"
-ENROLLMENTS = ("join_code", "open", "closed")
 STATUSES = ("active", "suspended")
 EMAIL_RE = re.compile(r"[^@\s<>\"',;]+@[^@\s<>\"',;]+\.[^@\s<>\"',;]+")
 
@@ -75,19 +74,13 @@ def validate_limits(svc, limits: object, *, allow_reset: bool) -> dict:
     return out
 
 
-def create_scope(svc, conn, *, slug: str, name: str, enrollment: str = "join_code", join_code: str | None = None,
-                 hibp: bool = True, limits: dict | None = None, description: str = "", contact_email: str = "",
-                 creator: str | None = None):
+def create_scope(svc, conn, *, slug: str, name: str, join_code: str | None = None, limits: dict | None = None,
+                 description: str = "", contact_email: str = "", creator: str | None = None):
+    """A scope enrols new vaults with its join code (random unless given); only the sandbox is open, by its configuration."""
     if not isinstance(slug, str) or not SLUG_RE.fullmatch(slug) or len(slug) > 41:
         raise bad_request("slug must be lowercase letters, digits and hyphens, starting with a letter (at most 41 characters).")
     name = validate_name(name)
-    if enrollment not in ENROLLMENTS:
-        raise bad_request("enrollment must be join_code, open or closed.")
-    if not isinstance(hibp, bool):
-        raise bad_request("hibp must be a boolean.")
-    code = validate_join_code(join_code) if join_code is not None else None
-    if enrollment == "join_code" and code is None:
-        code = new_join_code()
+    code = validate_join_code(join_code) if join_code is not None else new_join_code()
     own = validate_limits(svc, limits, allow_reset=False) if limits is not None else {}
     description = validate_description(description)
     contact_email = validate_contact_email(contact_email)
@@ -98,10 +91,9 @@ def create_scope(svc, conn, *, slug: str, name: str, enrollment: str = "join_cod
             break
     else:
         raise ApiError(500, "internal", "Could not allocate a scope ID.")
-    conn.execute("INSERT INTO scopes (scope_id, name, status, enrollment, join_code, hibp, limits, created, description,"
-                 " contact_email, creator) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                 (scope_id, name, "active", enrollment, code, int(hibp), json.dumps(own), now, description, contact_email,
-                  creator))
+    conn.execute("INSERT INTO scopes (scope_id, name, status, join_code, limits, created, description, contact_email, creator)"
+                 " VALUES (?,?,?,?,?,?,?,?,?)",
+                 (scope_id, name, "active", code, json.dumps(own), now, description, contact_email, creator))
     return conn.execute("SELECT * FROM scopes WHERE scope_id=?", (scope_id,)).fetchone()
 
 
@@ -124,40 +116,29 @@ def _check_value_limit(svc, conn, scope_id: str, limits: dict) -> None:
                    extra={"limit": "max_value_bytes", "largest_envelope_bytes": largest, "minimum_max_value_bytes": low})
 
 
-def patch_scope(svc, conn, scope_id: str, changes: dict, *, suspended_by: str | None = None):
-    """Apply `changes`. `suspended_by` ("admin" or "operator") is recorded when the status becomes suspended; the
-    operator API passes none, which counts as the operator (a scope admin may only resume what an admin suspended)."""
+def patch_scope(svc, conn, scope_id: str, changes: dict):
+    """Apply `changes` (name, description, contact_email, status, join_code, limits). Only operators change status and limits
+    (through the operator API or the operator's dashboard view); `join_code: null` makes a new random code."""
     row = conn.execute("SELECT * FROM scopes WHERE scope_id=? AND deleted IS NULL", (scope_id,)).fetchone()
     if row is None:
         raise ApiError(404, "not_found", "Unknown scope.")
     if svc.is_sandbox(scope_id):
         raise ApiError(403, "sandbox_config", "The sandbox is configured in the [sandbox] section of the server configuration.")
-    status, enrollment, join_code = row["status"], row["enrollment"], row["join_code"]
-    name, hibp, limits = row["name"], bool(row["hibp"]), json.loads(row["limits"])
-    description, contact_email, by = row["description"], row["contact_email"], row["suspended_by"]
+    status, join_code = row["status"], row["join_code"]
+    name, limits = row["name"], json.loads(row["limits"])
+    description, contact_email = row["description"], row["contact_email"]
     if "status" in changes:
         if changes["status"] not in STATUSES:
             raise bad_request("status must be active or suspended.")
         status = changes["status"]
-        by = suspended_by if status == "suspended" else None
     if "description" in changes:
         description = validate_description(changes["description"])
     if "contact_email" in changes:
         contact_email = validate_contact_email(changes["contact_email"])
-    if "enrollment" in changes:
-        if changes["enrollment"] not in ENROLLMENTS:
-            raise bad_request("enrollment must be join_code, open or closed.")
-        enrollment = changes["enrollment"]
     if "join_code" in changes:
-        join_code = validate_join_code(changes["join_code"]) if changes["join_code"] is not None else None
-    if enrollment == "join_code" and join_code is None:
-        join_code = new_join_code()
+        join_code = validate_join_code(changes["join_code"]) if changes["join_code"] is not None else new_join_code()
     if "name" in changes:
         name = validate_name(changes["name"])
-    if "hibp" in changes:
-        if not isinstance(changes["hibp"], bool):
-            raise bad_request("hibp must be a boolean.")
-        hibp = changes["hibp"]
     if "limits" in changes:
         for key, value in validate_limits(svc, changes["limits"], allow_reset=True).items():
             if value is None:
@@ -166,10 +147,8 @@ def patch_scope(svc, conn, scope_id: str, changes: dict, *, suspended_by: str | 
                 limits[key] = value
     if "limits" in changes and "max_value_bytes" in changes["limits"]:
         _check_value_limit(svc, conn, scope_id, limits)
-    conn.execute("UPDATE scopes SET status=?, enrollment=?, join_code=?, name=?, hibp=?, limits=?, description=?,"
-                 " contact_email=?, suspended_by=? WHERE scope_id=?",
-                 (status, enrollment, join_code, name, int(hibp), json.dumps(limits), description, contact_email, by,
-                  scope_id))
+    conn.execute("UPDATE scopes SET status=?, join_code=?, name=?, limits=?, description=?, contact_email=? WHERE scope_id=?",
+                 (status, join_code, name, json.dumps(limits), description, contact_email, scope_id))
     return conn.execute("SELECT * FROM scopes WHERE scope_id=?", (scope_id,)).fetchone()
 
 

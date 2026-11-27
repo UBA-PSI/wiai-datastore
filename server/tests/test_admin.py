@@ -26,8 +26,7 @@ class OperatorAuth(ServerTestCase):
 
 class ScopeAdmin(ServerTestCase):
     def test_create_defaults(self):
-        r = self.c.post_json(f"{API}/admin/scopes", {"slug": "my-app", "name": "My App", "enrollment": "join_code",
-                                                    "join_code": None, "hibp": True, "limits": None}, self.env.op)
+        r = self.c.post_json(f"{API}/admin/scopes", {"slug": "my-app", "name": "My App", "join_code": None, "limits": None}, self.env.op)
         self.assertEqual(r.status, 201, r)
         d = r.json()
         self.assertRegex(d["scope"], r"^my-app-[0-9a-hjkmnp-tv-z]{6}$")
@@ -46,7 +45,7 @@ class ScopeAdmin(ServerTestCase):
     def test_create_validation(self):
         bad = [{"slug": "Bad", "name": "x"}, {"slug": "a" * 42, "name": "x"}, {"slug": "1a", "name": "x"},
                {"slug": "a--b", "name": "x"}, {"slug": "a", "name": ""}, {"slug": "a", "name": "x\ny"},
-               {"slug": "a", "name": "x", "enrollment": "weird"}, {"slug": "a", "name": "x", "hibp": "yes"},
+               {"slug": "a", "name": "x", "enrollment": "open"}, {"slug": "a", "name": "x", "hibp": True},
                {"slug": "a", "name": "x", "join_code": "ab"}, {"name": "x"}, {"slug": "a", "name": "x", "extra": 1}]
         for body in bad:
             self.assertError(self.c.post_json(f"{API}/admin/scopes", body, self.env.op), 400, "bad_request")
@@ -57,28 +56,26 @@ class ScopeAdmin(ServerTestCase):
         self.assertLessEqual(len(d["scope"]), 48)
 
     def test_patch(self):
-        d = self.env.create_scope(enrollment="join_code")
+        d = self.env.create_scope()
         url = f"{API}/admin/scopes/{d['scope']}"
-        r = self.c.patch_json(url, {"name": "Neu", "hibp": False, "enrollment": "open", "limits": {"max_vaults": 7, "history_versions": 4}},
-                              self.env.op)
+        r = self.c.patch_json(url, {"name": "Neu", "limits": {"max_vaults": 7, "history_versions": 4}}, self.env.op)
         self.assertEqual(r.status, 200, r)
         j = r.json()
-        self.assertEqual((j["name"], j["hibp"], j["enrollment"], j["limits"]["max_vaults"], j["limits"]["history_versions"]),
-                         ("Neu", False, "open", 7, 4))
+        self.assertEqual((j["name"], j["enrollment"], j["limits"]["max_vaults"], j["limits"]["history_versions"]), ("Neu", "join_code", 7, 4))
         public = self.c.get(f"{API}/scopes/{d['scope']}").json()
-        self.assertEqual((public["name"], public["hibp"], public["limits"]["history_versions"]), ("Neu", False, 4))
+        self.assertEqual((public["name"], public["enrollment"], public["limits"]["history_versions"]), ("Neu", "join_code", 4))
         r = self.c.patch_json(url, {"limits": {"max_vaults": None}}, self.env.op)
         self.assertEqual(r.json()["limits"]["max_vaults"], 50)
-        r = self.c.patch_json(url, {"join_code": "NEWCODE99", "enrollment": "join_code"}, self.env.op)
+        r = self.c.patch_json(url, {"join_code": "NEWCODE99"}, self.env.op)
         self.assertEqual(r.json()["join_code"], "NEWCODE99")
         r = self.c.patch_json(url, {"join_code": None}, self.env.op)
         self.assertEqual(len(r.json()["join_code"]), 8)
-        for bad in ({"status": "gone"}, {"enrollment": "x"}, {"limits": {"max_vaults": 9999}}, {"name": ""}, {"hibp": 1}, {"bogus": 1}):
+        for bad in ({"status": "gone"}, {"enrollment": "open"}, {"limits": {"max_vaults": 9999}}, {"name": ""}, {"hibp": False}, {"bogus": 1}):
             self.assertError(self.c.patch_json(url, bad, self.env.op), 400, "bad_request")
         self.assertError(self.c.patch_json(f"{API}/admin/scopes/nope-abcdef", {"name": "x"}, self.env.op), 404, "not_found")
 
     def test_changed_join_code_applies_immediately(self):
-        d = self.env.create_scope(enrollment="join_code")
+        d = self.env.create_scope()
         old = d["join_code"]
         self.c.patch_json(f"{API}/admin/scopes/{d['scope']}", {"join_code": "FRESHCODE"}, self.env.op)
         self.assertError(Vault(self.env, d["scope"]).create(join_code=old), 403, "join_code_invalid")
@@ -150,7 +147,7 @@ class Recovery(ServerTestCase):
         super().setUp()
         self.scope = self.env.create_scope()
         self.v = Vault(self.env, self.scope["scope"])
-        self.v.create(mutate=lambda b: b.update(recovery_contact="me@uni-bamberg.de"))
+        self.v.create()
         self.code = b32c_encode(self.v.recovery_code)
         self.url = f"{API}/admin/vaults/{self.v.vault}"
 
@@ -161,8 +158,9 @@ class Recovery(ServerTestCase):
         self.v.put_ok("a", size=300)
         r = self.c.get(self.url, self.env.op)
         d = r.json()
-        self.assertEqual((d["vault"], d["scope"], d["epoch"], d["roster_version"], d["bytes"], d["deleted"], d["recovery"],
-                          d["has_recovery_contact"]), (self.v.vault, self.scope["scope"], 1, 1, 300, None, None, True))
+        self.assertEqual((d["vault"], d["scope"], d["epoch"], d["roster_version"], d["bytes"], d["deleted"], d["recovery"]),
+                         (self.v.vault, self.scope["scope"], 1, 1, 300, None, None))
+        self.assertNotIn("has_recovery_contact", d)
         self.assertError(self.c.get(f"{API}/admin/vaults/9FYJS2VF3VP7MAQYPJ5S6KQ4P9", self.env.op), 404, "not_found")
         self.assertError(self.c.get(f"{API}/admin/vaults/bad", self.env.op), 400, "bad_request")
 
@@ -170,22 +168,20 @@ class Recovery(ServerTestCase):
         r = self.start()
         self.assertEqual(r.status, 201, r)
         d = r.json()
-        self.assertEqual((d["method"], d["ready_at"] - d["requested"]), ("code", 259200))
+        self.assertEqual(d["ready_at"] - d["requested"], 259200)
+        self.assertNotIn("method", d)
         self.assertEqual(self.start().json()["error"], "recovery_pending")
         # visible to the owner
         s = self.c.get(f"{API}/slots/{self.v.access_id}", self.v.auth).json()
-        self.assertEqual(s["recovery"], {"method": "code", "requested": d["requested"], "ready_at": d["ready_at"]})
-        self.assertEqual(self.c.get(self.url, self.env.op).json()["recovery"]["method"], "code")
+        self.assertEqual(s["recovery"], {"requested": d["requested"], "ready_at": d["ready_at"]})
+        self.assertEqual(self.c.get(self.url, self.env.op).json()["recovery"], {"requested": d["requested"], "ready_at": d["ready_at"]})
 
-    def test_start_with_contact_waits_7_days(self):
-        r = self.start(contact=True)
-        self.assertEqual(r.status, 201, r)
-        self.assertEqual((r.json()["method"], r.json()["ready_at"] - r.json()["requested"]), ("contact", 604800))
-
-    def test_contact_requires_recovery_contact(self):
-        v = self.env.new_vault(self.scope)
-        r = self.c.post_json(f"{API}/admin/vaults/{v.vault}/recovery", {"contact": True}, self.env.op)
-        self.assertError(r, 409, "no_recovery_contact")
+    def test_the_emergency_code_is_the_only_way(self):
+        """No code-less path (the contact e-mail is gone): {"contact": true} is an unknown key."""
+        self.assertError(self.start(contact=True), 400, "bad_request")
+        self.assertError(self.start(recovery_code=self.code, contact=True), 400, "bad_request")
+        self.assertNotIn("recovery_contact", [r[1] for r in self.env.sql("PRAGMA table_info(vaults)")])
+        self.assertNotIn("method", [r[1] for r in self.env.sql("PRAGMA table_info(recoveries)")])
 
     @staticmethod
     def _decodes(code):
@@ -202,10 +198,7 @@ class Recovery(ServerTestCase):
         bad = next(c for c in (self.code[:-1] + ch for ch in "0123456789ABCDEFGHJKMNPQRSTVWXYZ")
                    if c != self.code and not self._decodes(c))  # a typo that the check bits catch (one in sixteen would pass)
         self.assertError(self.start(recovery_code=bad), 400, "bad_request")
-        self.assertError(self.start(contact=False), 400, "bad_request")
         self.assertError(self.c.post_json(self.url + "/recovery", {}, self.env.op), 400, "bad_request")
-        self.assertError(self.c.post_json(self.url + "/recovery", {"contact": True, "recovery_code": self.code}, self.env.op), 400,
-                         "bad_request")
 
     def test_wrong_codes_are_rate_limited(self):
         statuses = [self.start(recovery_code=b32c_encode(os.urandom(17))).status for _ in range(61)]

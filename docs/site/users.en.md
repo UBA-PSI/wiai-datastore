@@ -7,24 +7,23 @@ before it is sent**. This page explains what you need, what to keep safe and who
 
 1. **A join code** from the person who runs the app. You need it once, to create your vault.
 2. **A passphrase of your own**, at least 12 characters. Four or more unrelated words work well ("purple elephant marching slowly").
-   The app rejects very common passphrases (also German ones such as "ichliebedich123") and passphrases that appear in known data breaches. If the breach check cannot be reached, or is switched off for the app, the app asks for a stronger passphrase. When you choose a passphrase, your browser checks it against known data breaches with the Pwned Passwords service (USA); the service receives your IP address and the first five characters of a checksum of the passphrase, never the passphrase itself.
+   The app rejects very common passphrases (also German ones such as "ichliebedich123") and passphrases that appear in known data breaches. If the breach check cannot be reached, the app asks for a stronger passphrase. When you choose a passphrase, your browser sends the first five characters of a checksum of the passphrase to the faculty's server, which asks the Pwned Passwords service (USA) on your behalf; the service sees neither the passphrase nor your IP address.
 3. **Your access sheet.** After creating your vault the app shows it: your **access ID** (five groups of four characters) and your
-   **recovery code**. Print it or save it, and keep it apart from your computer.
+   **emergency code**. Print it or save it, and keep it apart from your computer.
 
 **Nobody can reset your passphrase.** The server does not know it. If you lose it, only the recovery procedure below helps.
 
-## Access ID, key file, recovery code
+## Access ID, passphrase, emergency code
 
 | What | What it is for | Secret? |
 |---|---|---|
 | Access ID | Names your vault. You enter it together with your passphrase on a new device. | No, but keep it with your sheet. |
-| Key file | A small file with the app and your access ID. Choose it in the app on a new device instead of typing the ID. | No. It holds no passphrase. |
 | Passphrase | Opens your data. Only in your head or your password manager. | Yes |
-| Recovery code | Lets the faculty restore access if you lose your passphrase. | Yes. Keep it apart from your computer. |
+| Emergency code | Lets the faculty restore access if you lose your passphrase. | Yes. Keep it apart from your computer. |
 
 ## On a new device or after clearing the browser
 
-Open the app, enter your access ID (or choose the key file) and your passphrase. The app says
+Open the app, enter your access ID and your passphrase. The app says
 "This device is new to your vault." That is normal.
 
 ## Sharing
@@ -41,9 +40,7 @@ Owners share their whole vault: in the app choose **Vault**, pick a role and cre
 ## When two people change the same thing
 
 The app asks before it overwrites anything. The standard dialog says "Another device or person saved a newer version" and offers
-**Keep theirs**, **Keep mine** and **Download both**. An app may show a dialog of its own that words the same choice differently (for
-example **Keep the newer version** and **Keep my version**). If you keep yours, the other version stays in the history and can be
-restored. Apps may show a history of earlier versions.
+**Keep theirs** and **Keep mine**. The version you do not keep stays in the history and can be restored. Apps may show a history of earlier versions.
 
 ## What the faculty can see
 
@@ -61,16 +58,15 @@ In short: **Data is end-to-end encrypted; the faculty holds a recovery key for e
 ## Recovery if you forget the passphrase
 
 1. Contact the person who runs the app, who passes your request to the operator of the service. Have your **access ID** and
-   **recovery code** ready.
-2. The operator starts the recovery. With the recovery code a **72-hour waiting period** begins. During it, every unlock of
+   **emergency code** ready.
+2. The operator starts the recovery. With the emergency code a **72-hour waiting period** begins. During it, every unlock of
    your vault shows "A recovery of this vault was requested" with a **Cancel the request** button. If you did not ask for it, cancel it
    and tell the operator.
 3. After the waiting period the operator adds a new owner access to your vault and gives you an invite code. You redeem it and
    choose a new passphrase. The app says "The faculty added an owner access" and asks you to confirm.
 4. The old access is not removed automatically. Open **Vault** and revoke it.
 
-Without a recovery code, recovery works only if you stored an e-mail address as recovery contact when you created the vault;
-the waiting period is then 7 days. With neither, your data cannot be recovered.
+Without the emergency code your data cannot be recovered.
 
 ## Data from an earlier version of the app
 
@@ -84,7 +80,6 @@ If the app existed before as a version that kept its data only in your browser, 
 
 ## Your data, your export
 
-Choose **Vault** in the app and then **Export everything**, or open [{{base}}/export/]({{base}}/export/) in any browser, enter the app ID and access ID (or
-key file) and your passphrase, and download everything decrypted as a ZIP file. The files are not encrypted: store them carefully.
+Choose **Vault** in the app and then **Export everything**, or open [{{base}}/export/]({{base}}/export/) in any browser, enter the app ID, your access ID and your passphrase, and download everything decrypted as a ZIP file. The files are not encrypted: store them carefully.
 
 **Files you download from an app are not encrypted**, whatever they are: a CSV table, an attachment, a PDF, the export ZIP. Once a file is on your computer, it is protected only by what protects your computer.

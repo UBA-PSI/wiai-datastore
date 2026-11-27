@@ -9,6 +9,7 @@ import urllib.parse
 
 from wds_server import prompt as prompt_mod
 from wds_server.config import SandboxConfig, load_config
+from wds_server.docs import REPO_URL
 from wds_server.texts import TEXTS
 from wds_server.ui import fmt_bytes
 
@@ -50,70 +51,61 @@ class DefaultCreateForm(DashCase):
         a = self.staff(lang_header="en")
         home = a.get("/").text
         values = form_defaults(home, "/scopes")
+        self.assertEqual(set(values) - {"csrf"}, {"name", "contact_email", "description"})
         self.assertEqual(values["contact_email"], "alice@uni-bamberg.de")   # prefilled with the person's own address
-        self.assertEqual((values["enrollment"], values["hibp"], values["slug"]), ("join_code", "1", ""))
         values["name"] = "Notenrechner"
         r = a.post("/scopes", values)
         self.assertEqual(r.status, 303)
         scope = r.headers["location"].split("?")[0].rsplit("/", 1)[1]
         row = self.row(scope)
-        self.assertEqual((row["enrollment"], row["hibp"], row["contact_email"], row["limits"]), ("join_code", 1, "alice@uni-bamberg.de", "{}"))
+        self.assertEqual((row["contact_email"], row["limits"]), ("alice@uni-bamberg.de", "{}"))
         self.assertRegex(row["join_code"], r"^[0-9A-Z]{8}$")
         self.assertTrue(scope.startswith("notenrechner-"))
         limits = self.env.svc.scope_limits(row)
         self.assertEqual(limits["max_vaults"], self.env.config.limit_defaults["max_vaults"])   # the server defaults, nothing stored
 
-    def test_slug_enrollment_and_breach_check_are_inside_the_collapsed_part(self):
-        a = self.staff()
-        home = a.get("/").text
-        outside, rest = home.split('<details class="expert" id="create-more">', 1)
-        inside = rest.split("</details>", 1)[0]
-        for field in ('id="c_slug"', 'id="c_enroll"', 'id="c_hibp"'):
-            self.assertNotIn(field, outside)
-            self.assertIn(field, inside)
+    def test_there_is_nothing_to_choose_but_the_three_answers(self):
+        home = self.staff().get("/").text
+        for gone in ('id="c_slug"', 'id="c_enroll"', 'id="c_hibp"', 'id="create-more"', 'name="slug"', 'name="enrollment"', 'name="hibp"'):
+            self.assertNotIn(gone, home, gone)
         for field in ('id="c_name"', 'id="c_mail"', 'id="c_desc"'):
-            self.assertIn(field, outside)
-        self.assertNotIn("<details class=\"expert\" id=\"create-more\" open", home)
-        self.assertIn("Experteneinstellungen", home)
+            self.assertIn(field, home)
 
-    def test_defaults_sentence_names_the_values_and_the_us_service(self):
+    def test_defaults_sentence_names_the_values(self):
         a = self.staff()
         text = htmllib.unescape(re.sub(r"<[^>]+>", "", a.get("/").text))
-        self.assertIn("Standard für neue Apps: Tresore nur mit Beitrittscode (ein Code, den Sie an Ihre Nutzenden weitergeben;", text)   # the terms are explained where they first appear
-        self.assertIn("Pwned Passwords in den USA", text)           # the transfer is named in the visible sentence
-        self.assertIn("Jede Person bekommt einen Tresor mit 200 MB Speicher. Einzelne Dateien dürfen bis 10 MB groß sein, von jedem Eintrag bleiben 10 frühere Versionen erhalten. Höchstens 50 Tresore, also 50 Personen.", text)
+        self.assertIn("Neue Apps: Tresore werden mit dem Beitrittscode angelegt (ein Code, den Sie an Ihre Nutzenden weitergeben;", text)   # the terms are explained where they first appear
+        self.assertIn("Kennwörter (Passphrasen), die aus bekannten Datenlecks stammen, werden abgelehnt.", text)
+        self.assertNotIn("Pwned", text)                                    # one rule for every app: nothing to switch, nothing to explain here
+        self.assertIn("Jede Person bekommt einen Tresor mit 200 MB Speicher. Einzelne Dateien dürfen bis 10 MB groß sein, von jedem Eintrag bleiben 10 frühere Versionen erhalten. Höchstens 50 Tresore (eingeladene Personen brauchen keinen eigenen).", text)
+        self.assertIn("Brauchen Sie mehr, wenden Sie sich später an den Betrieb.", text)
         en = htmllib.unescape(re.sub(r"<[^>]+>", "", a.get("/?lang=en").text))
-        self.assertIn("Default for new apps: vaults only with a join code (a code that you give to your users;", en)
+        self.assertIn("New apps: vaults are created with the join code (a code that you give to your users;", en)
         self.assertIn("a vault with 200 MB of storage. Single files may be up to 10 MB; 10 earlier versions of every entry are kept.", en)
 
-    def test_the_expert_fields_still_work(self):
+    def test_the_short_name_of_the_app_id_always_comes_from_the_name(self):
         a = self.staff()
-        values = form_defaults(a.get("/").text, "/scopes")
-        values.update({"name": "Offene App", "slug": "offen", "enrollment": "open"})
-        del values["hibp"]                                             # the box unticked
-        scope = a.post("/scopes", values).headers["location"].split("?")[0].rsplit("/", 1)[1]
-        row = self.row(scope)
-        self.assertTrue(scope.startswith("offen-"))
-        self.assertEqual((row["enrollment"], row["hibp"], row["join_code"]), ("open", 0, None))
+        for name, prefix in (("Noten Rechner", "noten-rechner-"), ("Größe & Co.", "groe-co-"), ("2024 Plan", "plan-"), ("!!!", "app-")):
+            scope = self.make_scope(a, name=name)
+            self.assertTrue(scope.startswith(prefix), (name, scope))
+        # fields of the removed form are ignored, not obeyed
+        r = a.post("/scopes", {"name": "Offene App", "contact_email": "a@uni-bamberg.de", "slug": "evil", "enrollment": "open", "hibp": ""})
+        self.assertEqual(r.status, 303)
+        scope = r.headers["location"].split("?")[0].rsplit("/", 1)[1]
+        self.assertTrue(scope.startswith("offene-app-"))
+        self.assertRegex(self.row(scope)["join_code"], r"^[0-9A-Z]{8}$")
 
-    def test_an_error_in_an_expert_field_opens_the_collapsed_part(self):
+    def test_an_error_keeps_what_was_typed(self):
         a = self.staff()
-        r = a.post("/scopes", {"name": "App", "slug": "Bad Slug!", "contact_email": "a@uni-bamberg.de", "enrollment": "join_code", "hibp": "1"})
+        r = a.post("/scopes", {"name": "App", "contact_email": "not-an-address"})
         self.assertEqual(r.status, 400)
-        self.assertIn('<details class="expert" id="create-more" open>', r.text)
-        self.assertIn("Bad Slug!", r.text)
-        r = a.post("/scopes", {"name": "App", "contact_email": "not-an-address", "enrollment": "join_code", "hibp": "1"})   # an error elsewhere keeps it closed
-        self.assertEqual(r.status, 400)
-        self.assertNotIn('id="create-more" open', r.text)
         self.assertIn('value="not-an-address"', r.text)                  # what was typed stays; no prefill over it
 
-    def test_expert_cookie_opens_the_collapsed_part(self):
-        a = self.staff()
-        a.post("/prefs/expert", {"on": "1", "next": "/datastore/"})
-        self.assertIn('<details class="expert" id="create-more" open>', a.get("/").text)
 
+class ExpertArea(DashCase):
+    """The expert area is folded for staff, open for the operator, and opened by an error or by the result of a form inside it.
+    There is no remembered choice any more: no cookie, no preference route."""
 
-class ExpertPreference(DashCase):
     def setUp(self):
         super().setUp()
         self.a = self.staff()
@@ -127,42 +119,16 @@ class ExpertPreference(DashCase):
     def test_closed_by_default_for_staff(self):
         self.assertFalse(self.state(self.a))
 
-    def test_remember_sets_a_cookie_and_opens_the_area_afterwards(self):
-        r = self.a.post("/prefs/expert", {"on": "1", "next": f"/datastore/scopes/{self.scope}"})
-        self.assertEqual(r.status, 303)
-        self.assertEqual(r.headers["location"], f"/datastore/scopes/{self.scope}#expert")
-        raw = next(c for c in self.a.raw_cookies if c.startswith("wds_expert="))
-        for part in ("wds_expert=1", "Path=/", "SameSite=Strict", "HttpOnly", "Secure", "Max-Age=31536000"):
-            self.assertIn(part, raw)
-        self.assertTrue(self.state(self.a))
-        r = self.a.post("/prefs/expert", {"on": "0", "next": f"/datastore/scopes/{self.scope}"})   # forget
-        self.assertEqual(r.status, 303)
-        self.assertNotIn("wds_expert", self.a.cookies)
+    def test_there_is_no_remembered_choice(self):
+        r = self.a.post("/prefs/expert", {"on": "1", "next": "/datastore/"})
+        self.assertEqual(r.status, 404)
+        self.assertFalse([c for c in self.a.raw_cookies if c.startswith("wds_expert")])
+        page = self.a.get(f"/scopes/{self.scope}").text
+        for gone in ("/prefs/expert", "wds_expert", 'name="on"'):
+            self.assertNotIn(gone, page)
         self.assertFalse(self.state(self.a))
-
-    def test_the_button_offers_the_other_direction(self):
-        page = self.a.get(f"/scopes/{self.scope}").text
-        self.assertIn("Experteneinstellungen immer aufgeklappt zeigen", page)
-        self.assertIn('name="on" value="1"', page)
-        self.a.post("/prefs/expert", {"on": "1", "next": "/datastore/"})
-        page = self.a.get(f"/scopes/{self.scope}").text
-        self.assertIn("Experteneinstellungen wieder zuklappen", page)
-        self.assertIn('name="on" value="0"', page)
-
-    def test_csrf_and_login_are_required(self):
-        r = self.a.post("/prefs/expert", {"on": "1", "next": "/datastore/", "csrf": "wrong"}, csrf=False)
-        self.assertEqual(r.status, 403)
-        self.assertNotIn("wds_expert", self.a.cookies)
-        r = self.a.post("/prefs/expert", {"on": "1", "next": "/datastore/"}, csrf=False)
-        self.assertEqual(r.status, 403)
-        self.assertEqual(self.browser().post("/prefs/expert", {"on": "1"}).status, 401)
-        self.assertEqual(self.a.post("/prefs/expert", {"on": "1"}, headers={"Origin": "https://evil.example"}).status, 403)
-
-    def test_next_is_a_local_path_below_the_dashboard(self):
-        for bad in ("https://evil.example/", "//evil.example/", "/elsewhere", "/datastore/../x", "javascript:alert(1)", "/datastore//evil.example"):
-            r = self.a.post("/prefs/expert", {"on": "1", "next": bad})
-            self.assertEqual(r.status, 303, bad)
-            self.assertEqual(r.headers["location"], "/datastore/#expert", bad)
+        self.a.cookies["wds_expert"] = "1"                               # an old cookie does nothing
+        self.assertFalse(self.state(self.a))
 
     def test_the_operator_always_sees_it_opened(self):
         op = self.operator()
@@ -177,10 +143,10 @@ class ExpertPreference(DashCase):
         self.assertIn('id="admin-err"', r.text)
 
     def test_the_result_of_a_form_in_the_area_shows_it_opened(self):
-        r = self.a.post(f"/scopes/{self.scope}/limits", {"max_vaults": "20"})
+        r = self.a.post(f"/scopes/{self.scope}/settings", {"name": "Renamed", "contact_email": "x@uni-bamberg.de"})
         page = self.a.get(r.headers["location"]).text
         self.assertRegex(page, r'<details class="expert" id="expert" open>')
-        self.assertIn("Grenzen gespeichert", page)
+        self.assertIn("Gespeichert", page)
         # the rotated code is shown in the default view, so that notice does not open the area
         r = self.a.post(f"/scopes/{self.scope}/join-code", {})
         self.assertFalse(bool(EXPERT_OPEN.search(self.a.get(r.headers["location"]).text).group(1)))
@@ -215,11 +181,13 @@ class DefaultView(DashCase):
 
     def test_no_developer_or_admin_forms_in_the_default_view(self):
         d = self.default
-        for needle in ("/settings", "/limits", "/admins", "/enrollment", "/delete", "/suspend", 'id="tag"', 'id="claude-md"', "integrity=\"sha384"):
+        for needle in ("/settings", "/limits", "/admins", "/enrollment", "/delete", "/suspend", 'id="tag"', "integrity=\"sha384"):
             self.assertNotIn(needle, d.replace("&lt;script", ""), needle)
         self.assertNotIn("<table", d)
-        for needle in ("/settings", "/limits", "/admins", "/enrollment", "/suspend", "/delete", 'id="tag"', 'id="claude-md"', "Wiederherstellungsschlüssel"):
+        for needle in ("/settings", "/admins", "/delete", 'id="tag"'):
             self.assertIn(needle, self.expert, needle)
+        for gone in ("/limits", "/enrollment", "/suspend", 'id="claude-md"', 'name="hibp"', 'name="slug"', "prefs/expert"):   # nothing to edit or choose any more
+            self.assertNotIn(gone, d + self.expert, gone)
         # the rotate button stays in the default view: a leaked code has to be replaced without opening anything
         self.assertIn(f"/scopes/{self.scope}/join-code", d)
         self.assertNotIn(f"/scopes/{self.scope}/join-code", self.expert)
@@ -228,31 +196,34 @@ class DefaultView(DashCase):
         e = self.expert
         self.assertIn("<summary>Experteneinstellungen</summary>", e)
         self.assertIn("Für Fachleute: Einstellungen, die die meisten Apps nicht brauchen.", e)
-        for heading in ("Angaben zur App", "Anlegen von Tresoren", "Speicherplatz und Grenzen", "Administratoren", "Tresore", "Änderungsprotokoll", "App pausieren", "App löschen"):
-            self.assertIn(f">{heading}</h3>", e.replace(' id="admins"', "").replace(' id="vaults"', "").replace(' id="enrollment"', "").replace(' id="limits"', ""), heading)
+        for heading in ("Angaben zur App", "Speicherplatz und Grenzen", "Administratoren", "Tresore", "Änderungsprotokoll", "App löschen"):
+            self.assertIn(f">{heading}</h3>", e.replace(' id="admins"', "").replace(' id="vaults"', "").replace(' id="limits"', ""), heading)
+        for gone in ("Anlegen von Tresoren", "App pausieren", "Personen mit Zugang", "Neu verschlüsseln läuft noch"):
+            self.assertNotIn(gone, e, gone)
         self.assertNotRegex(e, r"<h2")                                  # the area has h3 and h4 only: heading order stays
         self.assertIn("Höchstzahl der Tresore", e)
-        self.assertIn("Personen mit Zugang", e)
-        self.assertIn("Neu verschlüsseln läuft noch", e)
         self.assertIn("Größen in MB (1 MB = 1.048.576 Bytes)", e)
-        for label in ("s_name", "s_desc", "s_mail", "s_hibp", "e_mode", "l_max_vaults", "a_new", "d_conf"):
+        for label in ("s_name", "s_desc", "s_mail", "a_new", "d_conf"):
             self.assertIn(f'for="{label}"', e)
+        for label in ("s_hibp", "e_mode", "l_max_vaults"):
+            self.assertNotIn(f'for="{label}"', e)
+        self.assertNotIn("<input type=\"number\"", e)                   # the limits table shows values only
         visible = re.sub(r"<pre.*?</pre>|<style.*?</style>|<script.*?</script>|<[^>]+>", "", self.page, flags=re.S)   # the prompt for Claude may say "Scope"
         self.assertNotIn("Scope", visible)
         self.assertNotIn("MiB", self.page)
 
-    def test_open_and_closed_enrollment_have_a_sentence_instead_of_a_code(self):
-        self.a.post(f"/scopes/{self.scope}/enrollment", {"enrollment": "open"})
-        d, _ = split_default_and_expert(self.a.get(f"/scopes/{self.scope}").text)
-        self.assertIn("Jede Person, die die App hat, kann einen Tresor anlegen (höchstens 50).", d)
-        self.assertNotIn('id="jc"', d)
-        self.a.post(f"/scopes/{self.scope}/enrollment", {"enrollment": "closed"})
-        d, _ = split_default_and_expert(self.a.get(f"/scopes/{self.scope}").text)
-        self.assertIn("Zurzeit können keine neuen Tresore angelegt werden.", d)
+    def test_the_join_code_is_the_only_way_and_rotating_it_stops_the_old_one(self):
+        code = self.row(self.scope)["join_code"]
+        self.assertIn(f'<code id="jc" class="big">{code}</code>', self.default)
+        for gone in ("Jede Person, die die App hat", "Zurzeit können keine neuen Tresore", "enrollment"):
+            self.assertNotIn(gone, self.page, gone)
+        self.assertEqual(self.a.post(f"/scopes/{self.scope}/enrollment", {"enrollment": "open"}).status, 404)
+        self.a.post(f"/scopes/{self.scope}/join-code", {})
+        self.assertNotEqual(self.row(self.scope)["join_code"], code)
 
     def test_usage_counts_active_vaults_and_warns_near_the_limit(self):
-        self.a.post(f"/scopes/{self.scope}/enrollment", {"enrollment": "open"})
-        self.a.post(f"/scopes/{self.scope}/limits", {"max_vaults": "5"})
+        with self.env.svc.db.connection() as conn:   # the operator's CLI does this (wds_server.cli limits); the dashboard only shows the limits
+            conn.execute("UPDATE scopes SET limits='{\"max_vaults\": 5}' WHERE scope_id=?", (self.scope,))
         vaults = [self.env.new_vault({"scope": self.scope, "join_code": None}) for _ in range(4)]
         vaults[0].put_ok("rec", size=2000)
         d, _ = split_default_and_expert(self.a.get(f"/scopes/{self.scope}").text)
@@ -263,17 +234,20 @@ class DefaultView(DashCase):
         self.assertIn("3 von 5 Tresoren", d)                           # a deleted vault does not count
         self.assertNotIn("Die App ist bald voll", d)
 
-    def test_paused_app_shows_the_badge_and_the_way_back_in_the_default_view(self):
-        self.a.post(f"/scopes/{self.scope}/suspend", {})
+    def test_only_the_operator_pauses_and_an_admin_is_told_so(self):
+        self.assertEqual(self.a.post(f"/scopes/{self.scope}/suspend", {}).status, 403)
+        self.assertEqual(self.row(self.scope)["status"], "active")
+        self.assertNotIn(f"/scopes/{self.scope}/suspend", self.page)
+        self.operator().post(f"/scopes/{self.scope}/suspend", {})
         page = self.a.get(f"/scopes/{self.scope}").text
         d, e = split_default_and_expert(page)
-        self.assertIn("pausiert (durch Sie oder Mit-Administratoren)", d)
-        self.assertIn(f"/scopes/{self.scope}/resume", d)
-        self.assertIn("Pause beenden", d)
-        self.assertNotIn(f"/scopes/{self.scope}/suspend", d + e)
+        self.assertIn("pausiert", d)
+        self.assertIn("Nur der Betrieb kann die Pause beenden.", d)
+        self.assertNotIn("durch Sie", page)
+        self.assertNotIn(f"/scopes/{self.scope}/resume", page)
+        self.assertEqual(self.a.post(f"/scopes/{self.scope}/resume", {}).status, 403)
         en = self.a.get(f"/scopes/{self.scope}?lang=en").text
-        self.assertIn("paused (by you or a co-admin)", en)
-        self.assertIn("End pause", en)
+        self.assertIn("The operator has paused this app. Only the operator can end the pause.", en)
 
     def test_help_box_links_and_optional_contact(self):
         d = self.default
@@ -312,43 +286,47 @@ class DefaultView(DashCase):
 
 
 class PromptSentences(DashCase):
-    def prompt(self, lang, **over):
+    """"Text für Claude": one English text for both uses, the conversation and CLAUDE.md / AGENTS.md (prompt.py)."""
+
+    def prompt(self, lang="de", name="Demo"):
         a = self.staff(lang_header=lang)
-        scope = self.make_scope(a, name="Demo", **over)
-        return html_pre(a.get(f"/scopes/{scope}").text, "prompt"), html_pre(a.get(f"/scopes/{scope}").text, "claude-md")
+        scope = self.make_scope(a, name=name)
+        return scope, html_pre(a.get(f"/scopes/{scope}").text, "prompt")
 
-    def test_breach_check_sentence_is_in_the_prompt_iff_the_check_is_on(self):
-        for lang in ("en", "de"):
-            on, snippet = self.prompt(lang)
-            self.assertIn(prompt_mod.HIBP_EN, on)
-            self.assertIn(prompt_mod.HIBP_DE, on)
-            self.assertIn(prompt_mod.PRIVACY_EN, on)                          # the official sentence stays word for word
-            self.assertIn(prompt_mod.PRIVACY_DE, on)
-            self.assertLess(on.index(prompt_mod.PRIVACY_DE), on.index(prompt_mod.HIBP_DE))    # right after it
-            off, _ = self.prompt(lang, hibp="")
-            self.assertNotIn(prompt_mod.HIBP_EN, off)
-            self.assertNotIn(prompt_mod.HIBP_DE, off)
-            self.assertNotIn("Pwned Passwords", off)
-            self.assertNotIn("Pwned", snippet)                                # the snippet carries no setting
+    def test_one_english_text_whatever_the_dashboard_language(self):
+        scope_de, de = self.prompt("de")
+        scope_en, en = self.prompt("en")
+        self.assertEqual(de.replace(scope_de, "ID"), en.replace(scope_en, "ID"))
+        for needle in (f"app ID (scope) {scope_de}", "/llms.txt and follow its rules", prompt_mod.PRIVACY_EN, prompt_mod.PRIVACY_DE, "wds-verify",
+                       "Keep this section in CLAUDE.md and AGENTS.md"):
+            self.assertIn(needle, de, needle)
+        self.assertNotIn("Ich baue", de)
 
-    def test_the_two_languages_of_the_sentence_say_the_same_things(self):
-        for text in (prompt_mod.HIBP_EN, prompt_mod.HIBP_DE):
+    def test_nothing_that_changes_is_copied_into_it(self):
+        _, text = self.prompt()
+        for gone in ("Enrollment", "Breach", "Pwned", "per vault", "WDS.connect", "<script", "integrity", "MiB", "~/.wds", "deleteVault", "WDS_JOIN_CODE",
+                     "as of"):
+            self.assertNotIn(gone, text, gone)
+        self.assertIn("The join code of this app is a secret of the staff", text)
+
+    def test_the_text_is_exactly_what_prompt_py_makes(self):
+        scope, text = self.prompt()
+        self.assertEqual(text, prompt_mod.claude_text(sid=scope, base="https://wiai.uni-bamberg.de/datastore", repo_url=REPO_URL, sandbox_id=None))
+
+    def test_there_is_no_second_block_for_claude_md(self):
+        a = self.staff()
+        page = a.get(f"/scopes/{self.make_scope(a)}").text
+        self.assertEqual(page.count('id="prompt"'), 1)
+        self.assertNotIn('id="claude-md"', page)
+
+    def test_the_breach_check_wording_is_one_sentence_per_language(self):
+        for text in (prompt_mod.BREACH_EN, prompt_mod.BREACH_DE):
             self.assertIn("Pwned Passwords", text)
             self.assertIn("USA", text)
-        self.assertIn("five characters of a checksum", prompt_mod.HIBP_EN)
-        self.assertIn("fünf Zeichen einer Prüfsumme", prompt_mod.HIBP_DE)
-
-    def test_porting_and_no_join_code_file(self):
-        for lang in ("en", "de"):
-            text, snippet = self.prompt(lang)
-            self.assertIn("/llms.txt", text)                                      # llms.txt points to porting.md and the rules
-            self.assertNotIn("~/.wds", text + snippet)
-            self.assertNotIn("deleteVault", text + snippet)
-            self.assertNotIn("WDS_JOIN_CODE", text + snippet)
-            self.assertNotIn("MiB", text)
-            self.assertIn("/llms.txt", snippet)
-        text, _ = self.prompt("en", enrollment="open")
-        self.assertNotIn("join-code", text)                                   # no code, no file
+        self.assertIn("first five characters of a checksum", prompt_mod.BREACH_EN)
+        self.assertIn("ersten fünf Zeichen einer Prüfsumme", prompt_mod.BREACH_DE)
+        self.assertIn("neither the passphrase nor your IP address", prompt_mod.BREACH_EN)
+        self.assertIn("weder die Passphrase noch Ihre IP-Adresse", prompt_mod.BREACH_DE)
 
     def test_dashboard_never_puts_the_code_into_the_prompt(self):
         a = self.staff()
@@ -376,9 +354,8 @@ class SandboxScope(DashCase):
 
 
 class PlainLanguage(DashCase):
-    NEW_KEYS = ("create_defaults", "create_more", "f_description_hint", "sid_hint", "vault_explain", "who_reads", "expert_title", "expert_hint",
-                "expert_remember", "expert_forget", "expert_remember_hint", "next_steps", "step_prompt", "step_code", "step_code_open",
-                "step_code_closed", "step_users", "step_users_hint", "users_doc", "usage_title", "usage_text", "usage_near",
+    NEW_KEYS = ("create_defaults", "f_description_hint", "sid_hint", "vault_explain", "who_reads", "expert_title", "expert_hint",
+                "next_steps", "step_prompt", "step_code", "step_users", "step_users_hint", "users_doc", "usage_title", "usage_text", "usage_near",
                 "help_title", "help_text", "help_contact", "join_code_claude_hint")
 
     def test_new_texts_exist_in_both_languages_and_differ(self):
@@ -392,7 +369,7 @@ class PlainLanguage(DashCase):
         banned = (r"Scope", r"MiB", r"KiB", r"GiB", r"\bSRI\b", r"Hashwert", r"\bHash\b", r"Have I Been Pwned", r"App (ge)?sperr", r"\bSperre\b",
                   r"gesperrt \(durch", r"Treuhand")
         banned_en = (r"[Ss]cope ID", r"MiB", r"KiB", r"GiB", r"\bSRI\b", r"\bhash\b", r"Have I Been Pwned", r"\b[Ss]uspend", r"escrow")
-        sandbox_or_operator = {"sandbox_readonly", "err_sandbox_config", "sandbox_admins", "global_hint", "dev_hint", "act_scope_locked"}
+        sandbox_or_operator = {"sandbox_readonly", "err_sandbox_config", "sandbox_admins", "global_hint", "dev_hint"}
         for key, (de, en) in TEXTS.items():
             if key in sandbox_or_operator:
                 continue
@@ -406,7 +383,6 @@ class PlainLanguage(DashCase):
         self.assertIn("verschlüsselte Speicherplatz einer Person", de["vault_explain"])                    # Tresor
         self.assertIn("Nur wer diesen Code kennt", de["join_code_hint"])                                    # Beitrittscode
         self.assertIn("nicht geheim", de["sid_hint"])                                                       # App-ID
-        self.assertIn("nie die Passphrase", de["f_hibp_hint"])                                              # Datenlecks-Prüfung
         self.assertIn("(das Team, das den Datastore für die Fakultät betreibt)", de["who_reads"])           # Betrieb
         self.assertIn("1 MB = 1.048.576 Bytes", de["limits_hint"])                                          # MB
         self.assertIn("lesen und exportieren", de["suspend_hint"])                                          # Pause
@@ -419,9 +395,15 @@ class PlainLanguage(DashCase):
         self.assertEqual(fmt_bytes(3 * 1024**4, "en"), "3.0 TB")
         self.assertEqual(fmt_bytes(2000 * 1024**4, "en"), "2000.0 TB")
 
-    def test_privacy_page_names_the_display_cookie(self):
-        for lang, word in (("de", "wds_expert"), ("en", "wds_expert")):
-            self.assertIn(word, self.browser().get("/privacy?lang=" + lang).text)
+    def test_the_privacy_page_names_no_display_cookie_any_more(self):
+        for lang in ("de", "en"):
+            self.assertNotIn("wds_expert", self.browser().get("/privacy?lang=" + lang).text)
+
+    def test_the_words_for_the_users_code_and_the_faculty_key_are_kept_apart(self):
+        """D8: the user's code is the "Notfallcode"; "Wiederherstellungsschlüssel" is the faculty's key, in the official sentence."""
+        for key, (de, en) in TEXTS.items():
+            self.assertNotIn("Wiederherstellungscode", de, key)
+            self.assertNotRegex(en, r"[Rr]ecovery code", key)
 
 
 class LayLanguage(DashCase):
@@ -455,9 +437,11 @@ class LayLanguage(DashCase):
         self.assertIn("Claude does not need the code: Claude tests in the sandbox.", en)
         self.assertNotIn("against this app", en)                            # "your app" and "this app" were both called app
 
-    def test_the_recovery_code_is_explained_next_to_the_users_guide(self):
+    def test_the_emergency_code_is_explained_next_to_the_users_guide(self):
         d, _ = split_default_and_expert(self.a.get(f"/scopes/{self.scope}").text)
-        self.assertIn("den Wiederherstellungscode (ein Code auf dem Zugangsblatt, mit dem die Fakultät im Notfall den Zugang wiederherstellen kann", d)
+        self.assertIn("den Notfallcode (ein Code auf dem Zugangsblatt, mit dem die Fakultät im Notfall den Zugang wiederherstellen kann", d)
+        en, _ = split_default_and_expert(self.a.get(f"/scopes/{self.scope}?lang=en").text)
+        self.assertIn("the emergency code (a code on the access sheet", en)
 
     def test_help_links_say_who_they_are_for_and_the_lay_help_is_the_users_guide(self):
         d, _ = split_default_and_expert(self.a.get(f"/scopes/{self.scope}").text)
@@ -471,11 +455,10 @@ class LayLanguage(DashCase):
         page = self.a.get(f"/scopes/{self.scope}").text
         d, e = split_default_and_expert(page)
         self.assertNotIn("die Uhrzeit des Tests", d)                         # never pick a vault by time among the users' vaults
-        for anchor in ("vaults", "limits", "enrollment", "admins"):
+        for anchor in ("vaults", "limits", "admins"):
             self.assertIn(f'id="{anchor}"', e)
-        self.a.post(f"/scopes/{self.scope}/enrollment", {"enrollment": "closed"})
-        d2, _ = split_default_and_expert(self.a.get(f"/scopes/{self.scope}").text)
-        self.assertIn('<a href="#enrollment">Experteneinstellungen › Anlegen von Tresoren</a>', d2)
+        self.assertNotIn('id="enrollment"', e)
+        self.assertIn('<a href="#admins">Experteneinstellungen › Administratoren</a>', d)
 
     def test_the_page_script_opens_the_folded_area_for_a_link_into_it(self):
         page = self.a.get(f"/scopes/{self.scope}").text

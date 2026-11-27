@@ -86,7 +86,7 @@ class Csrf(DashCase):
             html = viewer.get(page).text
             self.assertEqual(len(re.findall(r'<form method="post"', html)), len(re.findall(r'name="csrf"', html)), page)
             self.assertIn('name="csrf"', html)
-        self.assertGreater(len(re.findall(r'<form method="post"', a.get(f"/scopes/{scope}").text)), 5)
+        self.assertGreaterEqual(len(re.findall(r'<form method="post"', a.get(f"/scopes/{scope}").text)), 4)
 
     def test_missing_wrong_or_foreign_token_is_rejected(self):
         a = self.staff()
@@ -180,14 +180,13 @@ class Headers(DashCase):
 class Scopes(DashCase):
     def test_create_scope(self):
         a = self.staff("alice")
-        r = a.post("/scopes", {"name": "Notenrechner 2", "slug": "", "description": "Computes", "contact_email": "dev@uni-bamberg.de",
-                               "enrollment": "join_code", "hibp": "1"})
+        r = a.post("/scopes", {"name": "Notenrechner 2", "description": "Computes", "contact_email": "dev@uni-bamberg.de"})
         self.assertEqual(r.status, 303)
         scope = r.headers["location"].split("?")[0].rsplit("/", 1)[1]
         self.assertRegex(scope, r"^notenrechner-2-[0-9a-z]{6}$")
         row = self.row(scope)
-        self.assertEqual((row["name"], row["description"], row["contact_email"], row["creator"], row["enrollment"], row["hibp"]),
-                         ("Notenrechner 2", "Computes", "dev@uni-bamberg.de", "alice", "join_code", 1))
+        self.assertEqual((row["name"], row["description"], row["contact_email"], row["creator"]),
+                         ("Notenrechner 2", "Computes", "dev@uni-bamberg.de", "alice"))
         self.assertRegex(row["join_code"], r"^[0-9A-Z]{8}$")
         self.assertEqual([tuple(x) for x in self.env.sql("SELECT admin, role FROM scope_admins WHERE scope_id=?", (scope,))],
                          [("alice", "creator")])
@@ -197,25 +196,25 @@ class Scopes(DashCase):
         self.assertEqual(self.c.get(f"{API}/scopes/{scope}").json()["name"], "Notenrechner 2")
         self.assertIn(scope, a.get("/").text)
 
-    def test_create_options(self):
+    def test_every_app_is_enrolled_by_its_join_code(self):
         a = self.staff()
-        scope = self.make_scope(a, slug="my-slug", enrollment="open", hibp="")
-        self.assertTrue(scope.startswith("my-slug-"))
+        scope = self.make_scope(a, name="My Slug")
+        self.assertTrue(scope.startswith("my-slug-"))                    # the short name comes from the name; there is no field for it
         row = self.row(scope)
-        self.assertEqual((row["enrollment"], row["hibp"], row["join_code"]), ("open", 0, None))
-        self.assertEqual(self.c.get(f"{API}/scopes/{scope}").json()["hibp"], False)
+        self.assertRegex(row["join_code"], r"^[0-9A-Z]{8}$")
+        doc = self.c.get(f"{API}/scopes/{scope}").json()
+        self.assertEqual(doc["enrollment"], "join_code")
+        self.assertNotIn("hibp", doc)
+        for column in ("enrollment", "hibp", "suspended_by"):
+            self.assertNotIn(column, row.keys())
 
     def test_create_validation_keeps_the_form_values(self):
         a = self.staff()
-        r = a.post("/scopes", {"name": "Keep me", "contact_email": "not-an-address", "enrollment": "join_code"})
+        r = a.post("/scopes", {"name": "Keep me", "contact_email": "not-an-address"})
         self.assertEqual(r.status, 400)
         self.assertIn("Keep me", r.text)
         self.assertIn("e-mail address", r.text)
         r = a.post("/scopes", {"name": "", "contact_email": "a@b.de"})
-        self.assertEqual(r.status, 400)
-        r = a.post("/scopes", {"name": "X", "contact_email": "a@b.de", "slug": "Bad Slug!"})
-        self.assertEqual(r.status, 400)
-        r = a.post("/scopes", {"name": "X", "contact_email": "a@b.de", "enrollment": "everyone"})
         self.assertEqual(r.status, 400)
         self.assertEqual(self.env.sql("SELECT COUNT(*) FROM scopes")[0][0], 0)
 
@@ -242,11 +241,11 @@ class Scopes(DashCase):
                       'crossorigin=&quot;anonymous&quot;&gt;&lt;/script&gt;', html)
         self.assertIn("https://wiai.uni-bamberg.de/datastore/llms.txt", html)
         prompt = re.search(r'<pre id="prompt">(.*?)</pre>', html, re.S).group(1)
-        self.assertIn(f"- App ID (scope): {scope}", prompt)
+        self.assertIn(f"app ID (scope) {scope}", prompt)
         self.assertIn("wds-verify", prompt)
         de = self.browser(lang_header="de")
         self.login(de, "alice", "alice@uni-bamberg.de")
-        self.assertIn(f"- App-ID (Scope): {scope}", de.get(f"/scopes/{scope}").text)
+        self.assertIn(f"app ID (scope) {scope}", de.get(f"/scopes/{scope}").text)     # English in both dashboard languages
 
     def test_missing_hashes_file(self):
         import os
@@ -265,28 +264,22 @@ class Scopes(DashCase):
             self.assertNotIn("<img src=x", html)
         self.assertIn("&lt;script&gt;alert(1)", a.get("/").text)
 
-    def test_settings_enrollment_and_join_code(self):
+    def test_settings_and_join_code(self):
         a = self.staff()
         scope = self.make_scope(a)
         old = self.row(scope)["join_code"]
         r = a.post(f"/scopes/{scope}/settings", {"name": "New Name", "description": "D2", "contact_email": "n@uni-bamberg.de"})
         self.assertEqual(r.status, 303)
         row = self.row(scope)
-        self.assertEqual((row["name"], row["description"], row["contact_email"], row["hibp"]), ("New Name", "D2", "n@uni-bamberg.de", 0))
+        self.assertEqual((row["name"], row["description"], row["contact_email"]), ("New Name", "D2", "n@uni-bamberg.de"))
         self.assertEqual(a.post(f"/scopes/{scope}/settings", {"name": "N", "contact_email": ""}).status, 400)
         r = a.post(f"/scopes/{scope}/join-code", {})
         self.assertEqual(r.status, 303)
         new = self.row(scope)["join_code"]
         self.assertNotEqual(new, old)
         self.assertIn(new, a.get(f"/scopes/{scope}").text)
-        self.assertEqual(a.post(f"/scopes/{scope}/enrollment", {"enrollment": "closed"}).status, 303)
-        self.assertEqual(self.c.get(f"{API}/scopes/{scope}").json()["enrollment"], "closed")
-        self.assertNotIn(new, a.get(f"/scopes/{scope}").text)  # code is only shown in join-code mode
-        self.assertEqual(a.post(f"/scopes/{scope}/enrollment", {"enrollment": "bogus"}).status, 400)
-        self.assertEqual(a.post(f"/scopes/{scope}/enrollment", {"enrollment": "join_code"}).status, 303)
-        self.assertEqual(self.row(scope)["join_code"], new)
         actions = [x[0] for x in self.env.sql("SELECT action FROM audit WHERE scope_id=? ORDER BY id", (scope,))]
-        self.assertEqual(actions, ["scope_created", "scope_updated", "join_code_rotated", "enrollment_changed", "enrollment_changed"])
+        self.assertEqual(actions, ["scope_created", "scope_updated", "join_code_rotated"])
 
     def test_new_join_code_works_for_vault_creation(self):
         a = self.staff()
@@ -297,7 +290,7 @@ class Scopes(DashCase):
         self.assertEqual(v.create(join_code="WRONG123").status, 403)
         self.assertEqual(v.create(join_code=self.row(scope)["join_code"]).status, 201)
 
-    def test_limits_within_ceilings(self):
+    def test_limits_are_shown_read_only(self):
         a = self.staff()
         scope = self.make_scope(a)
         html = a.get(f"/scopes/{scope}").text
@@ -306,27 +299,41 @@ class Scopes(DashCase):
         en = a.get(f"/scopes/{scope}?lang=en").text
         for needle in ("10.0 MB", "25.0 MB", "1.0 GB"):
             self.assertIn(needle, en)
-        r = a.post(f"/scopes/{scope}/limits", {"max_value_bytes": "5", "vault_bytes": "100", "scope_bytes": "1000", "max_vaults": "20",
-                                               "history_versions": "7"})
-        self.assertEqual(r.status, 303, r.text[:300])
-        doc = self.c.get(f"{API}/scopes/{scope}").json()["limits"]
-        self.assertEqual((doc["max_value_bytes"], doc["vault_bytes"], doc["history_versions"]), (5 * 1048576, 100 * 1048576, 7))
-        self.assertEqual(json.loads(self.row(scope)["limits"])["scope_bytes"], 1000 * 1048576)
-        self.assertEqual(json.loads(self.row(scope)["limits"])["max_vaults"], 20)
-        # blank fields go back to the defaults
-        a.post(f"/scopes/{scope}/limits", {"max_value_bytes": "", "vault_bytes": "", "scope_bytes": "", "max_vaults": "", "history_versions": ""})
+        self.assertNotIn(f"/scopes/{scope}/limits", html)    # nothing to edit: the operator changes limits on request
+        self.assertNotIn('type="number"', html)
+        self.assertEqual(a.post(f"/scopes/{scope}/limits", {"max_vaults": "20"}).status, 404)
         self.assertEqual(json.loads(self.row(scope)["limits"]), {})
 
-    def test_limits_above_ceiling_or_invalid_are_refused(self):
+    def cli_limits(self, scope, *items):
+        """python -m wds_server.cli limits ... against this test's server state (the real command opens its own Service)."""
+        import argparse
+        import contextlib
+        import io
+        from unittest import mock
+        from wds_server import cli
+        err = io.StringIO()
+        with mock.patch.object(cli, "_service", return_value=self.env.svc), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            code = cli.cmd_limits(argparse.Namespace(scope=scope, limit=list(items)))
+        return code, err.getvalue()
+
+    def test_the_operator_changes_limits_on_the_command_line(self):
         a = self.staff()
         scope = self.make_scope(a)
-        for field, value in (("max_vaults", "501"), ("history_versions", "51"), ("max_value_bytes", "26"), ("vault_bytes", "1025"),
-                             ("scope_bytes", "10241"), ("max_vaults", "0"), ("max_vaults", "-1"), ("max_vaults", "abc"),
-                             ("max_vaults", "1.5"), ("max_vaults", "99999999999999999")):
-            r = a.post(f"/scopes/{scope}/limits", {field: value})
-            self.assertIn(r.status, (400,), (field, value, r.status))
-            self.assertEqual(json.loads(self.row(scope)["limits"]), {}, (field, value))
-        self.assertEqual(a.post(f"/scopes/{scope}/limits", {"max_vaults": "500", "history_versions": "50", "max_value_bytes": "25"}).status, 303)
+        self.assertEqual(self.cli_limits(scope, "max_value_bytes=5242880", "vault_bytes=104857600", "max_vaults=20", "history_versions=7")[0], 0)
+        doc = self.c.get(f"{API}/scopes/{scope}").json()["limits"]
+        self.assertEqual((doc["max_value_bytes"], doc["vault_bytes"], doc["history_versions"]), (5 * 1048576, 100 * 1048576, 7))
+        self.assertEqual(json.loads(self.row(scope)["limits"])["max_vaults"], 20)
+        self.assertIn("limits_updated", [x[0] for x in self.env.sql("SELECT action FROM audit WHERE scope_id=?", (scope,))])
+        self.assertIn("20", a.get(f"/scopes/{scope}").text)           # the dashboard shows the new value
+        self.assertIn("Höchstzahl der Tresore", a.get(f"/scopes/{scope}").text)
+        self.assertEqual(self.cli_limits(scope, "max_vaults=default", "history_versions=default", "max_value_bytes=default", "vault_bytes=default")[0], 0)
+        self.assertEqual(json.loads(self.row(scope)["limits"]), {})
+        for bad in ("max_vaults=501", "history_versions=51", "max_vaults=0", "max_vaults=abc", "bogus=1"):
+            code, err = self.cli_limits(scope, bad)
+            self.assertEqual(code, 1, bad)
+            self.assertIn("bad_request", err)
+            self.assertEqual(json.loads(self.row(scope)["limits"]), {}, bad)
+        self.assertEqual(self.cli_limits("nope-abcdef", "max_vaults=5")[0], 1)
 
     def test_limits_total_stays_below_seventy_percent_of_the_disk(self):
         a = self.staff()
@@ -335,24 +342,24 @@ class Scopes(DashCase):
         r = a.post("/scopes", {"name": "S4", "contact_email": "a@b.de"})
         self.assertEqual(r.status, 409, r.text[:200])  # 4 x 2 GiB > 7 GiB
         self.assertIn("70 %", r.text)
-        r = a.post(f"/scopes/{s1}/limits", {"scope_bytes": "5000"})  # 5 + 2 + 2 > 7
-        self.assertEqual(r.status, 409)
+        code, err = self.cli_limits(s1, "scope_bytes=5368709120")  # 5 + 2 + 2 > 7
+        self.assertEqual((code, "disk_budget_exceeded" in err), (1, True))
         self.assertEqual(json.loads(self.row(s1)["limits"]), {})
-        self.assertEqual(a.post(f"/scopes/{s1}/limits", {"scope_bytes": "3000"}).status, 303)  # 3 + 2 + 2 = 7 GiB (approx.)
-        self.assertEqual(a.post(f"/scopes/{s1}/limits", {"scope_bytes": "500"}).status, 303)  # lowering always works
+        self.assertEqual(self.cli_limits(s1, "scope_bytes=3221225472")[0], 0)  # 3 + 2 + 2 = 7 GiB
+        self.assertEqual(self.cli_limits(s1, "scope_bytes=524288000")[0], 0)  # lowering always works
         self.env.svc.disk_total_override = 1024**3  # budget now smaller than what is committed: lowering still works
-        self.assertEqual(a.post(f"/scopes/{s2}/limits", {"scope_bytes": "100"}).status, 303)
-        self.assertEqual(a.post(f"/scopes/{s2}/limits", {"scope_bytes": "200"}).status, 409)
+        self.assertEqual(self.cli_limits(s2, "scope_bytes=104857600")[0], 0)
+        self.assertEqual(self.cli_limits(s2, "scope_bytes=209715200")[0], 1)
 
     def test_lowering_value_limit_below_stored_value_is_refused(self):
         a = self.staff()
-        scope = self.make_scope(a, enrollment="open")
-        v = self.env.new_vault({"scope": scope, "join_code": None})
+        scope = self.make_scope(a)
+        v = self.env.new_vault({"scope": scope})
         v.put_ok("big", size=2 * 1048576)
-        r = a.post(f"/scopes/{scope}/limits", {"max_value_bytes": "1"})
-        self.assertEqual(r.status, 409)
-        self.assertIn("largest value", r.text)
-        self.assertEqual(a.post(f"/scopes/{scope}/limits", {"max_value_bytes": "3"}).status, 303)
+        code, err = self.cli_limits(scope, "max_value_bytes=1048576")
+        self.assertEqual(code, 1)
+        self.assertIn("largest value", err)
+        self.assertEqual(self.cli_limits(scope, "max_value_bytes=3145728")[0], 0)
 
     def test_coadmins(self):
         a = self.staff("alice")
@@ -385,8 +392,7 @@ class Scopes(DashCase):
         scope = self.make_scope(a)
         mallory = self.staff("mallory")
         for path, form in ((f"/scopes/{scope}/settings", {"name": "Pwn", "contact_email": "m@uni-bamberg.de"}),
-                           (f"/scopes/{scope}/limits", {"max_vaults": "5"}), (f"/scopes/{scope}/join-code", {}),
-                           (f"/scopes/{scope}/enrollment", {"enrollment": "open"}), (f"/scopes/{scope}/admins", {"admin": "mallory"}),
+                           (f"/scopes/{scope}/join-code", {}), (f"/scopes/{scope}/admins", {"admin": "mallory"}),
                            (f"/scopes/{scope}/suspend", {}), (f"/scopes/{scope}/delete", {"confirm": scope})):
             self.assertEqual(mallory.post(path, form).status, 404, path)
         row = self.row(scope)
@@ -395,10 +401,10 @@ class Scopes(DashCase):
 
     def test_vault_list_and_delete(self):
         a = self.staff()
-        scope = self.make_scope(a, enrollment="open")
-        v = self.env.new_vault({"scope": scope, "join_code": None})
+        scope = self.make_scope(a)
+        v = self.env.new_vault({"scope": scope})
         v.put_ok("rec", size=1000)
-        w = self.env.new_vault({"scope": scope, "join_code": None})
+        w = self.env.new_vault({"scope": scope})
         other = self.env.new_vault()  # a vault of a scope that is not Alice's
         html = a.get(f"/scopes/{scope}").text
         self.assertIn(v.vault, html)
@@ -406,13 +412,9 @@ class Scopes(DashCase):
         self.assertNotIn(other.vault, html)
         row = re.search(rf"<code>{v.vault}</code>(.*?)</tr>", html, re.S).group(1)
         self.assertIn("KB", row)  # bytes (record plus roster)
-        self.assertRegex(re.sub(r"<[^>]+>", " ", row), r"\b1\b")  # one member (the founder)
-        # re-encryption pending: record blobs of an older epoch
-        self.env.sql("SELECT 1")
-        with self.env.svc.db.connection() as conn:
-            conn.execute("UPDATE vaults SET epoch=2 WHERE vault_id=?", (v.vault,))
-        row = re.search(rf"<code>{v.vault}</code>(.*?)</tr>", a.get(f"/scopes/{scope}").text, re.S).group(1)
-        self.assertIn("badge warn", row)
+        for gone in ("Personen mit Zugang", "Neu verschlüsseln läuft noch"):   # the table lists the vaults, not what is inside them
+            self.assertNotIn(gone, html)
+        self.assertNotIn("badge warn", row)
         # delete (soft)
         r = a.post(f"/scopes/{scope}/vaults/{v.vault}/delete", {})
         self.assertEqual(r.status, 303)
@@ -432,26 +434,23 @@ class Scopes(DashCase):
 
     def test_suspend_and_resume(self):
         a = self.staff()
-        scope = self.make_scope(a, enrollment="open")
-        self.assertEqual(a.post(f"/scopes/{scope}/suspend", {}).status, 303)
+        scope = self.make_scope(a)
+        op = self.operator()
+        self.assertEqual(a.post(f"/scopes/{scope}/suspend", {}).status, 403)    # only the operator pauses
+        self.assertEqual(op.post(f"/scopes/{scope}/suspend", {}).status, 303)
         self.assertEqual(self.row(scope)["status"], "suspended")
         from .helpers import Vault
-        self.assertEqual(Vault(self.env, scope).create().status, 403)
-        self.assertEqual(a.post(f"/scopes/{scope}/resume", {}).status, 303)
-        self.assertEqual(Vault(self.env, scope).create().status, 201)
-        # the operator's suspension is not the admin's to lift
-        op = self.operator()
-        self.assertEqual(op.post(f"/scopes/{scope}/suspend", {}).status, 303)
-        self.assertEqual(self.row(scope)["suspended_by"], "operator")
+        code = self.row(scope)["join_code"]
+        self.assertEqual(Vault(self.env, scope).create(join_code=code).status, 403)
         r = a.post(f"/scopes/{scope}/resume", {})
         self.assertEqual(r.status, 403)
         self.assertEqual(self.row(scope)["status"], "suspended")
         self.assertIn("Betrieb", a.get(f"/scopes/{scope}").text)
         self.assertEqual(op.post(f"/scopes/{scope}/resume", {}).status, 303)
         self.assertEqual(self.row(scope)["status"], "active")
+        self.assertEqual(self.env.new_vault({"scope": scope}).vault is not None, True)
         actors = [tuple(x) for x in self.env.sql("SELECT actor, action FROM audit WHERE action IN ('scope_suspended', 'scope_resumed') ORDER BY id")]
-        self.assertEqual(actors, [("user:alice", "scope_suspended"), ("user:alice", "scope_resumed"), ("operator:boss", "scope_suspended"),
-                                  ("operator:boss", "scope_resumed")])
+        self.assertEqual(actors, [("operator:boss", "scope_suspended"), ("operator:boss", "scope_resumed")])
 
     def test_api_suspension_counts_as_operator(self):
         a = self.staff()
@@ -459,6 +458,7 @@ class Scopes(DashCase):
         r = self.c.patch_json(f"{API}/admin/scopes/{scope}", {"status": "suspended"}, self.env.op)
         self.assertEqual(r.status, 200)
         self.assertEqual(a.post(f"/scopes/{scope}/resume", {}).status, 403)
+        self.assertEqual(self.row(scope)["status"], "suspended")
 
     def test_operator_cannot_edit_other_peoples_scope(self):
         a = self.staff()
@@ -468,13 +468,13 @@ class Scopes(DashCase):
         self.assertEqual(page.status, 200)
         self.assertNotIn(f"/scopes/{scope}/settings", page.text)
         for path, form in ((f"/scopes/{scope}/settings", {"name": "Op", "contact_email": "o@uni-bamberg.de"}),
-                           (f"/scopes/{scope}/join-code", {}), (f"/scopes/{scope}/limits", {"max_vaults": "5"})):  # only suspend, resume, delete
+                           (f"/scopes/{scope}/join-code", {})):  # only suspend, resume, delete
             self.assertEqual(op.post(path, form).status, 403, path)
 
     def test_delete_scope(self):
         a = self.staff()
-        scope = self.make_scope(a, enrollment="open")
-        v = self.env.new_vault({"scope": scope, "join_code": None})
+        scope = self.make_scope(a)
+        v = self.env.new_vault({"scope": scope})
         v.put_ok("rec")
         self.assertEqual(a.post(f"/scopes/{scope}/delete", {"confirm": "wrong"}).status, 400)
         self.assertIsNone(self.row(scope)["deleted"])

@@ -123,7 +123,7 @@ This is a smoke test, not a proof. It catches the usual mistakes (plaintext in s
 | No canary in download | pass |  |
 | No canary in server database (mock) | pass |  |
 | Downloads | info | zeitnotizen-old-data-2026-11-27.zip (offered by the library's migration dialog), zeiteintraege-2026-11-27.csv (user-requested download, contains canaries: yes) (the copy of the old data that the library's migration dialog offers; not a leak) |
-| Vault created | pass | The library dialog created a vault in the mock (open enrollment, passphrase checked by the library). |
+| Vault created | pass | The library dialog created a vault in the mock (passphrase checked by the library). |
 | Data was saved | pass | 28 encrypted record write(s) reached the mock; the canaries were searched for in all of them. |
 | Input fields | info | 7 field(s) filled with canaries (0 found by the tool, 7 by wds-verify.json steps); buttons pressed by the tool: none. |
 | Migration: old data visible | pass | All 5 value(s) typed into the old app are visible after the migration, the lock and the unlock (the start view after the unlock and every view an afterReload step opens were looked at). |
@@ -150,18 +150,16 @@ This run cannot see the following. Test each by hand before you hand the app ove
 
 ```text
 Data is end-to-end encrypted; the faculty holds a recovery key for emergencies.
-When you choose a passphrase, your browser checks it against known data breaches with the Pwned Passwords service (USA); the service receives your IP address and the first five characters of a checksum of the passphrase, never the passphrase itself.
 Your data is stored on a faculty server. You need:
 1. The join code from the person who runs this app (only for creating a vault).
 2. A passphrase of your own, at least 12 characters. It cannot be reset: the server does not know it.
-3. Your access sheet (access ID and recovery code). Print it or save it somewhere apart from this device.
-With your recovery code the faculty can restore access after a documented procedure. Details: https://wiai.uni-bamberg.de/datastore/docs/users.en
+3. Your access sheet (access ID and emergency code). Print it or save it somewhere apart from this device.
+With your emergency code the faculty can restore access after a documented procedure. Details: https://wiai.uni-bamberg.de/datastore/docs/users.en
 
 Die Daten sind Ende-zu-Ende-verschlüsselt; die Fakultät verwahrt für Notfälle einen Wiederherstellungsschlüssel.
-Wenn Sie eine Passphrase wählen, prüft Ihr Browser sie beim Dienst Pwned Passwords (USA) auf bekannte Datenlecks; der Dienst erhält Ihre IP-Adresse und die ersten fünf Zeichen einer Prüfsumme der Passphrase, nie die Passphrase selbst.
 Ihre Daten liegen auf einem Server der Fakultät. Sie brauchen:
 1. Den Beitrittscode von der Person, die diese App betreibt (nur zum Anlegen Ihres Tresors).
 2. Eine eigene Passphrase mit mindestens 12 Zeichen. Sie lässt sich nicht zurücksetzen: Der Server kennt sie nicht.
-3. Ihr Zugangsblatt (Zugangskennung und Wiederherstellungscode). Drucken oder speichern Sie es getrennt von diesem Gerät.
-Mit Ihrem Wiederherstellungscode kann die Fakultät nach einem dokumentierten Verfahren den Zugang wiederherstellen. Details: https://wiai.uni-bamberg.de/datastore/docs/users.de
+3. Ihr Zugangsblatt (Zugangskennung und Notfallcode). Drucken oder speichern Sie es getrennt von diesem Gerät.
+Mit Ihrem Notfallcode kann die Fakultät nach einem dokumentierten Verfahren den Zugang wiederherstellen. Details: https://wiai.uni-bamberg.de/datastore/docs/users.de
 ```

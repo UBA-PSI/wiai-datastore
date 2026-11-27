@@ -99,10 +99,10 @@ export async function startStub(routes) {
   return { url: 'http://127.0.0.1:' + server.address().port + '/datastore', hits, close: () => new Promise((ok) => { server.close(ok); server.closeAllConnections(); }) };
 }
 // The scope document of a sandbox as the server serves it (spec section 0).
-export const sandboxDoc = (over = {}) => ({ scope: 'sandbox-000000', name: 'WIAI Datastore sandbox', status: 'active', enrollment: 'open', hibp: false,
+export const sandboxDoc = (over = {}) => ({ scope: 'sandbox-000000', name: 'WIAI Datastore sandbox', status: 'active',
   limits: { max_value_bytes: 524288, vault_bytes: 2097152, history_versions: 2 },
   sandbox: { enabled: true, wipe_at: '03:30', timezone: 'Europe/Berlin', next_wipe: Math.floor(Date.now() / 1000) + 3600, last_wipe: null }, ...over });
-export const scopeDoc = (over = {}) => ({ scope: 'wds-verify-demo-k7m2a9', name: 'Demo', status: 'active', enrollment: 'join_code', hibp: true,
+export const scopeDoc = (over = {}) => ({ scope: 'wds-verify-demo-k7m2a9', name: 'Demo', status: 'active',
   limits: { max_value_bytes: 1048576, vault_bytes: 52428800, history_versions: 20 }, sandbox: null, ...over });
 
 export const findingTitles = (jsonOut) => JSON.parse(jsonOut).findings.filter((f) => f.level === 'fail').map((f) => f.title);

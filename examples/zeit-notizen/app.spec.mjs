@@ -48,8 +48,8 @@ async function newContext(browser, stack, opts = {}) {
     const response = await route.fetch({ url: route.request().url().replace(PROD, stack.origin) });
     await route.fulfill({ response, headers: { ...response.headers(), 'access-control-allow-origin': '*' } });
   });
-  // the breach check of the passphrase dialogs: padded noise, no match
-  await ctx.route('https://api.pwnedpasswords.com/range/*', (route) => route.fulfill({
+  // the breach check of the passphrase dialogs (the service's api/v1/pwned/<prefix>; the test server has no outbound access): padded noise, no match
+  await ctx.route('**/api/v1/pwned/*', (route) => route.fulfill({
     status: 200, contentType: 'text/plain', headers: { 'access-control-allow-origin': '*' }, body: '0018A45C4D1DEF81644B54AB7F969B88D65:0\r\n' }));
   return ctx;
 }
@@ -74,7 +74,7 @@ async function createVault(page, stack, { waitForApp = true } = {}) {
   await dlg.getByRole('button', { name: 'Tresor anlegen' }).click();
   await expect(dlg.getByRole('heading', { name: 'Zugangsblatt sichern' })).toBeVisible({ timeout: 60000 });
   const accessId = (await dlg.locator('[data-wds=access-id]').innerText()).trim();
-  await dlg.getByLabel('Ich habe das Zugangsblatt und den Wiederherstellungscode gesichert.').check();
+  await dlg.getByLabel('Ich habe das Zugangsblatt und den Notfallcode gesichert.').check();
   await dlg.getByRole('button', { name: 'Weiter' }).click();
   if (waitForApp) await expect(page.locator('#app')).toBeVisible({ timeout: 60000 });
   return accessId;

@@ -25,6 +25,7 @@ test('create vault: passphrase rules, breach check, access sheet, then set/get a
   await expect(dlg.getByRole('heading', { name: 'Unlock your data' })).toBeVisible();
   await shot(page, 'en-unlock');
   await dlg.getByRole('button', { name: 'Create a new vault' }).click();
+  await dlg.getByLabel('Join code').fill('ANYCODE1');
   const pw = dlg.getByLabel('Passphrase', { exact: true }), rep = dlg.getByLabel('Repeat passphrase');
   const submit = dlg.getByRole('button', { name: 'Create vault' });
 
@@ -38,8 +39,8 @@ test('create vault: passphrase rules, breach check, access sheet, then set/get a
   await pw.fill('Tr0ub4dor-and-3-horses'); await rep.fill('Tr0ub4dor-and-3-horses'); await submit.click();
   await expect(dlg.getByRole('alert').filter({ hasText: 'appears 42 times in known data breaches' })).toBeVisible();
   expect(hibp.length).toBe(1);
-  expect(hibp[0].prefix).toMatch(/^[0-9A-F]{5}$/);
-  expect(hibp[0].padding).toBe('true');
+  expect(hibp[0].prefix).toMatch(/^[0-9A-F]{5}$/);   // the page asks its own service, never another host
+  await expect(dlg.getByText('asks Pwned Passwords (USA) on your behalf')).toBeVisible();   // the one privacy sentence of the form
 
   await pw.fill(PASS); await rep.fill(PASS);
   await expect(dlg.getByText('Strength: strong')).toBeVisible();
@@ -53,23 +54,17 @@ test('create vault: passphrase rules, breach check, access sheet, then set/get a
   await expect(dlg.getByRole('button', { name: 'Continue' })).toBeDisabled();
   await shot(page, 'en-sheet');
 
-  const kfDownload = page.waitForEvent('download');
-  await dlg.getByRole('button', { name: 'Download key file' }).click();
-  const kf = await kfDownload;
-  expect(kf.suggestedFilename()).toBe(w.scope + '-' + accessId.slice(0, 4) + '.wds.json');
-  const kfText = readFileSync(await kf.path(), 'utf8');
-  expect(JSON.parse(kfText).access_id).toBe(accessId.replace(/-/g, ''));
-  expect(kfText).not.toContain(recovery.replace(/-/g, ''));
+  await expect(dlg.getByRole('button', { name: /key file/i })).toHaveCount(0);   // no key file: the access ID is on the sheet
 
   const sheetDownload = page.waitForEvent('download');
   await dlg.getByRole('button', { name: 'Download access sheet (HTML)' }).click();
   const sheet = readFileSync(await (await sheetDownload).path(), 'utf8');
   expect(sheet).toContain(accessId);
   expect(sheet).toContain(recovery);
-  expect(sheet).toContain('Faculty recovery key');
+  expect(sheet).toContain('the faculty holds a recovery key for emergencies');   // the same escrow sentence as the create form
   expect(sheet).not.toContain(PASS);
 
-  await dlg.getByLabel('I have saved the access sheet and the recovery code.').check();
+  await dlg.getByLabel('I have saved the access sheet and the emergency code.').check();
   await dlg.getByRole('button', { name: 'Continue' }).click();
   const status = await page.evaluate(() => window.unlockP);
   expect(status.role).toBe('owner');
@@ -104,7 +99,7 @@ test('create vault: passphrase rules, breach check, access sheet, then set/get a
 
 const idOf = (v) => v.accessId.replace(/-/g, '');
 
-test('new device: key file by choosing, key file of another app is refused, new-device notice', async ({ browser }) => {
+test('new device: type the access ID, new-device notice', async ({ browser }) => {
   const ctx1 = await browser.newContext();
   const page = await openApp(ctx1, w);
   const vault = await createVaultViaUi(page);
@@ -115,14 +110,8 @@ test('new device: key file by choosing, key file of another app is refused, new-
   await p2.evaluate(() => { window.getP = store.get('a'); });
   const d = dialog(p2);
   await expect(d.getByLabel('Access ID')).toHaveValue('');
-  const foreign = join(tmpDir(), 'foreign.wds.json');
-  writeFileSync(foreign, JSON.stringify(Object.assign(JSON.parse(readFileSync(vault.keyFile.path, 'utf8')), { scope: 'other-k7m2a9' })));
-  await d.locator('[data-wds=keyfile]').setInputFiles(foreign);
-  await expect(d.getByRole('alert').filter({ hasText: 'different app or service' })).toBeVisible();
-  // the right key file
-  await d.locator('[data-wds=keyfile]').setInputFiles(vault.keyFile.path);
-  await expect(d.getByText('Key file loaded.')).toBeVisible();
-  await expect(d.getByLabel('Access ID')).toHaveValue(vault.accessId);
+  await expect(d.locator('[data-wds=keyfile], [data-wds=keyfile-button]')).toHaveCount(0);
+  await d.getByLabel('Access ID').fill(vault.accessId);
   await d.getByLabel('Passphrase', { exact: true }).fill(vault.passphrase);
   await d.getByRole('button', { name: 'Unlock' }).click();
   expect(await p2.evaluate(() => window.getP)).toEqual({ x: 1 });
@@ -175,7 +164,7 @@ test('records: JSON, bytes, File and Blob values (a file comes back as a Blob wi
   expect(r.removedAgain).toEqual({ name: 'note', deleted: false, resolution: 'absent' });
 });
 
-test('conflict dialog: keep mine, keep theirs, download both, and the merge handler', async ({ context }) => {
+test('conflict dialog: keep mine, keep theirs (no download), and the merge handler', async ({ context }) => {
   const page = await openApp(context, w);
   const vault = await createVaultViaUi(page);
   await page.evaluate(() => store.set('note', { text: 'v1' }));
@@ -190,12 +179,8 @@ test('conflict dialog: keep mine, keep theirs, download both, and the merge hand
   await expect(d.getByText('theirs v2')).toBeVisible();
   await expect(d.getByText('mine v2')).toBeVisible();
   await shot(page, 'en-conflict');
-  const names = [];
-  page.on('download', (x) => names.push(x.suggestedFilename()));
-  await d.getByRole('button', { name: 'Download both' }).click();
-  await expect.poll(() => names.length).toBe(2);
-  expect(names.sort()).toEqual(['note.mine.json', 'note.theirs.json']);
-  await expect(d).toBeVisible(); // downloading does not decide anything
+  await expect(d.getByRole('button', { name: 'Download both' })).toHaveCount(0);
+  await expect(d.getByText('stays in the history')).toBeVisible();
   await d.getByRole('button', { name: 'Keep mine' }).click();
   const res = await page.evaluate(() => window.setP);
   expect(res.resolution).toBe('mine');
@@ -309,7 +294,7 @@ test('share: invite, redeem on another browser, redemption notice, revoke with r
   await owner.evaluate(() => { window.shareP = store.openVault(); });
   const sd = dialog(owner);
   await expect(sd.getByRole('heading', { name: 'Vault' })).toBeVisible();
-  await expect(sd.getByText('Faculty recovery key').first()).toBeVisible();
+  await expect(sd.getByText('Faculty key').first()).toBeVisible();
   await sd.getByLabel('Access', { exact: true }).selectOption('write');
   await sd.getByLabel('Label (optional)').fill('Anna');
   await sd.getByRole('button', { name: 'Create invite code' }).click();
@@ -445,6 +430,7 @@ test('texts follow <html lang> (also when it changes), without it navigator.lang
   await expect(d.getByRole('heading', { name: 'Daten entsperren' })).toBeVisible();
   await shot(page, 'de-unlock');
   await d.getByRole('button', { name: 'Neuen Tresor anlegen' }).click();
+  await d.getByLabel('Beitrittscode').fill('BELIEBIG1');
   await d.getByLabel('Passphrase', { exact: true }).fill('kurz');
   await d.getByLabel('Passphrase wiederholen').fill('kurz');
   await d.getByRole('button', { name: 'Tresor anlegen' }).click();
@@ -454,9 +440,9 @@ test('texts follow <html lang> (also when it changes), without it navigator.lang
   await shot(page, 'de-create');
   await d.getByRole('button', { name: 'Tresor anlegen' }).click();
   await expect(d.getByRole('heading', { name: 'Zugangsblatt sichern' })).toBeVisible();
-  await expect(d.getByText('Wiederherstellungscode').first()).toBeVisible();
+  await expect(d.getByText('Notfallcode').first()).toBeVisible();
   await shot(page, 'de-sheet');
-  await d.getByLabel('Ich habe das Zugangsblatt und den Wiederherstellungscode gesichert.').check();
+  await d.getByLabel('Ich habe das Zugangsblatt und den Notfallcode gesichert.').check();
   await d.getByRole('button', { name: 'Weiter' }).click();
   expect((await page.evaluate(() => window.unlockP)).role).toBe('owner');
   await page.evaluate(() => { window.shareP = store.openVault(); });
@@ -469,7 +455,7 @@ test('texts follow <html lang> (also when it changes), without it navigator.lang
   await page.evaluate(() => document.documentElement.setAttribute('lang', 'de-AT'));
   await page.evaluate(() => { window.shareP = store.openVault(); });
   await expect(dialog(page).getByRole('heading', { name: 'Tresor' })).toBeVisible();
-  await expect(dialog(page).getByText('Wiederherstellungsschlüssel der Fakultät').first()).toBeVisible();
+  await expect(dialog(page).getByText('Schlüssel der Fakultät').first()).toBeVisible();
   await shot(page, 'de-share');
 });
 
@@ -655,7 +641,7 @@ test('faculty recovery: the recovered owner can revoke the old owner slot, and t
   expect(failure).not.toBeNull();
 });
 
-test('own access: change passphrase, renew keys, key file, lock', async ({ context }) => {
+test('own access: change passphrase, lock', async ({ context }) => {
   const page = await openApp(context, w);
   const hibp = await mockHibp(page);
   const vault = await createVaultViaUi(page);
@@ -668,17 +654,13 @@ test('own access: change passphrase, renew keys, key file, lock', async ({ conte
   await sd.getByRole('button', { name: 'Change passphrase' }).click();
   await expect(sd.getByText('Passphrase changed.')).toBeVisible();
   expect(hibp.length).toBeGreaterThan(0);
-  await sd.getByRole('button', { name: 'Renew my keys' }).click();
-  await expect(sd.getByText('Keys renewed.')).toBeVisible();
-  const kf = page.waitForEvent('download');
-  await sd.getByRole('button', { name: 'Download key file' }).click();
-  expect(JSON.parse(readFileSync(await (await kf).path(), 'utf8')).access_id).toBe(idOf(vault));
+  await expect(sd.getByRole('button', { name: /Renew my keys|Download key file/ })).toHaveCount(0);
   const reloaded = page.waitForEvent('load');
   await sd.getByRole('button', { name: 'Lock now' }).click();   // lock = save what is pending, then reload the page
   await reloaded;
   await expect(page.getByRole('dialog')).toHaveCount(0);
   expect(await page.evaluate(() => store.status().unlocked)).toBe(false);
-  // the old passphrase no longer works, the new one does, and the data is intact (keys were renewed in place)
+  // the old passphrase no longer works, the new one does, and the data is intact
   await page.evaluate(() => { window.getP = store.get('x'); });
   const d = dialog(page);
   await d.getByLabel('Passphrase', { exact: true }).fill(vault.passphrase);
@@ -719,10 +701,11 @@ test('concurrent calls while locked share one unlock dialog', async ({ context }
   await expect(page.getByRole('dialog')).toHaveCount(1);
   const d = dialog(page);
   await d.getByRole('button', { name: 'Create a new vault' }).click();
+  await d.getByLabel('Join code').fill('ANYCODE1');
   await d.getByLabel('Passphrase', { exact: true }).fill(PASS);
   await d.getByLabel('Repeat passphrase').fill(PASS);
   await d.getByRole('button', { name: 'Create vault' }).click();
-  await d.getByLabel('I have saved the access sheet and the recovery code.').check();
+  await d.getByLabel('I have saved the access sheet and the emergency code.').check();
   await d.getByRole('button', { name: 'Continue' }).click();
   const [a, b, c] = await page.evaluate(() => window.calls);
   expect(a).toBeUndefined();
@@ -731,7 +714,7 @@ test('concurrent calls while locked share one unlock dialog', async ({ context }
 });
 
 test('enrollment by join code, and the breach check being unreachable is reported but does not block', async ({ context }) => {
-  const w2 = await startTestWorld({ scope: { enrollment: 'join_code', join_code: 'ABCDEF23' } });
+  const w2 = await startTestWorld({ scope: { join_code: 'ABCDEF23' } });
   try {
     const page = await openApp(context, w2);
     await mockHibp(page, { down: true });
@@ -748,20 +731,21 @@ test('enrollment by join code, and the breach check being unreachable is reporte
     await d.getByLabel('Join code').fill('abcd-ef23');
     await d.getByRole('button', { name: 'Create vault' }).click();
     await expect(d.getByRole('heading', { name: 'Save your access sheet' })).toBeVisible();
-    await expect(d.getByText('the breach check was not available')).toBeVisible();
+    await expect(d.getByText('the breach check was not available')).toBeVisible();   // the service answered 503: the strict local rules decided
     await shot(page, 'en-sheet-hibp-down');
   } finally { await w2.close(); }
 });
 
-test('closed enrollment, an outdated-library advisory and a suspended scope', async ({ context }) => {
-  const w2 = await startTestWorld({ scope: { enrollment: 'closed' } });
+test('a paused app, an outdated-library advisory and a suspended scope', async ({ context }) => {
+  const w2 = await startTestWorld();
   try {
+    w2.world.server.scopes.get(w2.scope).status = 'suspended';
     const orig = w2.world.server.getScope.bind(w2.world.server);
     w2.world.server.getScope = (id) => { const r = orig(id); r.json.library.deprecated = [VERSION]; return r; };
     const page = await openApp(context, w2);
     await page.evaluate(() => { window.unlockP = store.unlock().catch(() => {}); });
     await dialog(page).getByRole('button', { name: 'Create a new vault' }).click();
-    await expect(dialog(page).getByText('New vaults cannot be created for this app at the moment.')).toBeVisible();
+    await expect(dialog(page).getByText('This app is paused by the faculty. New vaults cannot be created.')).toBeVisible();
     await dialog(page).getByRole('button', { name: 'I already have a vault' }).click();
     await expect(dialog(page).getByRole('heading', { name: 'Unlock your data' })).toBeVisible();
   } finally { await w2.close(); }
@@ -821,6 +805,7 @@ test('print sheet, and themeable through CSS custom properties', async ({ contex
   const d = dialog(page);
   expect(await d.getByRole('button', { name: 'Unlock' }).evaluate((b) => getComputedStyle(b).backgroundColor)).toBe('rgb(200, 0, 0)');
   await d.getByRole('button', { name: 'Create a new vault' }).click();
+  await d.getByLabel('Join code').fill('ANYCODE1');
   await d.getByLabel('Passphrase', { exact: true }).fill(PASS);
   await d.getByLabel('Repeat passphrase').fill(PASS);
   await d.getByRole('button', { name: 'Create vault' }).click();

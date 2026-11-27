@@ -99,7 +99,7 @@ function harness(md, stack, { recipe, params = [], ret = [], scope, origin, extr
 
 async function newContext(browser, opts = {}) {
   const ctx = await browser.newContext({ acceptDownloads: true, viewport: { width: 1100, height: 800 }, locale: 'en-US', ...opts });
-  await ctx.route('https://api.pwnedpasswords.com/range/*', (route) => route.fulfill({
+  await ctx.route('**/api/v1/pwned/*', (route) => route.fulfill({
     status: 200, contentType: 'text/plain', headers: { 'access-control-allow-origin': '*' }, body: '0018A45C4D1DEF81644B54AB7F969B88D65:0\r\n' }));
   return ctx;
 }

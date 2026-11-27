@@ -32,10 +32,12 @@ test('the user documentation uses the names that the dialogs show', () => {
   const doc = (n) => readFileSync(new URL('../../docs/site/' + n, import.meta.url), 'utf8');
   for (const [lang, file] of [['de', 'users.de.md'], ['en', 'users.en.md']]) {
     const text = doc(file), T = I.TEXT[lang];
-    for (const key of ['role.write', 'role.read', 'share.recovery.cancel', 'conflict.keepTheirs', 'conflict.keepMine', 'conflict.downloadBoth', 'share.recovered.title']) {
+    for (const key of ['role.write', 'role.read', 'share.recovery.cancel', 'conflict.keepTheirs', 'conflict.keepMine', 'share.recovered.title']) {
       assert.ok(text.includes(T[key]), file + ' names "' + T[key] + '" (' + key + ')');
     }
     assert.ok(/Wiederherstellungsschlüssel|recovery key/.test(text), file);
+    assert.ok(text.includes(T['sheet.recovery']), file + ' names the emergency code as the dialogs do');
+    assert.ok(!/Wiederherstellungscode|recovery code|Schlüsseldatei|key file/i.test(text), file + ' still uses a removed or renamed word');
   }
   assert.ok(!/"/.test(doc('users.de.md').replace(/`[^`]*`/g, '')), 'German pages use „…“, not straight quotes');
 });
@@ -89,45 +91,32 @@ test('passphrase rules: well-known German passphrases are refused locally, and a
   assert.equal(strict.strict, true);
   assert.equal(I.checkLocal('purple-elephant-marching-slowly', true).ok, true);
   assert.equal(I.checkLocal('Blau-Kuchen-Fahrrad-Wolke', true).ok, true);
-  // checkPassphrase: breach check off, unreachable or answering: only the last one keeps the normal limit
-  const ok = async () => new Response('0018A45C4D1DEF81644B54AB7F969B88D65:0\r\n', { status: 200 });
-  assert.equal((await I.checkPassphrase(middling, { fetch: ok })).ok, true);
-  const off = await I.checkPassphrase(middling, { hibp: false });
-  assert.equal(off.ok, false);
-  assert.equal(off.code, 'weak');
-  const down = await I.checkPassphrase(middling, { fetch: async () => { throw new TypeError('offline'); } });
-  assert.equal(down.ok, false);
-  assert.equal(down.code, 'weak');
-  assert.equal((await I.checkPassphrase('Blau-Kuchen-Fahrrad-Wolke', { hibp: false })).ok, true);
   assert.ok(I.TEXT.de['pw.weak.noBreachCheck'] && I.TEXT.en['pw.weak.noBreachCheck']);
 });
 
-test('HIBP check: sends only a 5 character prefix with Add-Padding, ignores padding rows, fails open', async () => {
+test('breach check: asks the service with a 5 character prefix, ignores padding rows, reports "unavailable" instead of failing', async () => {
   const pass = 'a-very-pwned-passphrase';
+  const url = 'https://wiai.test/datastore/api/v1/pwned/';
   const sha1 = createHash('sha1').update(pass).digest('hex').toUpperCase();
   const calls = [];
-  const fetchOk = async (url, init) => {
-    calls.push({ url, init });
+  const fetchOk = async (u2, init) => {
+    calls.push({ url: u2, init });
     const lines = ['0018A45C4D1DEF81644B54AB7F969B88D65:0', sha1.slice(5) + ':1234', 'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF:0'];
     return new Response(lines.join('\r\n'), { status: 200 });
   };
-  const hit = await I.hibpCheck(pass, { fetch: fetchOk });
+  const hit = await I.breachCheck(pass, { fetch: fetchOk, url });
   assert.deepEqual(hit, { status: 'pwned', count: 1234 });
-  assert.equal(calls[0].url, 'https://api.pwnedpasswords.com/range/' + sha1.slice(0, 5));
-  assert.equal(calls[0].init.headers['Add-Padding'], 'true');
+  assert.equal(calls[0].url, url + sha1.slice(0, 5));
   assert.equal(calls[0].init.credentials, 'omit');
   assert.ok(!calls[0].url.includes(sha1.slice(5)));
   // a padding entry for our own suffix (count 0) is not a hit
-  const padded = await I.hibpCheck(pass, { fetch: async () => new Response(sha1.slice(5) + ':0\r\n', { status: 200 }) });
+  const padded = await I.breachCheck(pass, { url, fetch: async () => new Response(sha1.slice(5) + ':0\r\n', { status: 200 }) });
   assert.equal(padded.status, 'ok');
-  assert.equal((await I.hibpCheck(pass, { fetch: async () => { throw new TypeError('offline'); } })).status, 'unavailable');
-  assert.equal((await I.hibpCheck(pass, { fetch: async () => new Response('no', { status: 503 }) })).status, 'unavailable');
-  const full = await I.checkPassphrase(pass, { fetch: fetchOk });
-  assert.equal(full.ok, false);
-  assert.equal(full.code, 'pwned');
-  assert.equal((await I.checkPassphrase(pass, { hibp: false })).ok, true);
-  assert.equal((await I.checkPassphrase('purple-elephant-marching-slowly', { fetch: async () => new Response('', { status: 200 }) })).ok, true);
-  assert.equal((await I.checkPassphrase('short', { fetch: async () => { throw new Error('must not be called'); } })).code, 'short');
+  assert.equal((await I.breachCheck('purple-elephant-marching-slowly', { url, fetch: async () => new Response('', { status: 200 }) })).status, 'ok');
+  // the service cannot be reached, or answers 503 (its server has no outbound access): the caller falls back to the strict rules
+  assert.equal((await I.breachCheck(pass, { url, fetch: async () => { throw new TypeError('offline'); } })).status, 'unavailable');
+  assert.equal((await I.breachCheck(pass, { url, fetch: async () => new Response('no', { status: 503 }) })).status, 'unavailable');
+  assert.equal((await I.breachCheck(pass, { fetch: fetchOk })).status, 'unavailable');   // no endpoint, no request
 });
 
 test('crc32 matches the standard check value', () => {
@@ -195,15 +184,15 @@ test('export archive: manifest lists every record; the ZIP is valid', async () =
   assert.equal(JSON.parse(execFileSync('unzip', ['-p', file, 'wds-export.json']).toString()).scope, 'testapp-k7m2a9');
 });
 
-test('access sheet HTML escapes values and only shows the recovery code when there is one', () => {
+test('access sheet HTML escapes values and only shows the emergency code when there is one', () => {
   const t = I.makeT('en');
   const html = I.buildSheetHtml({ appName: '<script>alert(1)</script>', scope: 'x-k7m2a9', accessId: 'AAAA-BBBB-CCCC-DDDD-EEEE', recoveryCode: '1111-2222', service: 'https://wiai.test/datastore/', created: 1700000000000, role: 'owner' }, t, 'en');
   assert.ok(!html.includes('<script>alert'));
   assert.ok(html.includes('&lt;script&gt;'));
   assert.ok(html.includes('1111-2222') && html.includes('AAAA-BBBB-CCCC-DDDD-EEEE'));
-  assert.ok(html.includes('Faculty recovery key'));
+  assert.ok(html.includes(I.TEXT.en['escrow.text']) && html.includes('Emergency code'));
   const member = I.buildSheetHtml({ appName: 'App', scope: 'x-k7m2a9', accessId: 'AAAA-BBBB-CCCC-DDDD-EEEE', recoveryCode: null, service: 's', created: 0, role: 'write' }, I.makeT('de'), 'de');
-  assert.ok(!member.includes('Wiederherstellungscode</th>'));
+  assert.ok(!member.includes('Notfallcode</th>'));
   assert.ok(member.includes('lang="de"'));
 });
 

@@ -11,9 +11,6 @@ test('create vault: access sheet data, roster v1, state', async () => {
   assert.equal(created.recoveryCode.canonical.length, 28);
   assert.equal(created.recoveryCode.display.split('-').length, 7);
   assert.equal((await core.parseRecoveryCode(created.recoveryCode.display)).canonical, created.recoveryCode.canonical);
-  const kf = await core.parseKeyFile(created.keyFile.text, { scope: world.scope, service: world.server.service });
-  assert.equal(kf.accessId, created.accessId);
-  assert.equal(kf.vaultId, created.vaultId);
   const st = founder.status();
   assert.equal(st.role, 'owner'); assert.equal(st.epoch, 1); assert.equal(st.rosterVersion, 1);
   // server stored the recovery hash of the code we were shown
@@ -22,16 +19,14 @@ test('create vault: access sheet data, roster v1, state', async () => {
   assert.equal(founder.rememberedAccessId(), created.accessId);
 });
 
-test('unlock with passphrase, wrong passphrase, key file vault check', async () => {
+test('unlock with passphrase, wrong passphrase, malformed and unknown IDs', async () => {
   const { world, created, passphrase } = await setupVault();
   const c2 = newClient(world, { storage: world.storage });
-  const st = await c2.unlock({ accessId: created.accessIdDisplay, passphrase, vaultId: created.vaultId });
+  const st = await c2.unlock({ accessId: created.accessIdDisplay, passphrase });
   assert.equal(st.role, 'owner');
   assert.equal(st.stateStatus, 'ok');
   const c3 = newClient(world);
   await rejects(c3.unlock({ accessId: created.accessId, passphrase: 'wrong wrong wrong' }), core.errors.AuthError);
-  const c4 = newClient(world);
-  await rejects(c4.unlock({ accessId: created.accessId, passphrase, vaultId: 'ZZZZZZZZZZZZZZZZZZZZZZZZZZ' }), core.errors.IntegrityError, /key file/);
   await rejects(newClient(world).unlock({ accessId: '00000000000000000000', passphrase }), core.errors.UsageError);
   await rejects(newClient(world).unlock({ accessId: await I.randomAccessId(), passphrase }), core.errors.RequestError);
 });

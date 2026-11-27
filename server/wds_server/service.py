@@ -12,6 +12,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .config import Config, LIMIT_KEYS
 from .db import Database
+from .pwned import PwnedProxy
 from .ratelimit import RateLimiter
 from .util import b64u_decode, max_envelope_bytes
 
@@ -22,8 +23,7 @@ INVITE_MAX_SECONDS = 15 * 86400
 ROSTER_SOFT_CAP = 1000
 ROSTER_HARD_CAP = 1100
 ROSTER_BYTES_CAP = 16 * 1024 * 1024  # roster history per vault (rosters and slot blobs), also limited by vault_bytes
-RECOVERY_WAIT_CODE = 259200
-RECOVERY_WAIT_CONTACT = 604800
+RECOVERY_WAIT = 259200  # 72 hours between the emergency code and the escrow key being used
 EMPTY_VAULT_TTL = 7 * 86400
 DELETED_VAULT_TTL = 2592000
 JSON_BODY_LIMIT = 1048576
@@ -40,6 +40,7 @@ class Service:
         self.db = Database(db_path)
         self.limiter = RateLimiter(config)
         self.clock = clock or time.time
+        self.pwned = PwnedProxy(config.pwned_url, self.now)
         self._probe = disk_probe
         app_root = Path(__file__).resolve().parents[2]  # the repository, or /opt/wiai-datastore/app on the VM
         self.client_dir = Path(config.client_dir) if config.client_dir else app_root / "client" / "dist"

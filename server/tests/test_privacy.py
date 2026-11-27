@@ -18,9 +18,9 @@ DE_FACTS = [
     "Kapuzinerstraße 25, 96047 Bamberg", "datenschutzbeauftragter@uni-bamberg.de", "+49 951 863-1030",
     "Der Bayerische Landesbeauftragte für den Datenschutz", "Postfach 22 12 19, 80502 München", "Wagmüllerstraße 18, 80538 München",
     "poststelle@datenschutz-bayern.de", "+49 89 212672-0", "www.datenschutz-bayern.de",
-    "Art. 6 Abs. 1 Buchst. e und Abs. 3 DSGVO", "Art. 4 Abs. 1 BayDSG", "Art. 6 Abs. 1 Buchst. a DSGVO",
+    "Art. 6 Abs. 1 Buchst. e und Abs. 3 DSGVO", "Art. 4 Abs. 1 BayDSG",
     "api.pwnedpasswords.com", "Troy Hunt", "Cloudflare", "SHA-1", "USA", "Art. 11 DSGVO", "Art. 15 DSGVO", "(Art. 16)", "(Art. 17)",
-    "(Art. 18)", "(Art. 21)", "Zugangskennung", "72 Stunden", "7 Tagen", "30 Tage", "7 Tage nach dem Anlegen", "2 nächtliche Kopien",
+    "(Art. 18)", "(Art. 21)", "Zugangskennung", "72 Stunden", "30 Tage", "7 Tage nach dem Anlegen", "2 nächtliche Kopien",
     "Treuhandschlüssel", "Die Fakultät kann den Inhalt jedes Tresors entschlüsseln", "eigene Datenschutzerklärung", "höchstens eine Stunde",
     "kein Protokoll", "1 Jahr", "keine Pflicht",
     "Passwortprüfung: Schutz Ihrer Daten", "Cloudflare, Inc. (USA)", "EU-US Data Privacy Framework", "Art. 45 DSGVO", "Datenübertragbarkeit (Art. 20",
@@ -30,8 +30,8 @@ DE_FACTS = [
 EN_FACTS = [
     "Otto-Friedrich-Universität Bamberg, represented by its President", "Kapuzinerstraße 16, 96047 Bamberg", "+49 951 863-1001",
     "An der Weberei 5, 96047 Bamberg", "dh.psi@uni-bamberg.de", "datenschutzbeauftragter@uni-bamberg.de", "+49 951 863-1030",
-    "BayLfD", "poststelle@datenschutz-bayern.de", "+49 89 212672-0", "Art. 6(1)(e) and (3) GDPR", "Art. 4(1) BayDSG", "Art. 6(1)(a) GDPR",
-    "api.pwnedpasswords.com", "Troy Hunt", "Cloudflare", "SHA-1", "USA", "Art. 11 GDPR", "Art. 15 GDPR", "72 hours", "7 days", "30 days",
+    "BayLfD", "poststelle@datenschutz-bayern.de", "+49 89 212672-0", "Art. 6(1)(e) and (3) GDPR", "Art. 4(1) BayDSG",
+    "api.pwnedpasswords.com", "Troy Hunt", "Cloudflare", "SHA-1", "USA", "Art. 11 GDPR", "Art. 15 GDPR", "72 hours", "30 days",
     "2 nightly copies", "escrow key", "The faculty can decrypt the content of every vault", "their own privacy notice", "at most one hour",
     "no log", "1 year", "under no obligation",
     "Password check: protecting your data", "Cloudflare, Inc. (USA)", "EU-US Data Privacy Framework", "Art. 45 GDPR", "data portability (Art. 20",
@@ -49,7 +49,7 @@ class PrivacySandboxSection(DashCase):
     def test_german(self):
         t = self.text("de")
         for needle in ("10. Testumgebung (Sandbox)", "ohne Beitrittscode einen Tresor anlegen", "Speichern Sie dort keine echten Daten",
-                       "jede Nacht gelöscht, gegen 04:10 Uhr (UTC)", "kein Wiederherstellungsverfahren", "keine Kontakt-E-Mail-Adresse",
+                       "jede Nacht gelöscht, gegen 04:10 Uhr (UTC)", "kein Wiederherstellungsverfahren",
                        "Wiederherstellungsschlüssel der Fakultät (Abschnitt 4) auch Tresore der Testumgebung",
                        "keinen eigenen Schlüsselsatz", "IPv6-/56-Präfix", "höchstens 2 Stunden, nicht gespeichert",
                        "ohne IP-Adressen protokolliert"):
@@ -59,7 +59,7 @@ class PrivacySandboxSection(DashCase):
     def test_english(self):
         t = self.text("en")
         for needle in ("10. The sandbox", "without a join code", "Do not store real data there", "around 04:10 (UTC)",
-                       "no recovery procedure and no contact e-mail address", "also opens sandbox vaults",
+                       "no recovery procedure in the sandbox", "also opens sandbox vaults",
                        "no separate key set", "IPv6 /56 prefix", "for at most 2 hours, not stored",
                        "logged without IP addresses"):
             self.assertIn(needle, t, needle)
@@ -93,6 +93,20 @@ class Privacy(DashCase):
         self.assertNotIn("Datenschutzhinweise", r.text)
         # the switch keeps the page and flips the language
         self.assertIn('href="/datastore/privacy?lang=de"', r.text)
+
+    def test_breach_check_through_the_faculty_server_and_nothing_conditional(self):
+        de = html.unescape(re.sub(r"<[^>]+>", "", self.browser().get("/privacy?lang=de").text))
+        en = html.unescape(re.sub(r"<[^>]+>", "", self.browser().get("/privacy?lang=en").text))
+        for needle in ("ersten 5 Zeichen einer Prüfsumme", "an den Server der Fakultät", "weder Ihre Passphrase noch Ihre IP-Adresse", "bis zu 24 Stunden"):
+            self.assertIn(needle, de, needle)
+        for needle in ("first 5 characters of a checksum", "to the faculty's server", "neither your passphrase nor your IP address", "up to 24 hours"):
+            self.assertIn(needle, en, needle)
+        for text in (de, en):
+            for gone in ("Have I Been Pwned", "pro App abgeschaltet", "switched off per app", "Kontakt-E-Mail (optional)", "Contact e-mail (optional)",
+                         "wds_expert", "über die Kontakt-E-Mail", "via the contact", "Wiederherstellungscode", "recovery code"):
+                self.assertNotIn(gone, text, gone)
+        self.assertIn("Notfallcode", de)
+        self.assertIn("emergency code", en)
 
     def test_page_covers_both_groups_and_the_developer_section(self):
         text = re.sub(r"<[^>]+>", "", self.browser().get("/privacy").text)
@@ -225,11 +239,11 @@ class Language(DashCase):
         for key in used:
             if not key.endswith("_"):  # "enroll_" + name and similar families are checked below
                 self.assertIn(key, TEXTS, key)
-        families = {"enroll_": ["join_code", "open", "closed"], "escrow_": ["current", "spare", "other"],
+        families = {"escrow_": ["current", "spare", "other"],
                     "lim_": ["max_value_bytes", "vault_bytes", "scope_bytes", "max_vaults", "history_versions"],
-                    "notice_": ["created", "saved", "limits", "code_rotated", "admin_added", "admin_removed", "vault_deleted",
-                                "suspended", "resumed", "blocked", "unblocked", "locked"],
-                    "role_": ["creator", "admin"], "status_suspended_": ["operator", "admin"],
+                    "notice_": ["created", "saved", "code_rotated", "admin_added", "admin_removed", "vault_deleted",
+                                "suspended", "resumed", "blocked", "unblocked"],
+                    "role_": ["creator", "admin"],
                     "login_failed_": ["unreadable", "wrong_browser", "expired", "replayed", "no_username"],
                     "login_denied_": ["blocked", "not_allowed"]}
         for prefix, names in families.items():
@@ -283,6 +297,18 @@ backup_retention_en = Retention 14 days.
         self.assertEqual((cfg.session_idle, cfg.session_absolute), (600, 7200))
         self.assertEqual((cfg.privacy_updated, cfg.backup_retention_de, cfg.backup_retention_en),
                          ("Stand X", "Aufbewahrung 14 Tage.", "Retention 14 days."))
+
+    def test_breach_check_settings(self):
+        d = load_config(None)
+        self.assertEqual((d.pwned_url, d.rate_pwned, d.rate_pwned_window), ("https://api.pwnedpasswords.com/range/", 120, 60))
+        c = self.load("[server]\npwned_url = http://127.0.0.1:9/range\n[ratelimit]\npwned = 5\npwned_window = 10\n")
+        self.assertEqual((c.pwned_url, c.rate_pwned, c.rate_pwned_window), ("http://127.0.0.1:9/range/", 5, 10))
+        self.assertEqual(self.load("[server]\npwned_url =\n").pwned_url, "")          # switched off
+        from .helpers import escrow_sets
+        bad = self.load("[server]\npwned_url = ftp://x/\n")
+        bad.escrow = escrow_sets()
+        with self.assertRaises(ValueError):
+            bad.validate()
 
     def test_dev_login_needs_an_explicit_true(self):
         for value, expected in (("false", False), ("", False), ("no", False), ("yes", True), ("1", True), ("TRUE", True)):

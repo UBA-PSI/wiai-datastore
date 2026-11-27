@@ -5,7 +5,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { startMock } from '../lib/wds-mock.mjs';
 import { core, hashwasm, tmpDir, run, makeEscrowFiles, writeToken } from './helpers.mjs';
 
-let mock, keys, dir, tokenFile, scope, base;
+let mock, keys, dir, tokenFile, scope, joinCode, base;
 const PASS = 'founder passphrase 7 horses purple';
 const RPASS = 'recovered owner passphrase 4 blue tractors';
 
@@ -13,7 +13,8 @@ before(async () => {
   dir = tmpDir();
   keys = makeEscrowFiles(dir);
   mock = await startMock({ escrow: { current: keys.current.pub, spare: keys.spare.pub } });
-  scope = (await mock.createScope('recover-test')).scope;
+  const made = await mock.createScope('recover-test');   // only the sandbox is open: the scope has a join code
+  scope = made.scope; joinCode = made.join_code;
   tokenFile = writeToken(dir, mock.operatorToken);
   base = mock.service.replace(/\/$/, '');
 });
@@ -37,7 +38,7 @@ function join0(d, f) { return d + '/' + f; }
 
 test('the complete recovery: start, status, waiting period, cancel, restart, complete; the recovered owner reads the data and the founder sees the notice', { timeout: 240000 }, async () => {
   const founder = client();
-  const v = await founder.createVault({ passphrase: PASS });
+  const v = await founder.createVault({ passphrase: PASS, joinCode });
   await founder.put('note', { text: 'the founder wrote this', n: 1 });
   await founder.put('files/a', { x: [1, 2, 3] });
   const vault = v.vaultId, display = v.recoveryCode.display;
@@ -46,35 +47,37 @@ test('the complete recovery: start, status, waiting period, cancel, restart, com
   let st = JSON.parse((await recover(['status', vault, '--json'])).stdout);
   assert.equal(st.vault, vault);
   assert.equal(st.recovery, null);
-  assert.equal(st.has_recovery_contact, false);
+  assert.equal('has_recovery_contact' in st, false);   // the optional contact e-mail is gone
 
-  // a wrong recovery code is refused (and counted by the server), a malformed one never leaves the tool
+  // a wrong emergency code is refused (and counted by the server), a malformed one never leaves the tool
   const other = await core.internals.makeRecoveryCode();
   const wrong = await recover(['start', vault, other.display]);
   assert.equal(wrong.code, 1);
   assert.match(wrong.stderr, /recovery_code_invalid/);
   const malformed = await recover(['start', vault, 'ABCD-EFGH']);
   assert.equal(malformed.code, 2);
-  assert.match(malformed.stderr, /not a recovery code/);
-  // --contact needs a recovery contact
-  assert.match((await recover(['start', vault, '--contact'])).stderr, /no_recovery_contact/);
+  assert.match(malformed.stderr, /not an emergency code/);
+  // the code is the only way: there is no code-less start
+  const contact = await recover(['start', vault, '--contact'], { input: '' });
+  assert.equal(contact.code, 2);
+  assert.match(contact.stderr, /needs the emergency code/);
 
   // start with the code as the user reads it from the access sheet (groups, lower case)
   const started = await recover(['start', vault, display.toLowerCase(), '--json']);
   assert.equal(started.code, 0, started.stderr);
   const s = JSON.parse(started.stdout);
-  assert.equal(s.method, 'code');
+  assert.equal('method' in s, false);
   assert.ok(s.ready_at - s.requested === 72 * 3600);
   st = JSON.parse((await recover(['status', vault, '--json'])).stdout);
-  assert.equal(st.recovery.method, 'code');
+  assert.deepEqual(Object.keys(st.recovery).sort(), ['ready_at', 'requested']);
   assert.equal(st.ready, false);
   assert.ok(st.seconds_left > 71 * 3600);
-  assert.match((await recover(['status', vault])).stdout, /pending, method code/);
+  assert.match((await recover(['status', vault])).stdout, /recovery: pending, requested .*ready at/);
 
   // the founder sees the request when unlocking
   const f1 = client();
   const seen = await f1.unlock({ accessId: v.accessId, passphrase: PASS });
-  assert.equal(seen.recovery.method, 'code');
+  assert.equal(seen.recovery.ready_at - seen.recovery.requested, 72 * 3600);
 
   // too early: the tool says so (exit 2) and sends nothing
   const early = await recover(['complete', vault, '--escrow-key', keys.current.file, '--yes']);
@@ -171,17 +174,17 @@ test('the operator token goes only to https addresses (or localhost)', async () 
   for (const ok of ['https://wiai.uni-bamberg.de/datastore', 'http://localhost:8000', 'http://127.0.0.1:1', 'http://[::1]:8000/datastore']) assert.doesNotThrow(() => checkBase(ok), ok);
 });
 
-test('the recovery code is read from stdin or a prompt, not from the argument list', { timeout: 120000 }, async () => {
+test('the emergency code is read from stdin or a prompt, not from the argument list', { timeout: 120000 }, async () => {
   const founder = client();
-  const v = await founder.createVault({ passphrase: PASS + ' stdin' });
+  const v = await founder.createVault({ passphrase: PASS + ' stdin', joinCode });
   const display = v.recoveryCode.display;
   const empty = await recover(['start', v.vaultId], { input: '' });
   assert.equal(empty.code, 2);
-  assert.match(empty.stderr, /needs the recovery code/);
+  assert.match(empty.stderr, /needs the emergency code/);
   assert.doesNotMatch(empty.stderr, /visible to other processes/);
   const viaStdin = await recover(['start', v.vaultId, '-', '--json'], { input: display + '\n' });
   assert.equal(viaStdin.code, 0, viaStdin.stderr);
-  assert.equal(JSON.parse(viaStdin.stdout).method, 'code');
+  assert.equal(JSON.parse(viaStdin.stdout).ready_at - JSON.parse(viaStdin.stdout).requested, 72 * 3600);
   assert.doesNotMatch(viaStdin.stderr, /visible to other processes/);
   assert.equal((await recover(['cancel', v.vaultId])).code, 0);
   // still possible on the command line, with a warning
@@ -191,14 +194,15 @@ test('the recovery code is read from stdin or a prompt, not from the argument li
   assert.equal((await recover(['cancel', v.vaultId])).code, 0);
 });
 
-test('recovery by contact: seven days, and the tool needs the recovery contact on the vault', { timeout: 120000 }, async () => {
+test('a second start while one is pending is refused by the server; the server has no recovery contact and no code-less path', { timeout: 120000 }, async () => {
   const founder = client();
-  const v = await founder.createVault({ passphrase: PASS + ' contact', recoveryContact: 'founder@example.org' });
-  const started = await recover(['start', v.vaultId, '--contact', '--json']);
-  assert.equal(started.code, 0, started.stderr);
-  const s = JSON.parse(started.stdout);
-  assert.equal(s.method, 'contact');
-  assert.equal(s.ready_at - s.requested, 7 * 86400);
-  assert.equal((await recover(['start', v.vaultId, '--contact'])).code, 1); // already pending
+  const v = await founder.createVault({ passphrase: PASS + ' pending', joinCode });
+  assert.equal((await recover(['start', v.vaultId, v.recoveryCode.display])).code, 0);
+  const again = await recover(['start', v.vaultId, v.recoveryCode.display]);
+  assert.equal(again.code, 1);
+  assert.match(again.stderr, /recovery_pending/);
+  // the server itself refuses a start without the code, and a vault with a contact e-mail
+  const res = await fetch(base + '/api/v1/admin/vaults/' + v.vaultId + '/recovery', { method: 'POST', headers: { Authorization: 'Bearer ' + mock.operatorToken, 'Content-Type': 'application/json' }, body: JSON.stringify({ contact: true }) });
+  assert.equal(res.status, 400);
   assert.equal((await recover(['cancel', v.vaultId])).code, 0);
 });

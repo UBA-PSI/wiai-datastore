@@ -48,7 +48,7 @@ def _get_slot(svc, auth):
                 r = conn.execute("SELECT * FROM recoveries WHERE vault_id=? AND state='pending' ORDER BY id DESC LIMIT 1",
                                  (auth.vault_id,)).fetchone()
                 if r:
-                    recovery = {"method": r["method"], "requested": r["requested"], "ready_at": r["ready_at"]}
+                    recovery = {"requested": r["requested"], "ready_at": r["ready_at"]}
     return {
         "access_id": s["access_id"], "slot": s["slot_id"], "vault": s["vault_id"], "scope": v["scope_id"],
         "kind": s["kind"], "role": s["role"], "sv": s["sv"], "kdf": json.loads(s["kdf"]), "wrapped": s["wrapped"],
@@ -131,35 +131,9 @@ async def redeem(request):
                                        body["renewal"]))
 
 
-def _renewal(svc, auth, expected_sv, renewal, wrapped):
-    with svc.db.connection() as conn:
-        with transaction(conn):
-            reverify(conn, auth, allow_unredeemed=True)
-            row = conn.execute("SELECT * FROM slots WHERE access_id=?", (auth.access_id,)).fetchone()
-            if row["kind"] != "passphrase":
-                raise ApiError(409, "not_redeemed", "Invite slots must be redeemed first.")
-            _check_sv(row, expected_sv)
-            vault = conn.execute("SELECT roster_version FROM vaults WHERE vault_id=?", (auth.vault_id,)).fetchone()
-            text = parse_renewal(renewal, scope=auth.scope_id, vault=auth.vault_id, slot_id=row["slot_id"],
-                                 head_version=vault["roster_version"])
-            conn.execute("UPDATE slots SET renewal=?, wrapped=?, sv=sv+1 WHERE access_id=?", (text, wrapped, auth.access_id))
-            return {"sv": row["sv"] + 1}
-
-
-async def post_renewal(request):
-    svc = svc_of(request)
-    auth = await authenticate(request, access_id=request.path_params["access_id"], allow_unredeemed=True)
-    expected = parse_if_match_version(request)
-    body = await read_json(request)
-    expect_keys(body, {"renewal", "wrapped"})
-    decode_envelope(body["wrapped"], TYPE_SLOT)
-    return json_response(await svc.run(_renewal, svc, auth, expected, body["renewal"], body["wrapped"]))
-
-
 def routes():
     s = PREFIX + "/slots/{access_id}"
     return [
         endpoint(s, GET=get_slot, PUT=put_slot),
         endpoint(s + "/redeem", POST=redeem),
-        endpoint(s + "/renewal", POST=post_renewal),
     ]

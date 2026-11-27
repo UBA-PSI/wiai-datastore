@@ -171,7 +171,7 @@ test('renewal statement verifies against the invite slot key', async () => {
   assert.ok(!(await I.verifyRenewal({ body: forged, sig: r.sig }, entry, head, SCOPE)));
 });
 
-test('codes and key file', async () => {
+test('codes', async () => {
   const c = V.codes;
   const inv = await core.parseInviteCode(c.invite.display);
   assert.equal(hex(inv.idBytes), c.invite.access_id_hex); assert.equal(hex(inv.secret), c.invite.secret_hex);
@@ -183,11 +183,5 @@ test('codes and key file', async () => {
   assert.equal(parsed.hash, c.recovery.recovery_hash);
   assert.equal(core.classifyCode(c.invite.display), 'invite');
   assert.equal(core.classifyCode(c.recovery.display), 'recovery');
-  assert.equal(core.classifyCode(c.key_file.access_id), 'access_id');
-  const kf = core.makeKeyFile({ scope: c.key_file.scope, accessId: c.key_file.access_id, vaultId: c.key_file.vault });
-  assert.equal(kf.text, c.key_file.text); assert.equal(kf.filename, c.key_file.filename);
-  const back = await core.parseKeyFile(kf.text, { scope: c.key_file.scope });
-  assert.equal(back.accessId, c.key_file.access_id); assert.equal(back.vaultId, c.key_file.vault);
-  await rejects(core.parseKeyFile(kf.text, { scope: 'other-aaaaaa' }), core.errors.UsageError);
-  await rejects(core.parseKeyFile(kf.text, { scope: c.key_file.scope, service: 'https://evil.example/datastore/' }), core.errors.UsageError);
+  assert.equal(core.classifyCode('000G40R40M30E209185Z'), 'access_id');
 });

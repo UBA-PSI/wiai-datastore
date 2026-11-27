@@ -126,19 +126,6 @@ test('local state MAC: any change or a different key invalidates it', async () =
   assert.equal(await I.openState(k, '{"mac":"x","state":{}}'), null);
 });
 
-test('key file: strict checks', async () => {
-  const kf = core.makeKeyFile({ scope: 'notenrechner-k7m2a9', accessId: '000G40R40M30E209185Z', vaultId: '9FYJS2VF3VP7MAQYPJ5S6KQ4P9' });
-  assert.equal(kf.filename, 'notenrechner-k7m2a9-000G.wds.json');
-  const o = { scope: 'notenrechner-k7m2a9' };
-  assert.equal((await core.parseKeyFile(kf.text, o)).accessId, '000G40R40M30E209185Z');
-  const doc = JSON.parse(kf.text);
-  for (const mut of [{ type: 'x' }, { v: 2 }, { access_id: '000G40R40M30E209185Y' }, { vault: 'short' }, { scope: 'other-aaaaaa' }]) {
-    await rejects(core.parseKeyFile(JSON.stringify(Object.assign({}, doc, mut)), o), core.errors.WDSError);
-  }
-  assert.ok(await core.parseKeyFile(JSON.stringify(Object.assign({}, doc, { future: true })), o)); // unknown keys are ignored
-  await rejects(core.parseKeyFile('{', o), core.errors.UsageError);
-});
-
 test('UMD: loads as a classic script (window.WDSCore) without require/module', () => {
   const src = readFileSync(new URL('../src/wds-core.js', import.meta.url), 'utf8');
   const ctx = { crypto: globalThis.crypto, TextEncoder, TextDecoder, console };

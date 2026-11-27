@@ -115,22 +115,11 @@ class SlotEndpoints(ServerTestCase):
         # a wrong token on an expired invite is just unauthorized
         self.assertError(self.c.get(f"{API}/slots/{m.access_id}", Vault.bearer(m.access_id, os.urandom(32))), 401, "unauthorized")
 
-    def test_renewal_endpoint(self):
+    def test_the_manual_renewal_endpoint_is_gone(self):
         m = self.v.invite()
         m.redeem()
-        h = {**m.auth, "If-Match": '"2"'}
         body = {"renewal": m.renewal(), "wrapped": b64(envelope(2, 0, 300))}
-        self.assertError(self.c.post_json(f"{API}/slots/{m.access_id}/renewal", body, m.auth), 428, "precondition_required")
-        r = self.c.post_json(f"{API}/slots/{m.access_id}/renewal", body, {**m.auth, "If-Match": '"1"'})
-        self.assertEqual((r.status, r.json()["current"]), (412, 2))
-        r = self.c.post_json(f"{API}/slots/{m.access_id}/renewal", body, h)
-        self.assertEqual(r.json(), {"sv": 3})
-
-    def test_renewal_for_unredeemed_invite_refused(self):
-        m = self.v.invite()
-        r = self.c.post_json(f"{API}/slots/{m.access_id}/renewal", {"renewal": m.renewal(), "wrapped": b64(envelope(2, 0, 200))},
-                             {**m.auth, "If-Match": '"1"'})
-        self.assertError(r, 409, "not_redeemed")
+        self.assertIn(self.c.post_json(f"{API}/slots/{m.access_id}/renewal", body, {**m.auth, "If-Match": '"2"'}).status, (404, 405))
 
     def test_revoked_access_answers_401_revoked(self):
         m = self.v.invite()

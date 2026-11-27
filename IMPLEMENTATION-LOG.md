@@ -1042,3 +1042,81 @@ The first pass of the client suite stopped at the flaky invite-code test (fixed 
 Library SRI: see `client/dist/hashes.json` (`tools/test-apps/{good,bad}` and `examples/zeit-notizen/index.html` carry it).
 
 Nothing committed. Untracked: `tools/lib/report.mjs`, `tools/test/dialog-internals.test.mjs`.
+
+
+## Round J: the owner decisions of round I applied
+
+### Input
+
+The owner answered the open items of round I: 1 yes, 2 route through our own server, 3 yes, 4 yes, 5 the counter-position (the recommendation to keep only the join code), 6 to 9 yes. Order: commit, apply the simplifications, have the whole result reviewed again, fix, roll out. A reviewer then confirmed that the construct holds (no security regression; every suite green) and found three major text errors, which are fixed below.
+
+### Decisions as applied
+
+- **D1 No key file.** Gone from the access sheet, the vault dialog, the unlock dialog (drop zone, file chooser, `err.keyfile.*`) and `/export/`. The unlock dialog still remembers the last access ID per scope on the device.
+- **D2 Breach check through our server.** `GET <base>/api/v1/pwned/<5 uppercase hex>` (`wds_server/pwned.py`): the browser sends the first five characters of the SHA-1 of the passphrase; the server asks `api.pwnedpasswords.com/range/<prefix>` with `Add-Padding` on its behalf (fixed URL from `pwned_url` in the configuration, so no open proxy), checks every answer line, caps it at 2 MB, 4 s per socket operation and, since the review, 8 s in total. LRU cache of 500 entries for 24 h; at most 8 upstream requests at once; after a failure 503 with `Retry-After: 60` and no new attempt for a minute; a per-client rate limit; no access log and no prefix in any log line. The library calls it on the datastore origin (so `connect-src` is the datastore only) and falls back to its strict local estimator on a 503 or any error. Gone: the dashboard toggle, the scope setting, the conditional CSP host, the scope and static checks about the HIBP host, every conditional privacy sentence. The server works with outbound access blocked (tests with a mock upstream, the 503 path, a refusing and a closed port, the client fallback).
+- **D3 Prompt.** The dashboard's "Text für Claude" is one nearly constant English text and also the CLAUDE.md/AGENTS.md section (scope ID, read `<base>/llms.txt` and follow its rules, the privacy sentence, the join-code rule, run wds-verify against the sandbox). The German variant is gone; the dashboard explains the purpose in German.
+- **D4 Enrollment.** Only the join code. The modes open and nobody are gone (server, dashboard, texts, docs, tests). The sandbox stays open (derived from the scope, not stored).
+- **D5 Recovery.** No contact e-mail and no code-less 7-day path. The emergency code with the 72 h wait is the only way back.
+- **D6 No manual key renewal.** The `/renewal` endpoint and the button are gone; the renewal at the redemption of an invitation stays.
+- **D7 Conflict dialog.** "Keep mine" and "Keep theirs" and one line that the other version stays in the history; "Download both" is gone.
+- **D8 Wording.** "Notfallcode" / "emergency code" wherever a person sees it; "Wiederherstellungsschlüssel" only in the official privacy sentence; one escrow sentence (`escrow.text`) in the create dialog, the access sheet and the vault dialog. Internal identifiers keep their names.
+- **D9 Dashboard.** No admin self-pause (only the operator pauses), no slug field, no `wds_expert` cookie and no `POST /prefs/expert`, no vault-table columns "re-encryption pending" and "people with access"; the limits are shown read-only (the operator changes them with `cli limits` or `PATCH /admin/scopes`).
+
+### Migration 5 (what the operator must know)
+
+`db.py` migration 5 drops `scopes.enrollment`, `scopes.hibp`, `scopes.suspended_by`, `vaults.recovery_contact` and `recoveries.method`, and closes pending contact-based recoveries (the code-less path) as `cancelled`. It runs at the next start of the server (`PRAGMA user_version` goes to 5); nothing else is needed. Production has only test vaults. The configuration gets `pwned_url` (default the Pwned Passwords range URL; empty switches the breach check off, every answer is 503, the library then checks locally) and `rate_pwned`. The server needs outbound HTTPS to `api.pwnedpasswords.com:443` for the check, but works without it.
+
+### For the data protection officer (DPO): changed text
+
+The privacy pages (German and English; `server/wds_server/privacy.py`, sections 3, 4, 6 and 9) and `users.de.md`/`users.en.md` have a new single wording for the breach check: the browser sends the first five characters of a checksum of the passphrase to the faculty server, which asks Pwned Passwords (USA) on the person's behalf; the service sees neither the passphrase nor the person's IP address. Please check:
+
+1. Section 6: the recipient is now the server-side request to Cloudflare/HIBP without the user's IP address and without the prefix next to any address in a log. Is the third-country paragraph (EU-US Data Privacy Framework, Art. 45) still needed, and is the wording on the 24 h cache right?
+2. Section 4 and section 9: the only recovery path is the emergency code with the 72 h wait; whoever loses passphrase and emergency code loses the data (the review corrected an old sentence that promised help from the operator).
+3. Section 9: the contact e-mail address of the app (dashboard) stays; the optional recovery contact of a vault is gone, so the server no longer holds a personal e-mail address of end users.
+4. `[privacy] updated` still says "draft, DPO review".
+
+### Fixed in the review of the round
+
+- The privacy page said that whoever loses access ID and emergency code gets the data back with the operator's help (a leftover of the code-less path); integration.md section 8 promised a new owner when the founder lost passphrase and emergency code. Both now say: with the emergency code and the 72 h procedure; without it the data is lost. A docs test checks the guide.
+- integration.md, `get` row: the one exception to "do not `get` a record that a form shows" (the reload of an open item named with `remote: true` when nothing was typed, section 12).
+- Dashboard defaults text: "Neue Apps: Tresore werden mit dem Beitrittscode angelegt" (no choice any more) and "Höchstens N Tresore (eingeladene Personen brauchen keinen eigenen)".
+- `share.recovered.text` points to the vault dialog (Vault / Tresor), where the button is.
+- users.de.md and users.en.md make the same claim about the history ("Apps können einen Verlauf früherer Versionen zeigen" / "Apps may show a history of earlier versions").
+- PLAN.md and operator.md: limits are read-only on the dashboard; the Pwned Passwords fact is a server-side fact; the text for Claude has no breach-check sentence; the script tag is in integration.md.
+- pwned.py: a total time limit of 8 s for an upstream answer (a slow sender held a slot and a thread longer than the library waits), with a test.
+
+### Rejected or not done
+
+- Nothing of the reviewer's list was rejected. The size targets of round I (wds-ui.js 3000, tools/lib 1700) are still not claimed; the decisions of this round removed the key file, the breach-check branches, the recovery contact, the manual renewal and "Download both" from wds-ui.js, but the line count was not re-measured as a goal.
+
+### Operator notes for the rollout
+
+1. Schema: the new server runs migration 5 at its first start (`PRAGMA user_version` 4 to 5). It drops `scopes.enrollment`, `scopes.hibp`, `scopes.suspended_by`, `vaults.recovery_contact` and `recoveries.method` and cancels pending code-less recoveries. Nothing to run by hand; an older server refuses the new schema, so there is no rollback without the database backup taken before the deployment.
+2. Every existing scope now enrolls by join code only (the sandbox stays open). Scopes that were open or nobody need a join code from their admin (dashboard) or the operator (`cli` / `PATCH /admin/scopes`) before new people can create vaults.
+3. Outbound HTTPS from the VM to `api.pwnedpasswords.com:443` must be allowed (firewall, proxy). Without it the endpoint answers 503 and the library checks passphrases locally only; nothing else breaks. `pwned_url` in `[server]` (empty = off) and `pwned`/`pwned_window` in `[ratelimit]` are new, optional settings; the defaults fit.
+4. The service runs with the access log off; check that the reverse proxy does not log `/api/v1/pwned/` paths next to client addresses either.
+5. Library: rebuilt, not frozen; deploy `client/dist` together with the server so that the served SRI matches `hashes.json`.
+
+### Test counts (final sequential run)
+
+| Suite | Result |
+|---|---|
+| `scripts/test-server.sh` | 512 tests OK |
+| `scripts/test-client.sh` | 129 node tests OK, 81 Playwright cases passed (Chromium) |
+| `scripts/test-tools.sh` | 105 passed |
+| `scripts/test-integration.sh` | 161 passed, 4 skipped (Chromium, Firefox, WebKit) |
+| `scripts/test-examples.sh` | 29 passed (Chromium) |
+| `scripts/check-public.sh` | clean (167 files) |
+| `wds-verify examples/zeit-notizen/index.html --target mock --hashes client/dist/hashes.json` | 32 passed, 0 failed, 0 warnings |
+
+The library was rebuilt (not frozen) after the last text fix; SRI `sha384-LTA6dE8HFduJSNkQxykdLMoy9ny4WPHx+MoS3SlKGuihQS2LSyYzM+96F4Sswe2e` (client/dist, tools/test-apps/{good,bad}, examples/zeit-notizen/index.html).
+
+### Closing step
+
+The whole-construct review (Opus) found that the result holds: no security regression, every suite green; its three major findings (text errors on recovery) and eight minor ones were all applied (above). PLAN.md was brought up to the state after round J (the breach-check endpoint path and its 503 fallback in §3, `pwned_url` and the `pwned` rate limit in the configuration, migration 5 in the table list, no key-file case in the dialog stress test, the open points). All suites were run once more, one after the other; the counts above are from that run and did not change.
+
+### Next
+
+A fifth clean-room trial against the API of round J (the sandbox, `llms.txt` and the guides only), then freeze library version 1.0.0 (`node client/build.mjs --freeze`) before the first app embeds its tag.
+
+Nothing committed or deployed.

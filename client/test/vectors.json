@@ -599,14 +599,6 @@
       "canonical": "M2GT58X4MPKAFA59NANTSBDENYRE",
       "display": "M2GT-58X4-MPKA-FA59-NANT-SBDE-NYRE",
       "recovery_hash": "67mkxucFMCkVR0bNZTgZy386Nsc9Vh4BxhnOfhxwr9o"
-    },
-    "key_file": {
-      "scope": "notenrechner-k7m2a9",
-      "access_id": "000G40R40M30E209185Z",
-      "vault": "N8X8W9E2K2JPP7X3NJ20PV3DZN",
-      "service": "https://wiai.uni-bamberg.de/datastore/",
-      "text": "{\"access_id\":\"000G40R40M30E209185Z\",\"scope\":\"notenrechner-k7m2a9\",\"service\":\"https://wiai.uni-bamberg.de/datastore/\",\"type\":\"wds-keyfile\",\"v\":1,\"vault\":\"N8X8W9E2K2JPP7X3NJ20PV3DZN\"}",
-      "filename": "notenrechner-k7m2a9-000G.wds.json"
     }
   }
 }

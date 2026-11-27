@@ -168,6 +168,18 @@ MIGRATIONS[4] = [
     "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
 ]
 
+MIGRATIONS[5] = [
+    # Round J (owner decisions): only the join code enrols (the sandbox is open by its configuration), no breach-check setting
+    # (the server proxies the check for everybody), only operators pause a scope, no recovery contact, one recovery path.
+    # A pending recovery by contact (7 days) cannot be completed any more: it ends as cancelled.
+    "UPDATE recoveries SET state='cancelled', finished=CAST(strftime('%s','now') AS INTEGER) WHERE state='pending' AND method='contact'",
+    "ALTER TABLE scopes DROP COLUMN enrollment",
+    "ALTER TABLE scopes DROP COLUMN hibp",
+    "ALTER TABLE scopes DROP COLUMN suspended_by",
+    "ALTER TABLE vaults DROP COLUMN recovery_contact",
+    "ALTER TABLE recoveries DROP COLUMN method",
+]
+
 SCHEMA_VERSION = max(MIGRATIONS)
 
 

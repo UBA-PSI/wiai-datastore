@@ -319,6 +319,35 @@ class RetiredAccessIds(ServerTestCase):
             db.close()
 
 
+class MigrationFive(unittest.TestCase):
+    """Round J: enrollment, hibp, suspended_by, recovery_contact and recoveries.method are gone; a pending contact recovery ends."""
+
+    def test_columns_are_dropped_and_pending_contact_recoveries_cancelled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "old.db")
+            conn = sqlite3.connect(path, isolation_level=None)
+            for version in range(1, 5):
+                for statement in MIGRATIONS[version]:
+                    conn.execute(statement)
+                conn.execute(f"PRAGMA user_version = {version}")
+            conn.execute("INSERT INTO scopes (scope_id, name, enrollment, join_code, hibp, created, suspended_by)"
+                         " VALUES ('s-aaaaaa','S','join_code','ABCD2345',0,1,'admin')")
+            conn.execute("INSERT INTO vaults (vault_id, scope_id, created, epoch, roster_version, head_hash, escrow_slot, recovery_hash,"
+                         " recovery_contact) VALUES ('v1','s-aaaaaa',1,1,1,'h','e','r','a@b.de')")
+            conn.execute("INSERT INTO recoveries (vault_id, method, requested, ready_at, state) VALUES ('v1','contact',1,2,'pending')")
+            conn.execute("INSERT INTO recoveries (vault_id, method, requested, ready_at, state) VALUES ('v1','code',1,2,'pending')")
+            conn.close()
+            db = Database(path)
+            with db.connection() as c:
+                names = lambda table: [r[1] for r in c.execute(f"PRAGMA table_info({table})")]
+                for table, gone in (("scopes", ("enrollment", "hibp", "suspended_by")), ("vaults", ("recovery_contact",)), ("recoveries", ("method",))):
+                    for column in gone:
+                        self.assertNotIn(column, names(table))
+                self.assertEqual(tuple(c.execute("SELECT scope_id, join_code FROM scopes").fetchone()), ("s-aaaaaa", "ABCD2345"))
+                self.assertEqual([r[0] for r in c.execute("SELECT state FROM recoveries ORDER BY id")], ["cancelled", "pending"])
+            db.close()
+
+
 class OperatorAudit(ServerTestCase):
     def setUp(self):
         super().setUp()
@@ -342,7 +371,7 @@ class OperatorAudit(ServerTestCase):
         self.assertError(self.c.post_json(self.url + "/recovery/complete", bad, self.env.op), 400, "invalid_roster")
         self.assertEqual(self.last()[1:], ("recovery_complete_failed", self.v.scope, self.v.vault, "invalid_roster"))
         # the recovery is still pending: a failed completion changed nothing but the audit
-        self.assertEqual(self.c.get(self.url, self.env.op).json()["recovery"]["method"], "code")
+        self.assertIsNotNone(self.c.get(self.url, self.env.op).json()["recovery"])
 
     def test_unknown_and_malformed_vaults_are_audited_without_scope(self):
         other = f"{API}/admin/vaults/{'A' * 26}"

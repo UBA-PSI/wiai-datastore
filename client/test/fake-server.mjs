@@ -46,7 +46,7 @@ export class FakeServer {
     const slug = o.slug || 'testapp';
     const id = slug + '-' + (o.suffix || 'k7m2a9');
     const limits = Object.assign({ history_versions: 10, max_value_bytes: 10485760, vault_bytes: 209715200, scope_bytes: 2147483648, max_vaults: 50 }, o.limits || {});
-    this.scopes.set(id, { id, name: o.name || 'Test', status: 'active', enrollment: o.enrollment || 'open', join_code: o.join_code || null, limits, sandbox: o.sandbox || null, hibp: o.hibp });
+    this.scopes.set(id, { id, name: o.name || 'Test', status: 'active', join_code: o.join_code || null, limits, sandbox: o.sandbox || null });
     return id;
   }
   scopeLimits(scope) {
@@ -142,7 +142,6 @@ export class FakeServer {
       if (method === 'PUT') return this.putSlot(headers, m[1], body);
     }
     if ((m = /^\/slots\/([^/]+)\/redeem$/.exec(path)) && method === 'POST') return this.redeem(headers, m[1], body);
-    if ((m = /^\/slots\/([^/]+)\/renewal$/.exec(path)) && method === 'POST') return this.renewal(headers, m[1], body);
     if ((m = /^\/vaults\/([^/]+)(\/.*)?$/.exec(path))) return this.vaultRoute(method, m[1], m[2] || '', q, headers, body);
     return fail(404, 'not_found');
   }
@@ -153,7 +152,7 @@ export class FakeServer {
     if (!s) fail(404, 'not_found');
     const esc = (e, status) => ({ id: e.id, e_pub: e.e_pub, s_pub: e.s_pub, status });
     return { json: {
-      scope: s.id, name: s.name, status: s.status, enrollment: s.enrollment, hibp: s.hibp === undefined ? true : s.hibp, read_only: false,
+      scope: s.id, name: s.name, status: s.status, read_only: false,
       limits: this.scopeLimits(s), kdf: { alg: 'argon2id', m: 65536, p: 1, t: 3, v: 19 },
       escrow: [esc(this.escrow.current, 'current'), esc(this.escrow.spare, 'spare')],
       library: { latest: '1.0.0', deprecated: [] }, privacy_url: this.service + 'privacy/',
@@ -184,8 +183,7 @@ export class FakeServer {
     const scope = this.scopes.get(scopeId);
     if (!scope) fail(404, 'not_found');
     if (scope.status !== 'active') fail(403, 'scope_suspended');
-    if (scope.enrollment === 'closed') fail(403, 'enrollment_closed');
-    if (scope.enrollment === 'join_code') {
+    if (scope.join_code) {   // a scope without a code is open (the sandbox, and most core tests)
       const norm = (req.join_code || '').toUpperCase().replace(/[ -]/g, '');
       if (norm !== scope.join_code) fail(403, 'join_code_invalid');
     }
@@ -245,13 +243,6 @@ export class FakeServer {
     slot.kdf = req.kdf; slot.tokenHash = req.token_hash; slot.wrapped = req.wrapped; slot.renewal = req.renewal;
     slot.redeemed = this.now(); slot.kind = 'passphrase'; slot.sv++;
     return { json: { sv: slot.sv } };
-  }
-  renewal(headers, accessId, body) {
-    const a = this.authenticate(headers, accessId); this.checkVaultAlive(a.vault);
-    this.checkIfMatch(headers, a.slot.sv, () => ({ current: a.slot.sv }));
-    const req = this.parseJson(body);
-    a.slot.renewal = req.renewal; a.slot.wrapped = req.wrapped; a.slot.sv++;
-    return { json: { sv: a.slot.sv } };
   }
 
   // ---- vault routes ----

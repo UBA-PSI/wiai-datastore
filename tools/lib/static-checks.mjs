@@ -11,7 +11,7 @@ export const DATASTORE_BASE = 'https://' + DATASTORE_HOST + '/datastore/';
 // verify-static.test.mjs compares the two, so they cannot drift apart. An app's CSP may be stricter, never broader; the only additions
 // that integration.md allows are inert ones (see INERT_EXTRA and imgHosts).
 export const CSP_TEMPLATE = "default-src 'none'; script-src 'unsafe-inline' 'wasm-unsafe-eval' https://wiai.uni-bamberg.de/datastore/client/; "
-  + "style-src 'unsafe-inline'; img-src data: blob:; connect-src https://wiai.uni-bamberg.de/datastore/api/ https://api.pwnedpasswords.com; "
+  + "style-src 'unsafe-inline'; img-src data: blob:; connect-src https://wiai.uni-bamberg.de/datastore/api/; "
   + "base-uri 'none'; form-action 'none'";
 // Directives that the policy has to carry and that may only be 'none' (a missing one leaves <base> and form targets open).
 const MUST_BE_NONE = ['base-uri', 'form-action'];
@@ -137,13 +137,6 @@ export function cspBroaderThan(policy, template) {
   return problems;
 }
 
-// Does the policy let the page connect to this origin? (the effective connect-src, with the fallback to default-src)
-export function connectAllows(cspText, origin) {
-  const list = effective(parseCsp(cspText || ''), 'connect-src');
-  if (list === null) return true;   // no restriction at all (another check fails for that)
-  return list.some((t) => t === origin || t === origin + '/' || (t.startsWith(origin) && t.endsWith('/')));
-}
-
 // ---- CSS that hides the library's dialogs and the sandbox label ----
 // Rules whose selector names the library's markup (the .wds- classes, [data-wds...] attributes) and whose declarations touch display,
 // visibility or opacity. A simple scan of the rule blocks, nested at-rules included; not a CSS parser.
@@ -225,21 +218,8 @@ const PRIVACY = [
   'Data is end-to-end encrypted; the faculty holds a recovery key for emergencies.',
   'Die Daten sind Ende-zu-Ende-verschlüsselt; die Fakultät verwahrt für Notfälle einen Wiederherstellungsschlüssel.',
 ];
-// The official sentence about the breach check of passphrases (a scope with the breach check on sends the browser to the Pwned Passwords service).
-export const BREACH_NOTE = [
-  'When you choose a passphrase, your browser checks it against known data breaches with the Pwned Passwords service (USA); the service receives your IP address and the first five characters of a checksum of the passphrase, never the passphrase itself.',
-  'Wenn Sie eine Passphrase wählen, prüft Ihr Browser sie beim Dienst Pwned Passwords (USA) auf bekannte Datenlecks; der Dienst erhält Ihre IP-Adresse und die ersten fünf Zeichen einer Prüfsumme der Passphrase, nie die Passphrase selbst.',
-];
 const ENTITIES = { auml: 'ä', ouml: 'ö', uuml: 'ü', Auml: 'Ä', Ouml: 'Ö', Uuml: 'Ü', szlig: 'ß', nbsp: ' ' };
 const flat = (s) => unentity(String(s)).replace(/&([A-Za-z]+);/g, (m, n) => ENTITIES[n] || m).replace(/&#(\d+);/g, (m, n) => String.fromCodePoint(Number(n))).replace(/\s+/g, ' ');
-
-// Does the page or the README carry the breach-check sentence word for word? (Naming the service is not enough: "we do not use Pwned Passwords" is no notice.)
-export function hasBreachNote(html, readme = '') {
-  const text = flat(html) + '\n' + flat(readme);
-  return BREACH_NOTE.some((s) => text.includes(s));
-}
-// Is the service named at all (a hint for the detail text)?
-export function mentionsBreachService(html, readme = '') { return /Pwned\s+Passwords/i.test(flat(html) + '\n' + flat(readme)); }
 
 // ---- the checks ----
 const NET_APIS = [
@@ -340,7 +320,7 @@ export function staticChecks(html, known, { readme = '' } = {}) {
       : refsDatastore ? 'The datastore host is named in the code, but no fetch, XMLHttpRequest, WebSocket, sendBeacon or EventSource is used.'
         : 'The code uses none of fetch, XMLHttpRequest, WebSocket, sendBeacon or EventSource, and has no form action to the datastore.');
   }
-  if (used.length && !refsDatastore) add('network-apis', 'warn', 'Network calls in the page', 'The code uses ' + used.join(', ') + '. The recommended CSP only lets the page reach the datastore API (through the library) and the password-breach check; everything else is blocked. The dynamic test shows what is sent.');
+  if (used.length && !refsDatastore) add('network-apis', 'warn', 'Network calls in the page', 'The code uses ' + used.join(', ') + '. The recommended CSP only lets the page reach the datastore API (through the library); everything else is blocked. The dynamic test shows what is sent.');
   if (otherForms.length) add('form-action', 'warn', 'Form actions', 'Forms with an action to another host: ' + otherForms.join(', ') + '.');
 
   // 5. what the page does with the library

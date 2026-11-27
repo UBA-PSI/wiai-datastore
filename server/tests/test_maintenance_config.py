@@ -182,15 +182,28 @@ class RealServer(unittest.TestCase):
             cfg = Path(d, "wds.ini")
             e, s = (b64u_encode(b"\x04" + bytes([i]) * 64) for i in (1, 2))
             e2, s2 = (b64u_encode(b"\x04" + bytes([i]) * 64) for i in (3, 4))
-            cfg.write_text(f"[server]\nread_only_threshold=1.0\n[escrow]\ncurrent_e_pub={e}\ncurrent_s_pub={s}\nspare_e_pub={e2}\nspare_s_pub={s2}\n"
+            cfg.write_text(f"[server]\nread_only_threshold=1.0\npwned_url=http://127.0.0.1:1/range\n[escrow]\ncurrent_e_pub={e}\ncurrent_s_pub={s}\nspare_e_pub={e2}\nspare_s_pub={s2}\n"
                            f"[operator]\ntoken_hashes={b64u_encode(sha256(b'wdsop.unused'))}\n")
             db = os.path.join(d, "t.db")
             env = {**os.environ, "PYTHONPATH": str(SERVER_DIR)}
             out = subprocess.run([sys.executable, "-m", "wds_server.cli", "create-scope", "--db", db, "--config", str(cfg),
-                                  "--slug", "cli-app", "--name", "CLI App", "--enrollment", "open"],
+                                  "--slug", "cli-app", "--name", "CLI App", "--join-code", "abcd-2345"],
                                  capture_output=True, text=True, env=env, cwd=d, check=True)
             scope = json.loads(out.stdout)
             self.assertRegex(scope["scope"], r"^cli-app-")
+            self.assertEqual((scope["join_code"], scope["enrollment"]), ("ABCD2345", "join_code"))
+            # the operator changes limits on the command line (the dashboard only shows them)
+            out = subprocess.run([sys.executable, "-m", "wds_server.cli", "limits", "--db", db, "--config", str(cfg), "--scope",
+                                  scope["scope"], "--limit", "max_vaults=7", "--limit", "history_versions=3"],
+                                 capture_output=True, text=True, env=env, cwd=d, check=True)
+            self.assertEqual((json.loads(out.stdout)["max_vaults"], json.loads(out.stdout)["history_versions"]), (7, 3))
+            out = subprocess.run([sys.executable, "-m", "wds_server.cli", "limits", "--db", db, "--config", str(cfg), "--scope",
+                                  scope["scope"], "--limit", "max_vaults=default"], capture_output=True, text=True, env=env, cwd=d, check=True)
+            self.assertEqual(json.loads(out.stdout)["max_vaults"], 50)
+            out = subprocess.run([sys.executable, "-m", "wds_server.cli", "limits", "--db", db, "--config", str(cfg), "--scope",
+                                  scope["scope"], "--limit", "max_vaults=99999"], capture_output=True, text=True, env=env, cwd=d)
+            self.assertEqual(out.returncode, 1)
+            self.assertIn("bad_request", out.stderr)
             token = subprocess.run([sys.executable, "-m", "wds_server.cli", "operator-token"], capture_output=True, text=True,
                                    env=env, cwd=d, check=True).stdout
             self.assertIn("wdsop.", token)
@@ -216,6 +229,15 @@ class RealServer(unittest.TestCase):
                 with urllib.request.urlopen(f"{base}/api/v1/scopes/{scope['scope']}") as r:
                     self.assertEqual(r.headers["Access-Control-Allow-Origin"], "*")
                     self.assertEqual(json.loads(r.read())["name"], "CLI App")
+                # the breach check with the service unreachable (outbound access blocked): a fast 503 for the library's fallback, the rest unharmed
+                try:
+                    urllib.request.urlopen(f"{base}/api/v1/pwned/21BD1", timeout=10)
+                    self.fail("expected a 503")
+                except urllib.error.HTTPError as err:
+                    self.assertEqual((err.code, json.loads(err.read())["error"], err.headers["Retry-After"]), (503, "pwned_unavailable", "60"))
+                    self.assertEqual(err.headers["Access-Control-Allow-Origin"], "*")
+                with urllib.request.urlopen(f"{base}/healthz") as r:
+                    self.assertEqual(r.status, 200)
                 req = urllib.request.Request(f"{base}/api/v1/vaults/x/roster", method="OPTIONS")
                 with urllib.request.urlopen(req) as r:
                     self.assertEqual(r.status, 204)

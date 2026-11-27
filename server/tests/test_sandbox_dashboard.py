@@ -18,157 +18,100 @@ def pre(page: str, ident: str) -> str:
 
 
 class PromptWithoutSandbox(DashCase):
+    """The dashboard's "Text für Claude" is one English text (prompt.py) that is also the CLAUDE.md / AGENTS.md section."""
+
     def page(self, b, scope):
         return b.get(f"/scopes/{scope}").text
 
-    def test_english_prompt_carries_the_settings(self):
+    def test_the_text_for_claude(self):
         a = self.staff(lang_header="en")
-        scope = self.make_scope(a, name="Demo")  # join code, breach check on
+        scope = self.make_scope(a, name="Demo")
         text = pre(self.page(a, scope), "prompt")
-        self.assertIn("I am building or porting a single-file web app that stores its data in the WIAI Datastore of the University of Bamberg.", text)
-        self.assertIn("Wherever the app describes its privacy, say exactly this sentence, in the language of the text (a longer text may follow it):", text)
-        self.assertIn("- English: Data is end-to-end encrypted; the faculty holds a recovery key for emergencies.", text)
-        self.assertIn("- German: Die Daten sind Ende-zu-Ende-verschlüsselt; die Fakultät verwahrt für Notfälle einen Wiederherstellungsschlüssel.", text)
-        self.assertRegex(text, r"Scope settings \(as of \d+ \w+ \d{4}; wds-verify prints the current ones\):")
-        self.assertIn(f"- App ID (scope): {scope}", text)
-        self.assertIn("- Enrollment: join code: users type a join code when they create their vault; never put it into the app", text)
-        self.assertIn("- Breach check: on", text)
-        self.assertIn("- Limits: 10 MB per record, 200 MB per vault including history, 10 versions per record, 50 vaults", text)
-        self.assertIn("https://wiai.uni-bamberg.de/datastore/llms.txt", text)
-        self.assertIn('wds-verify (https://github.com/UBA-PSI/wiai-datastore, integration.md section "wds-verify")', text)
-        self.assertIn("(create them if missing; keep existing content)", text)
-        self.assertIn(f'WDS.connect({{ scope: "{scope}" }})', text)
-        self.assertIn("integrity=", text)  # the tag with its hash
-        self.assertIn("TESTHASH", text)
+        self.assertTrue(text.startswith("## Data storage: WIAI Datastore\n"))
+        self.assertIn(f"app ID (scope) {scope}.", text)
+        self.assertIn("- Before building or changing storage, the data model, the library script tag or the Content-Security-Policy, read "
+                      "https://wiai.uni-bamberg.de/datastore/llms.txt and follow its rules.", text)
+        self.assertIn('  en: "Data is end-to-end encrypted; the faculty holds a recovery key for emergencies."', text)
+        self.assertIn('  de: "Die Daten sind Ende-zu-Ende-verschlüsselt; die Fakultät verwahrt für Notfälle einen Wiederherstellungsschlüssel."', text)
+        self.assertIn("- Test with wds-verify (https://github.com/UBA-PSI/wiai-datastore); it runs against the sandbox.", text)
+        self.assertIn("update its report in README.md.", text)
+        self.assertIn("(create the files if missing; keep their other content)", text)
+
+    def test_the_text_is_the_same_in_both_dashboard_languages_and_has_a_copy_button(self):
+        texts = []
+        for lang in ("en", "de"):
+            a = self.staff(lang_header=lang)
+            scope = self.make_scope(a, name="Demo")
+            page = self.page(a, scope)
+            self.assertIn('data-copy="prompt"', page)
+            texts.append(pre(page, "prompt").replace(scope, "ID"))
+        self.assertEqual(texts[0], texts[1])
 
     def test_the_join_code_itself_is_never_in_the_prompt(self):
         a = self.staff(lang_header="en")
         scope = self.make_scope(a)
         code = self.row(scope)["join_code"]
-        page = self.page(a, scope)
-        self.assertNotIn(code, pre(page, "prompt"))
-        self.assertNotIn(code, pre(page, "claude-md"))
-
-    def test_open_and_closed_enrollment_and_breach_check_off(self):
-        a = self.staff(lang_header="en")
-        scope = self.make_scope(a, enrollment="open", hibp="")
         text = pre(self.page(a, scope), "prompt")
-        self.assertIn("- Enrollment: open: anybody with the app can create a vault (limit 50)", text)
-        self.assertIn("- Breach check: off", text)
-        a.post(f"/scopes/{scope}/enrollment", {"enrollment": "closed"})
-        self.assertIn("- Enrollment: closed: no new vaults", pre(self.page(a, scope), "prompt"))
+        self.assertNotIn(code, text)
+        self.assertIn("The join code of this app is a secret of the staff. Never write it into the app, the README, tests, scripts, CLAUDE.md or AGENTS.md, ", text)
+        self.assertIn("and never ask for it in the chat.", text)
 
     def test_prompt_has_no_real_scope_test_path(self):
         a = self.staff(lang_header="en")
-        scope = self.make_scope(a, name="Demo")  # join code
-        text = pre(self.page(a, scope), "prompt")
+        text = pre(self.page(a, self.make_scope(a, name="Demo")), "prompt")
         for word in ("~/.wds", "deleteVault", "drive-library", "test vault", "WDS_JOIN_CODE"):
             self.assertNotIn(word, text)
-        de = self.staff(lang_header="de")
-        dtext = pre(self.page(de, self.make_scope(de, name="Demo")), "prompt")
-        for word in ("~/.wds", "deleteVault", "drive-library", "Test-Tresor", "WDS_JOIN_CODE"):
-            self.assertNotIn(word, dtext)
 
-    def test_prompt_for_open_enrollment_needs_no_join_code(self):
-        a = self.staff(lang_header="en")
-        scope = self.make_scope(a, name="Demo", enrollment="open")
-        text = pre(self.page(a, scope), "prompt")
-        self.assertNotIn("join code", text)
-        snippet = pre(self.page(a, scope), "claude-md")
-        self.assertNotIn("join code", snippet)  # an open scope has no code to protect: the snippet does not talk about one
-        a.post(f"/scopes/{scope}/enrollment", {"enrollment": "closed"})
-        self.assertNotIn("join code", pre(self.page(a, scope), "claude-md"))
-
-    def test_limits_follow_the_scope(self):
+    def test_nothing_that_can_change_is_in_the_text(self):
         a = self.staff(lang_header="en")
         scope = self.make_scope(a)
-        a.post(f"/scopes/{scope}/limits", {"max_value_bytes": "2", "vault_bytes": "20", "scope_bytes": "", "max_vaults": "7",
-                                          "history_versions": "3"})
-        text = pre(self.page(a, scope), "prompt")
-        self.assertIn("- Limits: 2 MB per record, 20 MB per vault including history, 3 versions per record, 7 vaults", text)
+        before = pre(self.page(a, scope), "prompt")
+        with self.env.svc.db.connection() as conn:   # what the operator does with the command line
+            conn.execute("UPDATE scopes SET limits='{\"max_vaults\": 7, \"history_versions\": 3}', join_code='ZZZZ9999' WHERE scope_id=?", (scope,))
+        self.assertEqual(pre(self.page(a, scope), "prompt"), before)
+        for gone in ("Limits", "vaults", "Enrollment", "Breach", "as of"):
+            self.assertNotIn(gone, before, gone)
 
-    def test_german_prompt(self):
-        a = self.staff(lang_header="de")
-        scope = self.make_scope(a, name="Demo", enrollment="open", hibp="")
-        text = pre(self.page(a, scope), "prompt")
-        self.assertIn("Ich baue oder portiere eine Web-App", text)
-        self.assertIn("- Deutsch: Die Daten sind Ende-zu-Ende-verschlüsselt; die Fakultät verwahrt für Notfälle einen Wiederherstellungsschlüssel.", text)
-        self.assertIn("- Englisch: Data is end-to-end encrypted; the faculty holds a recovery key for emergencies.", text)
-        self.assertIn(f"- App-ID (Scope): {scope}", text)
-        self.assertIn("- Anlegen von Tresoren: offen: jede Person mit der App kann einen Tresor anlegen (Höchstzahl 50)", text)
-        self.assertIn("- Prüfung auf Datenlecks: aus", text)
-        self.assertIn("- Grenzen: 10 MB je Datensatz, 200 MB je Tresor einschließlich Verlauf, 10 Versionen je Datensatz, 50 Tresore", text)
-        self.assertIn("behalte den bisherigen Inhalt", text)
-        self.assertRegex(text, r"Stand \d{2}\.\d{2}\.\d{4}; wds-verify")
-
-    def test_snippet_is_english_in_both_languages_with_a_copy_button(self):
-        for lang in ("en", "de"):
-            a = self.staff(lang_header=lang)
-            scope = self.make_scope(a)
-            page = self.page(a, scope)
-            snippet = pre(page, "claude-md")
-            self.assertTrue(snippet.startswith("## Data storage: WIAI Datastore\n"))
-            self.assertIn(f"app ID (scope) {scope}.", snippet)
-            self.assertIn('  en: "Data is end-to-end encrypted; the faculty holds a recovery key for emergencies."', snippet)
-            self.assertIn('  de: "Die Daten sind Ende-zu-Ende-verschlüsselt; die Fakultät verwahrt für Notfälle einen Wiederherstellungsschlüssel."', snippet)
-            self.assertIn("- The join code of this scope is a secret of the staff. Never write it into the app, the README, tests, scripts, CLAUDE.md or AGENTS.md, ", snippet)
-            self.assertIn("and never ask for it in the chat.", snippet)
-            self.assertNotIn("WDS_JOIN_CODE", snippet)
-            self.assertIn("read https://wiai.uni-bamberg.de/datastore/llms.txt and follow its rules.", snippet)
-            self.assertIn("run wds-verify, it prints them.", snippet)
-            self.assertIn("(https://github.com/UBA-PSI/wiai-datastore)", snippet)
-            self.assertIn('data-copy="claude-md"', page)
-            self.assertIn(snippet, pre(page, "prompt"))  # the prompt ends with the same section
-            self.assertNotIn("sandbox", snippet.lower())
-
-    def test_headings_and_hint_in_both_languages(self):
+    def test_the_dashboard_explains_the_purpose_in_german_and_english(self):
+        de = html.unescape(self.staff(lang_header="de").get(f"/scopes/{self.make_scope(self.staff(lang_header='de'), name='Demo')}").text)
+        self.assertIn("Kopieren Sie diesen Text in Ihr Gespräch mit Claude", de)
+        self.assertIn("legt den Text zugleich in der App als CLAUDE.md und AGENTS.md ab", de)
+        self.assertIn("Er ist englisch, weil er in der App neben dem Programmcode steht.", de)
         a = self.staff(lang_header="en")
-        scope = self.make_scope(a)
-        en = a.get(f"/scopes/{scope}").text
-        self.assertIn("CLAUDE.md / AGENTS.md for the app repository", en)
-        self.assertIn("For apps that already exist: add this section to CLAUDE.md and AGENTS.md in the app's folder.", html.unescape(en))
-        de = self.browser(lang_header="de")
-        self.login(de, "alice", "alice@uni-bamberg.de")
-        text = html.unescape(de.get(f"/scopes/{scope}").text)
-        self.assertIn("CLAUDE.md / AGENTS.md für das App-Repository", text)
-        self.assertIn("Für Apps, die schon existieren", text)
+        en = html.unescape(a.get(f"/scopes/{self.make_scope(a, name='Demo')}").text)
+        self.assertIn("Paste this text into your conversation with Claude", en)
+        self.assertIn("also keeps the text in the app as CLAUDE.md and AGENTS.md", en)
+        for text in (de, en):
+            self.assertNotIn('id="claude-md"', text)                    # one block, not two
+            self.assertNotIn("CLAUDE.md / AGENTS.md für das App-Repository", text)
 
     def test_no_dashboard_address_as_the_source_of_settings(self):
         a = self.staff(lang_header="en")
         scope = self.make_scope(a)
-        page = self.page(a, scope)
-        for ident in ("prompt", "claude-md"):
-            text = pre(page, ident)
-            self.assertNotIn("/scopes/", text)
-            self.assertNotIn("/datastore/login", text)
-            self.assertNotIn("dashboard", text.lower())
+        text = pre(self.page(a, scope), "prompt")
+        self.assertNotIn("/scopes/", text)
+        self.assertNotIn("/datastore/login", text)
+        self.assertNotIn("dashboard", text.lower())
 
     def test_sandbox_lines_are_absent_without_a_sandbox(self):
         a = self.staff(lang_header="en")
         scope = self.make_scope(a)
-        page = self.page(a, scope)
-        for ident in ("prompt", "claude-md"):
-            self.assertNotIn("sandbox", pre(page, ident).lower())
+        self.assertIn("it runs against the sandbox", pre(self.page(a, scope), "prompt"))   # the tool, not the ID
+        self.assertNotIn("sandbox-", pre(self.page(a, scope), "prompt"))
+        self.assertNotIn("Never write the sandbox scope ID", pre(self.page(a, scope), "prompt"))
 
 
 class PromptWithSandbox(DashCase):
     config = {"sandbox": SandboxConfig(scope_id=SID)}
 
-    def test_sandbox_lines_in_prompt_and_snippet(self):
+    def test_the_sandbox_id_is_named_so_that_it_is_never_written_into_the_app(self):
         a = self.staff(lang_header="en")
         scope = self.make_scope(a)
-        page = a.get(f"/scopes/{scope}").text
-        text = pre(page, "prompt")
-        self.assertIn("For end-to-end test runs use wds-verify (it runs against the sandbox). Never write the sandbox scope ID", text)
-        self.assertIn(f"{SID} into the app file: data there is deleted every night.", text)
-        snippet = pre(page, "claude-md")
-        self.assertIn(f"- Never write the sandbox scope ID {SID} into this app; wds-verify tests against the sandbox itself.", snippet)
+        text = pre(a.get(f"/scopes/{scope}").text, "prompt")
+        self.assertIn(f"Never write the sandbox scope ID {SID} into this app.", text)
         de = self.browser(lang_header="de")
         self.login(de, "alice", "alice@uni-bamberg.de")
-        dtext = pre(de.get(f"/scopes/{scope}").text, "prompt")
-        self.assertIn("wds-verify (es läuft gegen die Testumgebung)", dtext)
-        self.assertIn(SID, dtext)
-        self.assertIn("jede Nacht gelöscht", dtext)
+        self.assertEqual(pre(de.get(f"/scopes/{scope}").text, "prompt"), text)
 
 
 class SandboxScopeInTheDashboard(DashCase):
@@ -193,7 +136,7 @@ class SandboxScopeInTheDashboard(DashCase):
         self.assertIn("[sandbox]", text)
         self.assertIn("03:30 (Europe/Berlin)", text)
         self.assertNotIn('id="prompt"', text)  # no integration block: apps must not use this scope
-        for form in ("/settings", "/enrollment", "/limits", "/join-code", "/admins", "/suspend", "/resume", "/delete"):
+        for form in ("/settings", "/limits", "/join-code", "/admins", "/suspend", "/resume", "/delete"):
             self.assertNotIn(f"/scopes/{SID}{form}", text, form)
         self.assertNotIn("config:sandbox", text)  # no admin list: the configuration file owns the scope
         self.assertIn("Die Testumgebung wird im Abschnitt [sandbox] der Serverkonfiguration verwaltet", text)
@@ -205,25 +148,25 @@ class SandboxScopeInTheDashboard(DashCase):
     def test_every_post_is_refused(self):
         op = self.operator()
         op.get(f"/scopes/{SID}")
-        for path, form in (("/settings", {"name": "x", "contact_email": "a@uni-bamberg.de"}), ("/enrollment", {"enrollment": "closed"}),
-                           ("/join-code", {}), ("/limits", {"max_vaults": "1"}), ("/admins", {"admin": "bob"}),
+        for path, form in (("/settings", {"name": "x", "contact_email": "a@uni-bamberg.de"}),
+                           ("/join-code", {}), ("/admins", {"admin": "bob"}),
                            ("/admins/remove", {"admin": "bob"}), ("/suspend", {}), ("/resume", {}),
                            ("/delete", {"confirm": SID}), ("/vaults/ABCDEFGHJKMNPQRSTVWXYZ0123/delete", {})):
             r = op.post(f"/scopes/{SID}{path}?lang=en", form)
             self.assertEqual(r.status, 403, path)
             self.assertIn("changes here are refused", html.unescape(r.text), path)
-        row = self.env.sql("SELECT status, enrollment, deleted FROM scopes WHERE scope_id=?", (SID,))[0]
-        self.assertEqual(tuple(row), ("active", "open", None))
+        row = self.env.sql("SELECT status, join_code, deleted FROM scopes WHERE scope_id=?", (SID,))[0]
+        self.assertEqual(tuple(row), ("active", None, None))
 
     def test_the_disk_budget_counts_the_sandbox(self):
         self.env.svc.disk_total_override = 4 * 2**30  # 70 % = 2.8 GiB: one default scope (2 GiB) fits alone, not next to the sandbox (1 GiB)
         a = self.staff()
-        r = a.post("/scopes", {"name": "Big", "contact_email": "a@uni-bamberg.de", "enrollment": "open", "hibp": "1"})
+        r = a.post("/scopes", {"name": "Big", "contact_email": "a@uni-bamberg.de"})
         self.assertEqual(r.status, 409)
         self.env.config.sandbox = None
         from wds_server.sandbox import ensure_sandbox
         ensure_sandbox(self.env.svc)
-        r = a.post("/scopes", {"name": "Big", "contact_email": "a@uni-bamberg.de", "enrollment": "open", "hibp": "1"})
+        r = a.post("/scopes", {"name": "Big", "contact_email": "a@uni-bamberg.de"})
         self.assertEqual(r.status, 303)
 
     def test_audit_texts_for_the_sandbox_entries(self):

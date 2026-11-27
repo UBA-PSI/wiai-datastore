@@ -62,7 +62,7 @@ class Configuration(unittest.TestCase):
 
     def test_defaults(self):
         c = self.load(f"[sandbox]\nscope_id = {SID}\n").sandbox
-        self.assertEqual((c.scope_id, c.enabled, c.wipe_time, c.timezone, c.hibp), (SID, True, "03:30", "Europe/Berlin", False))
+        self.assertEqual((c.scope_id, c.enabled, c.wipe_time, c.timezone), (SID, True, "03:30", "Europe/Berlin"))
         self.assertEqual((c.max_value_bytes, c.vault_bytes, c.scope_bytes, c.max_vaults, c.history_versions),
                          (524288, 2097152, 1073741824, 500, 2))
         self.assertEqual((c.evict_min_age, c.create_per_ip, c.create_window, c.invite_slots), (1800, 20, 3600, 3))
@@ -70,8 +70,8 @@ class Configuration(unittest.TestCase):
 
     def test_values_and_inline_comments(self):
         c = self.load(f"[sandbox]\nscope_id = {SID}          ; required to enable\nenabled = false ; switch\nwipe_time = 04:15\n"
-                      "timezone = UTC\nmax_vaults = 7\nname = Test sandbox\nhibp = true\n").sandbox
-        self.assertEqual((c.enabled, c.wipe_time, c.timezone, c.max_vaults, c.name, c.hibp), (False, "04:15", "UTC", 7, "Test sandbox", True))
+                      "timezone = UTC\nmax_vaults = 7\nname = Test sandbox\n").sandbox
+        self.assertEqual((c.enabled, c.wipe_time, c.timezone, c.max_vaults, c.name), (False, "04:15", "UTC", 7, "Test sandbox"))
         self.assertEqual(c.scope_id, SID)
 
     def test_validation(self):
@@ -102,7 +102,7 @@ class Configuration(unittest.TestCase):
 
 class Migration(SandboxCase):
     def test_meta_table_exists(self):
-        self.assertEqual(SCHEMA_VERSION, 4)
+        self.assertEqual(SCHEMA_VERSION, 5)
         self.assertEqual(self.env.sql("PRAGMA user_version")[0][0], SCHEMA_VERSION)
         with self.env.svc.db.connection() as conn:
             self.assertIsNone(sandbox.meta_get(conn, "nope"))
@@ -120,32 +120,32 @@ class ScopeRow(SandboxCase):
 
     def test_inserted_at_start(self):
         r = self.row()
-        self.assertEqual((r["name"], r["status"], r["enrollment"], r["join_code"], r["hibp"], r["creator"], r["deleted"]),
-                         ("WIAI Datastore sandbox", "active", "open", None, 0, SANDBOX_CREATOR, None))
+        self.assertEqual((r["name"], r["status"], r["join_code"], r["creator"], r["deleted"]),
+                         ("WIAI Datastore sandbox", "active", None, SANDBOX_CREATOR, None))
         self.assertEqual(r["description"], "Public sandbox (server config)")
         self.assertEqual(json.loads(r["limits"]), self.sb.limits())
         self.assertEqual(self.sb.limits()["history_versions"], 2)
 
     def test_updated_from_the_configuration(self):
-        self.sb.name, self.sb.max_vaults, self.sb.hibp = "Renamed", 9, True
+        self.sb.name, self.sb.max_vaults = "Renamed", 9
         sandbox.ensure_sandbox(self.env.svc)
         r = self.row()
-        self.assertEqual((r["name"], r["hibp"], json.loads(r["limits"])["max_vaults"]), ("Renamed", 1, 9))
+        self.assertEqual((r["name"], json.loads(r["limits"])["max_vaults"]), ("Renamed", 9))
         self.assertEqual(self.env.sql("SELECT COUNT(*) FROM scopes WHERE scope_id=?", (SID,))[0][0], 1)
 
     def test_changes_made_elsewhere_are_reset(self):
         # direct edits are what an operator could do with sqlite3
         with self.env.svc.db.connection() as conn:
-            conn.execute("UPDATE scopes SET status='suspended', enrollment='closed', join_code='ABC12345' WHERE scope_id=?", (SID,))
+            conn.execute("UPDATE scopes SET status='suspended', join_code='ABC12345' WHERE scope_id=?", (SID,))
         sandbox.ensure_sandbox(self.env.svc)
         r = self.row()
-        self.assertEqual((r["status"], r["enrollment"], r["join_code"]), ("active", "open", None))
+        self.assertEqual((r["status"], r["join_code"]), ("active", None))
 
     def test_foreign_scope_with_that_id_stops_the_start(self):
         self.sb.scope_id = "sandbox-000001"
         with self.env.svc.db.connection() as conn:
-            conn.execute("INSERT INTO scopes (scope_id, name, status, enrollment, hibp, limits, created, creator)"
-                         " VALUES ('sandbox-000001', 'Mine', 'active', 'open', 1, '{}', 1, 'alice')")
+            conn.execute("INSERT INTO scopes (scope_id, name, status, limits, created, creator)"
+                         " VALUES ('sandbox-000001', 'Mine', 'active', '{}', 1, 'alice')")
         with self.assertRaises(ValueError):
             sandbox.ensure_sandbox(self.env.svc)
 
@@ -185,8 +185,8 @@ class ScopeRow(SandboxCase):
 class Schedule(SandboxCase):
     def test_scope_document(self):
         d = self.c.get(f"{API}/scopes/{SID}").json()
-        self.assertEqual(d["enrollment"], "open")
-        self.assertFalse(d["hibp"])
+        self.assertEqual(d["enrollment"], "open")  # only the sandbox is open
+        self.assertNotIn("hibp", d)
         self.assertEqual(d["limits"]["max_value_bytes"], 524288)
         s = d["sandbox"]
         self.assertEqual(set(s), {"enabled", "wipe_at", "timezone", "next_wipe", "last_wipe"})
@@ -232,15 +232,12 @@ class Schedule(SandboxCase):
 class Creation(SandboxCase):
     sandbox_kw = {"create_per_ip": 3}
 
-    def test_open_without_join_code_and_contact_discarded(self):
-        v = Vault(self.env, SID)
-        r = v.create(mutate=lambda b: b.update(recovery_contact="me@uni-bamberg.de"))
+    def test_open_without_join_code(self):
+        r = Vault(self.env, SID).create()
         self.assertEqual(r.status, 201, r)
-        self.assertIsNone(self.env.sql("SELECT recovery_contact FROM vaults WHERE vault_id=?", (v.vault,))[0][0])
-        self.assertTrue(self.c.get(f"{API}/admin/vaults/{v.vault}", self.env.op).json()["has_recovery_contact"] is False)
 
-    def test_malformed_contact_is_still_refused(self):
-        r = Vault(self.env, SID).create(mutate=lambda b: b.update(recovery_contact="not an address"))
+    def test_a_recovery_contact_is_refused_here_too(self):
+        r = Vault(self.env, SID).create(mutate=lambda b: b.update(recovery_contact="me@uni-bamberg.de"))
         self.assertEqual(r.status, 400, r)
 
     def test_per_ip_limit(self):
@@ -395,8 +392,7 @@ class NoRecovery(SandboxCase):
     def test_every_operator_recovery_endpoint_refuses(self):
         v = self.vault()
         base = f"{API}/admin/vaults/{v.vault}"
-        for r in (self.c.post_json(base + "/recovery", {"contact": True}, self.env.op),
-                  self.c.post_json(base + "/recovery", {"recovery_code": "0" * 28}, self.env.op),
+        for r in (self.c.post_json(base + "/recovery", {"recovery_code": "0" * 28}, self.env.op),
                   self.c.delete(base + "/recovery", self.env.op),
                   self.c.get(base + "/escrow", self.env.op),
                   self.c.post_json(base + "/recovery/complete", {"roster": {}, "keyring": {}}, self.env.op)):

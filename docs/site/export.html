@@ -30,14 +30,9 @@
 <main>
 <p class="lang"><button type="button" data-set-lang="en">English</button> | <button type="button" data-set-lang="de">Deutsch</button></p>
 <h1 data-t="title">Export a vault</h1>
-<p data-t="intro">Download everything in your vault, decrypted, as a ZIP file. This works for every app of the WIAI Datastore, also when the app itself is gone. You need your access ID (or key file) and your passphrase. The server only ever sees encrypted data.</p>
+<p data-t="intro">Download everything in your vault, decrypted, as a ZIP file. This works for every app of the WIAI Datastore, also when the app itself is gone. You need your app ID, your access ID and your passphrase. The server only ever sees encrypted data.</p>
 
 <form id="form" novalidate>
-  <div class="field">
-    <label for="keyfile" data-t="keyfile">Key file (optional)</label>
-    <input type="file" id="keyfile" accept=".json,application/json">
-    <p class="hint" data-t="keyfileHint">It fills in the app ID and the access ID. A key file holds no secret.</p>
-  </div>
   <div class="field">
     <label for="scope" data-t="scope">App ID</label>
     <input type="text" id="scope" class="mono" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="notenrechner-k7m2a9">
@@ -67,30 +62,26 @@
   var TEXT = {
     en: {
       title: "Export a vault",
-      intro: "Download everything in your vault, decrypted, as a ZIP file. This works for every app of the WIAI Datastore, also when the app itself is gone. You need your access ID (or key file) and your passphrase. The server only ever sees encrypted data.",
-      keyfile: "Key file (optional)", keyfileHint: "It fills in the app ID and the access ID. A key file holds no secret.",
+      intro: "Download everything in your vault, decrypted, as a ZIP file. This works for every app of the WIAI Datastore, also when the app itself is gone. You need your app ID, your access ID and your passphrase. The server only ever sees encrypted data.",
       scope: "App ID", scopeHint: "On your access sheet in brackets after the app name, for example notenrechner-k7m2a9.",
       access: "Access ID (optional here)", accessHint: "You can also enter it in the next window. You enter your passphrase there, never on this page.",
       go: "Unlock and export", saveTitle: "Keep this page for later",
       save: "Save this page as an HTML file (browser menu, \"Save page as\"). The saved file works from your disk as well: it loads the library from the faculty server and checks its checksum, so you need a connection but no other file. Do not create a new vault here.",
       download: "Download this page as a file",
-      keyRead: "Key file read.", keyBad: "This is not a valid key file.", keyOther: "This key file belongs to a different service.",
-      needScope: "Please enter the app ID (or choose the key file).", badScope: "The app ID looks wrong. It has the form name-xxxxxx.",
+      needScope: "Please enter the app ID.", badScope: "The app ID looks wrong. It has the form name-xxxxxx.",
       needLib: "The storage library could not be loaded. Check your connection and reload this page.",
       working: "Unlocking. Keep this page open.", choose: "In the vault dialog choose \"Export everything\". The files in the ZIP are not encrypted; store them carefully.",
       failed: "The export failed: {m}"
     },
     de: {
       title: "Tresor exportieren",
-      intro: "Laden Sie alles aus Ihrem Tresor entschlüsselt als ZIP-Datei herunter. Das funktioniert für jede App des WIAI Datastore, auch wenn die App selbst nicht mehr existiert. Sie brauchen Ihre Zugangskennung (oder Schlüsseldatei) und Ihre Passphrase. Der Server sieht nur verschlüsselte Daten.",
-      keyfile: "Schlüsseldatei (optional)", keyfileHint: "Sie trägt App-ID und Zugangskennung ein. Eine Schlüsseldatei enthält kein Geheimnis.",
+      intro: "Laden Sie alles aus Ihrem Tresor entschlüsselt als ZIP-Datei herunter. Das funktioniert für jede App des WIAI Datastore, auch wenn die App selbst nicht mehr existiert. Sie brauchen Ihre App-ID, Ihre Zugangskennung und Ihre Passphrase. Der Server sieht nur verschlüsselte Daten.",
       scope: "App-ID", scopeHint: "Auf Ihrem Zugangsblatt in Klammern hinter dem App-Namen, zum Beispiel notenrechner-k7m2a9.",
       access: "Zugangskennung (hier optional)", accessHint: "Sie können sie auch im nächsten Fenster eingeben. Ihre Passphrase geben Sie dort ein, nie auf dieser Seite.",
       go: "Entsperren und exportieren", saveTitle: "Diese Seite aufbewahren",
       save: "Speichern Sie diese Seite als HTML-Datei (Browsermenü, \"Seite speichern unter\"). Die gespeicherte Datei funktioniert auch von Ihrer Festplatte: Sie lädt die Bibliothek vom Server der Fakultät und prüft deren Prüfsumme. Sie brauchen also eine Verbindung, aber keine weitere Datei. Legen Sie hier keinen neuen Tresor an.",
       download: "Diese Seite als Datei herunterladen",
-      keyRead: "Schlüsseldatei gelesen.", keyBad: "Das ist keine gültige Schlüsseldatei.", keyOther: "Diese Schlüsseldatei gehört zu einem anderen Dienst.",
-      needScope: "Bitte geben Sie die App-ID ein (oder wählen Sie die Schlüsseldatei).", badScope: "Die App-ID sieht falsch aus. Sie hat die Form name-xxxxxx.",
+      needScope: "Bitte geben Sie die App-ID ein.", badScope: "Die App-ID sieht falsch aus. Sie hat die Form name-xxxxxx.",
       needLib: "Die Speicherbibliothek konnte nicht geladen werden. Prüfen Sie Ihre Verbindung und laden Sie die Seite neu.",
       working: "Entsperren läuft. Lassen Sie diese Seite geöffnet.", choose: "Wählen Sie im Tresor-Dialog „Alles exportieren“. Die Dateien in der ZIP-Datei sind nicht verschlüsselt; bewahren Sie sie sorgfältig auf.",
       failed: "Der Export ist fehlgeschlagen: {m}"
@@ -112,21 +103,6 @@
   function say(kind, text) { var m = $("msg"); m.className = kind || ""; m.textContent = text; }
   document.querySelectorAll("[data-set-lang]").forEach(function (b) { b.onclick = function () { setLang(b.getAttribute("data-set-lang")); }; });
   setLang(lang);
-
-  $("keyfile").onchange = function () {
-    var f = this.files[0];
-    if (!f) return;
-    if (f.size > 20000) { say("err", t("keyBad")); return; }
-    f.text().then(function (text) {
-      var doc;
-      try { doc = JSON.parse(text); } catch (e) { doc = null; }
-      if (!doc || doc.type !== "wds-keyfile" || typeof doc.scope !== "string" || typeof doc.access_id !== "string") { say("err", t("keyBad")); return; }
-      if (doc.service !== BASE) { say("err", t("keyOther")); return; }
-      $("scope").value = doc.scope;
-      $("access").value = typeof WDSCore !== "undefined" && WDSCore.displayCode ? WDSCore.displayCode(doc.access_id) : doc.access_id;
-      say("ok", t("keyRead"));
-    });
-  };
 
   $("form").onsubmit = async function (ev) {
     ev.preventDefault();

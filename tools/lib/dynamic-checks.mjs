@@ -6,6 +6,7 @@ import { join, basename, dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 import { ROOT, MockUnavailable } from './python.mjs';
+import { MOCK_JOIN_CODE } from './wds-mock.mjs';
 import { Canaries, findIn } from './canary.mjs';
 import { DATASTORE_HOST, scanHtml } from './static-checks.mjs';
 import { instrument } from './page-instrument.mjs';
@@ -266,12 +267,12 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
           return true;
         }
         case 'create': {
-          if (await present(d, 'join-code')) {
-            note('the scope needs a join code to create a vault, which the tool cannot know; use a scope with open enrollment (the sandbox, or --target mock)');
+          if (!mock && await present(d, 'join-code')) {   // the sandbox is open; the mock's scopes have the join code of MOCK_JOIN_CODE
+            note('the scope needs a join code to create a vault, which the tool cannot know; the sandbox and --target mock need none');
             await ctl(d, 'close').click({ timeout: 3000 }).catch(() => {});
             return true;
           }
-          await submitCreate(d, { passphrase });
+          await submitCreate(d, { passphrase, joinCode: MOCK_JOIN_CODE });
           const waitStart = Date.now();
           for (;;) {
             const v = await viewOf(page);   // null only when the page answered and shows no dialog; '' while it is busy (Argon2id) or reloading
@@ -831,7 +832,7 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
 
     // vault and saves
     if (libLoaded) {
-      if (info.vaultCreated) add('vault', 'pass', 'Vault created', sb ? 'The library dialog created a vault in the sandbox (open enrollment, passphrase checked by the library).' : 'The library dialog created a vault in the mock (open enrollment, passphrase checked by the library).');
+      if (info.vaultCreated) add('vault', 'pass', 'Vault created', sb ? 'The library dialog created a vault in the sandbox (passphrase checked by the library).' : 'The library dialog created a vault in the mock (passphrase checked by the library).');
       else add('vault', 'fail', 'Vault created', 'The app never opened the unlock dialog, so no vault was created and nothing could be stored. ' + (unexpected.length ? unexpected.join('; ') : 'Does the app call store.unlock() or a store method?'));
       const puts = requests.filter((r) => r.method === 'PUT' && /\/vaults\/[^/]+\/records\/[^/]+$/.test(new URL(r.url).pathname));
       info.recordWrites = puts.length;
@@ -875,7 +876,7 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
       }
       if (info.fileInputs && !(info.stepCount && info.stepCount.upload)) add('file-inputs', 'info', 'File inputs', 'The page has ' + info.fileInputs + ' file input(s); the tool fills them with a generated image, an {"upload": [selector]} step does it on demand' + DOCP + '.');
     }
-    const notes = sb ? unexpected.filter((u) => !/pw\.hibp\.unavailable/.test(u)) : unexpected;
+    const notes = unexpected.filter((u) => !/pw\.hibp\.unavailable/.test(u));   // a breach check that cannot be reached is no finding
     if (info.stuckError) add('dialog-error', 'fail', 'A library dialog stayed in its error view', 'The dialog showed its error view again after three retries ("' + info.stuckError + '"): the service does not answer, or the dialog cannot be built (see the console).');
     if (notes.length) add('driver', 'warn', 'Test run notes', notes.slice(0, 6).join('\n'));
     if (info.locale !== 'en-US') add('locale', 'info', 'Browser language', 'The browser ran with the locale ' + info.locale + ' (the library dialogs follow <html lang>, else this).');
@@ -931,7 +932,7 @@ export async function dynamicChecks({ appPath, html, config = {}, library, targe
     if (strange.length) add('datastore-urls', 'fail', 'Datastore URLs', 'Requests to the datastore host outside the library and the API: ' + [...new Set(strange.map((r) => r.method + ' ' + r.url.slice(0, 90)))].slice(0, 5).join('; '));
     const hosts = [...new Set(externals.map((e) => hostOf(e.url)))].filter(Boolean);
     if (hosts.length) add('external-requests', 'warn', 'Requests to other hosts', 'The page tried to reach ' + hosts.join(', ') + ' (blocked in this test).');
-    const realErrors = sb ? pageErrors.filter((e) => !/pw\.hibp\.unavailable/.test(e)) : pageErrors;   // the sandbox has no breach check; a blocked one is no finding
+    const realErrors = pageErrors.filter((e) => !/pw\.hibp\.unavailable/.test(e));   // a breach check that cannot be reached is no finding
     if (realErrors.length) add('page-errors', 'warn', 'JavaScript errors', realErrors.slice(0, 4).map((e) => '- ' + e.split('\n')[0].slice(0, 160)).join('\n'));
 
     // write frequency and record layout

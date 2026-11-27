@@ -50,14 +50,11 @@ class ReadOnlyMode(ServerTestCase):
         # delete record, purge history
         self.assertEqual(self.v.delete("a", 2).status, 200)
         self.assertEqual(self.c.delete(f"{self.v.path}/records/{Vault.rid('a')}/versions", self.v.auth).status, 200)
-        # PUT /slots, renewal
+        # PUT /slots
         r = self.c.put_json(f"{API}/slots/{self.m.access_id}", {"kdf": kdf_doc(), "token_hash": b64(sha256(b"n" * 32)),
                             "wrapped": b64(envelope(2, 0, 200))}, {**self.m.auth, "If-Match": '"2"'})
         self.assertEqual(r.status, 200, r)
         self.m.token = b"n" * 32
-        r = self.c.post_json(f"{API}/slots/{self.m.access_id}/renewal", {"renewal": self.m.renewal(), "wrapped": b64(envelope(2, 0, 200))},
-                             {**self.m.auth, "If-Match": '"3"'})
-        self.assertEqual(r.status, 200, r)
         # redeem
         self.assertEqual(self.fresh.redeem().status, 200)
         # roster without new_slots: only versions that protect (revocation here); role changes and bare epoch bumps wait

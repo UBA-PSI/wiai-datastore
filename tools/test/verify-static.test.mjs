@@ -85,7 +85,6 @@ test('CSP: the recommended policy and stricter ones pass, broader ones fail', ()
   const tpl = CSP_TEMPLATE;
   assert.deepEqual(cspBroaderThan(parseCsp(tpl), tpl), []);
   const stricter = [
-    tpl.replace(' https://api.pwnedpasswords.com', ''),
     tpl + "; form-action 'none'; base-uri 'none'",
     tpl.replace("'unsafe-inline' 'wasm-unsafe-eval'", "'wasm-unsafe-eval' 'sha256-abc='"),
     tpl.replace('https://wiai.uni-bamberg.de/datastore/client/;', 'https://wiai.uni-bamberg.de/datastore/client/wds-1.0.0.js;'),
@@ -285,7 +284,7 @@ test('--strict: a promoted warning is listed under Failures and counted as faile
 
 // ---- round D: sandbox checks, local deletion, scope check, hashes, targets, report ----
 import { rewriteScopes } from '../lib/targets.mjs';
-import { hidingRules, handStorage, connectAllows } from '../lib/static-checks.mjs';
+import { hidingRules, handStorage } from '../lib/static-checks.mjs';
 import { notTested } from '../wds-verify.mjs';
 import { startStub, sandboxDoc, scopeDoc, verify } from './helpers.mjs';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -366,14 +365,6 @@ test('rewriteScopes: a constant that holds the scope, the shorthand, several scr
   const r2 = rewriteScopes(none, scanHtml(none).scripts, 'sandbox-000000');
   assert.equal(r2.sites, 0);
   assert.equal(r2.html, none);
-});
-
-test('connectAllows: effective connect-src with the default-src fallback', () => {
-  const H = 'https://api.pwnedpasswords.com';
-  assert.equal(connectAllows(CSP_TEMPLATE, H), true);
-  assert.equal(connectAllows(CSP_TEMPLATE.replace(' ' + H, ''), H), false);
-  assert.equal(connectAllows("default-src 'none'", H), false);
-  assert.equal(connectAllows("default-src 'none'; connect-src " + H + '/', H), true);
 });
 
 test('the engines floor is Node 22', () => {
@@ -464,7 +455,7 @@ test('hashes: from the service first, then the local clone; a difference is a wa
 import { tmpDir } from './helpers.mjs';
 function tmpDirWith(text) { const f = join(tmpDir(), 'hashes.json'); writeFileSync(f, text); return f; }
 
-test('scope check: the real scope document against the CSP, enrollment and limits reported', async () => {
+test('scope check: the real scope document: unknown scopes fail, limits and a paused scope are reported', async () => {
   const run1 = async (doc, html = good()) => {
     const svc = await startStub({ ['/api/v1/scopes/wds-verify-demo-k7m2a9']: doc === 404 ? () => [404, { error: 'not_found' }] : doc });
     try {
@@ -473,24 +464,12 @@ test('scope check: the real scope document against the CSP, enrollment and limit
       return { code: r.code, by: (id) => j.findings.find((x) => x.id === id) };
     } finally { await svc.close(); }
   };
-  // hibp on and the CSP allows the host: fine, settings are reported
+  // the limits are reported; nothing else of the scope is judged (one fixed CSP, no breach-check setting, no enrollment mode)
   const ok = await run1(scopeDoc());
   assert.equal(ok.code, 0);
-  assert.equal(ok.by('scope-hibp').level, 'pass');
-  assert.match(ok.by('scope-settings').detail, /enrollment a join code is needed.*breach check of passphrases on.*1 MB per record, 50 MB per vault, 20 versions per record/);
-  // hibp on, CSP without the host: FAIL
-  const noHost = good().replace(' https://api.pwnedpasswords.com', '');
-  const bad = await run1(scopeDoc(), noHost);
-  assert.equal(bad.code, 1);
-  assert.equal(bad.by('scope-hibp').level, 'fail');
-  assert.match(bad.by('scope-hibp').detail, /api\.pwnedpasswords\.com/);
-  // hibp off, CSP still has the host: fine (one fixed policy)
-  const warn = await run1(scopeDoc({ hibp: false, enrollment: 'open' }));
-  assert.equal(warn.code, 0);
-  assert.equal(warn.by('scope-hibp').level, 'pass');
-  assert.match(warn.by('scope-settings').detail, /anybody with the app can create a vault.*off/);
-  // hibp off and no host: fine
-  assert.equal((await run1(scopeDoc({ hibp: false }), noHost)).by('scope-hibp').level, 'pass');
+  assert.match(ok.by('scope-settings').detail, /limits.*1 MB per record, 50 MB per vault, 20 versions per record/);
+  assert.doesNotMatch(ok.by('scope-settings').detail, /enrollment|breach/);
+  assert.equal(ok.by('scope-hibp'), undefined);
   // unknown scope: FAIL
   const unknown = await run1(404);
   assert.equal(unknown.code, 1);
@@ -579,12 +558,12 @@ test('static-only runs from a copy of tools/ alone (no client directory, no node
     assert.equal(out.code, 0, out.stdout + out.stderr);
     const j = JSON.parse(out.stdout);
     assert.match(j.findings.find((f) => f.id === 'hashes').detail, /client\/hashes\.json/);
-    assert.equal(j.findings.find((f) => f.id === 'scope-hibp').level, 'pass');
+    assert.equal(j.findings.find((f) => f.id === 'scope-settings').level, 'info');
   } finally { await svc.close(); }
 });
 
 // ---- round F: named functions, store.migrateLocal, hand-made migrations, app modals, the breach-check sentence ----
-import { usesMigrateLocal, usesShowModal, hasBreachNote, mentionsBreachService, BREACH_NOTE } from '../lib/static-checks.mjs';
+import { usesMigrateLocal, usesShowModal } from '../lib/static-checks.mjs';
 
 test('static: store.migrateLocal is recognised; strings and comments do not count', () => {
   const MIG = "store.migrateLocal({ id: 'literatur', indexedDB: { literatur: ['refs'] }, map: function (old, ref) { return []; } });";
@@ -613,43 +592,11 @@ test('static: an app that opens modal dialogs with showModal() gets the informat
   assert.ok(usesShowModal('dlg . showModal ( )'));
 });
 
-test('the breach-check sentence: found in the page or the README, or at least the name of the service; an info finding when the scope checks passphrases and nothing says so', async () => {
-  assert.equal(BREACH_NOTE.length, 2);
-  assert.match(BREACH_NOTE[0], /^When you choose a passphrase, your browser checks it against known data breaches with the Pwned Passwords service \(USA\); the service receives your IP address and the first five characters of a checksum of the passphrase, never the passphrase itself\.$/);
-  assert.match(BREACH_NOTE[1], /^Wenn Sie eine Passphrase wählen, prüft Ihr Browser sie beim Dienst Pwned Passwords \(USA\) auf bekannte Datenlecks; der Dienst erhält Ihre IP-Adresse und die ersten fünf Zeichen einer Prüfsumme der Passphrase, nie die Passphrase selbst\.$/);
-  assert.equal(hasBreachNote('<p>' + BREACH_NOTE[0] + '</p>'), true);
-  assert.equal(hasBreachNote('<p>' + BREACH_NOTE[1].replace('ü', '&uuml;').replace('ä', '&auml;') + '</p>'), true);
-  assert.equal(hasBreachNote('<p>nothing</p>', '# App\n\n' + BREACH_NOTE[1]), true);
-  assert.equal(hasBreachNote('<p>Passphrases are checked with the Pwned\n   Passwords service.</p>'), false);   // naming the service is not the sentence
-  assert.equal(hasBreachNote('<p>Passwords are pwned elsewhere.</p>'), false);
-  assert.equal(hasBreachNote('<p>We do not use Pwned Passwords.</p>'), false);
-  assert.equal(mentionsBreachService('<p>We use Pwned Passwords.</p>'), true);
-  assert.equal(hasBreachNote('<p>nothing</p>'), false);
-  const noteOf = async (doc, html, readme) => {
-    const svc = await startStub({ ['/api/v1/scopes/wds-verify-demo-k7m2a9']: doc });
-    try {
-      const dir = writeApp(html);
-      if (readme) writeFileSync(join(dir, 'README.md'), readme);
-      const r = await run('wds-verify.mjs', [dir, '--static-only', '--json'], { env: { WDS_VERIFY_OFFLINE: '', WDS_VERIFY_SERVICE: svc.url, WDS_VERIFY_HASHES_URL: 'off' } });
-      const j = JSON.parse(r.stdout);
-      return { code: r.code, note: j.findings.find((x) => x.id === 'breach-check-note'), settings: j.findings.find((x) => x.id === 'scope-settings') };
-    } finally { await svc.close(); }
-  };
-  const missing = await noteOf(scopeDoc(), good());
-  assert.equal(missing.code, 0);
-  assert.equal(missing.note.level, 'info');
-  assert.ok(missing.note.detail.includes(BREACH_NOTE[0]) && missing.note.detail.includes(BREACH_NOTE[1]));
-  assert.match(missing.settings.detail, /1 MB = 1,048,576 bytes/);
-  assert.equal((await noteOf(scopeDoc(), variant(good(), '<body>', '<body><p>' + BREACH_NOTE[0] + '</p>'))).note, undefined);
-  assert.equal((await noteOf(scopeDoc(), good(), '# App\n\n' + BREACH_NOTE[1] + '\n')).note, undefined);
-  assert.equal((await noteOf(scopeDoc({ hibp: false }), good())).note, undefined);
-});
-
-test('the tool\'s breach-check sentences are the ones of the dashboard prompt (prompt.py HIBP_EN, HIBP_DE)', { skip: !existsSync(join(ROOT, '.venv', 'bin', 'python')) && 'no project venv' }, () => {
-  const r = spawnSync(join(ROOT, '.venv', 'bin', 'python'), ['-c', 'import json; from wds_server.prompt import HIBP_EN, HIBP_DE; print(json.dumps([HIBP_EN, HIBP_DE]), end="")'], { cwd: join(ROOT, 'server'), encoding: 'utf8' });
-  if (r.status !== 0 && /ImportError|cannot import|ModuleNotFound/.test(r.stderr)) return;   // the server side is not there yet (parallel work): nothing to compare
-  assert.equal(r.status, 0, r.stderr);
-  assert.deepEqual(BREACH_NOTE, JSON.parse(r.stdout));
+test('the breach check needs no sentence in the app: the policy has no second host and the report has no breach-check finding', async () => {
+  assert.doesNotMatch(CSP_TEMPLATE, /pwnedpasswords/);
+  const r = await run('wds-verify.mjs', [writeApp(good()), '--static-only', '--json'], { env: { WDS_VERIFY_OFFLINE: '1', WDS_VERIFY_HASHES_URL: 'off' } });
+  const ids = JSON.parse(r.stdout).findings.map((f) => f.id);
+  assert.ok(!ids.includes('breach-check-note') && !ids.includes('scope-hibp'), ids.join(','));
 });
 
 test('--script-tag prints the complete tag with the onerror handler of the documentation, the CSP and its place; --scope-check off skips the scope check', async () => {

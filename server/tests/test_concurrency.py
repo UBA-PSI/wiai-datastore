@@ -102,7 +102,7 @@ class Races(ServerTestCase):
         scope = self.env.create_scope(slug="lim", limits={"max_vaults": 3})
         vaults = [Vault(self.env, scope["scope"]) for _ in range(10)]
         calls = [{"method": "POST", "url": f"{API}/scopes/{scope['scope']}/vaults",
-                  "headers": {"Content-Type": "application/json"}, "body": __import__("json").dumps(v.create_body()).encode(),
+                  "headers": {"Content-Type": "application/json"}, "body": __import__("json").dumps(v.create_body(scope["join_code"])).encode(),
                   "ip": f"10.0.0.{i}"} for i, v in enumerate(vaults)]
         statuses = sorted(r.status for r in self.c.gather(calls))
         self.assertEqual(statuses, [201] * 3 + [403] * 7)

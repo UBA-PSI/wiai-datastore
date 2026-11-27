@@ -122,19 +122,5 @@ def validate_kdf(obj: object, *, kind: str) -> str:
     return cjson_text(obj)
 
 
-def validate_recovery_contact(value: object) -> str | None:
-    if value is None:
-        return None
-    if not isinstance(value, str) or "@" not in value:
-        raise bad_request("recovery_contact must be an e-mail address or null.")
-    try:
-        size = len(value.encode("utf-8"))
-    except UnicodeEncodeError:
-        raise bad_request("recovery_contact is not valid text.") from None
-    if size > 254 or any(ord(c) < 0x20 or ord(c) == 0x7F for c in value):
-        raise bad_request("recovery_contact is too long or contains control characters.")
-    return value
-
-
 def normalise_join_code(value: str) -> str:
     return value.strip().upper().replace(" ", "").replace("-", "")

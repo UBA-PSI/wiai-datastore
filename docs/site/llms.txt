@@ -24,7 +24,7 @@ You are probably the Claude of a developer who wants an app to keep its data her
 - {{base}}/docs/integration.md and {{base}}/docs/porting.md - the developer guides for you (HTML at the same address without .md)
 - {{base}}/docs/users.en.md and {{base}}/docs/users.de.md - for the people who use the app; {{base}}/docs/operator.md - for the operator of the service
 - {{base}}/export/ - standalone tool that unlocks a vault and downloads everything, decrypted, as a ZIP
-- {{base}}/ - dashboard for faculty staff: register a scope, get the scope ID, the join code, a text for you and a section for the app's CLAUDE.md and AGENTS.md
+- {{base}}/ - dashboard for faculty staff: register a scope, get the scope ID, the join code and one text for you, which is also the section for the app's CLAUDE.md and AGENTS.md
 - {{api_url}} - HTTP API of the library (app code never calls it; wire format: PROTOCOL.md in the repository)
 
 ## Facts to quote correctly
@@ -32,10 +32,7 @@ You are probably the Claude of a developer who wants an app to keep its data her
 - Wherever you describe the privacy of an app, use this sentence word for word (a text in another language uses the English one):
   en: Data is end-to-end encrypted; the faculty holds a recovery key for emergencies.
   de: Die Daten sind Ende-zu-Ende-verschlüsselt; die Fakultät verwahrt für Notfälle einen Wiederherstellungsschlüssel.
-- When the scope has the breach check of passphrases on (the default; the dashboard text and wds-verify say which), add this sentence right after it, in the language of the text:
-  en: When you choose a passphrase, your browser checks it against known data breaches with the Pwned Passwords service (USA); the service receives your IP address and the first five characters of a checksum of the passphrase, never the passphrase itself.
-  de: Wenn Sie eine Passphrase wählen, prüft Ihr Browser sie beim Dienst Pwned Passwords (USA) auf bekannte Datenlecks; der Dienst erhält Ihre IP-Adresse und die ersten fünf Zeichen einer Prüfsumme der Passphrase, nie die Passphrase selbst.
 - A scope is one registered app, with an ID like notenrechner-k7m2a9. Every user has their own vault inside it; the owner can share a vault with others (roles write and read).
-- Users unlock with an access ID and their own passphrase (at least 12 characters), which the server cannot reset. The access sheet holds a recovery code for the faculty recovery.
+- Users unlock with an access ID and their own passphrase (at least 12 characters), which the server cannot reset. The access sheet holds the emergency code for the faculty recovery.
 - Default limits: 10 MB per record, 200 MB per vault including history, the last 10 versions of every record (a scope may set other values: wds-verify prints them). 1 MB = 1,048,576 bytes.
 - The service is online only. When the connection fails, the library offers a backup download of the unsaved values.

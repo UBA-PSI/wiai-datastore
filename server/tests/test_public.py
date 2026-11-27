@@ -10,7 +10,7 @@ class PublicEndpoints(ServerTestCase):
         r = self.c.get(f"{API}/scopes/{scope['scope']}")
         self.assertEqual(r.status, 200)
         d = r.json()
-        self.assertEqual(set(d), {"scope", "name", "status", "enrollment", "hibp", "read_only", "limits", "kdf", "escrow",
+        self.assertEqual(set(d), {"scope", "name", "status", "enrollment", "read_only", "limits", "kdf", "escrow",
                                   "library", "privacy_url", "sandbox"})
         self.assertIsNone(d["sandbox"])  # only the configured sandbox scope carries a sandbox block
         self.assertEqual(d["name"], "Notenrechner")

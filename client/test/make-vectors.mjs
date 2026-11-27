@@ -217,11 +217,9 @@ v.roster = {
 {
   const inv = await I.makeInviteCode(seq(12, 0), seq(17, 0x20));
   const rec = await I.makeRecoveryCode(seq(17, 0xa0));
-  const kf = core.makeKeyFile({ scope: SCOPE, accessId: ACCESS_ID, vaultId: VAULT });
   v.codes = {
     invite: { access_id_hex: hex(seq(12, 0)), secret_hex: hex(seq(17, 0x20)), canonical: inv.canonical, display: inv.display },
     recovery: { bytes_hex: hex(seq(17, 0xa0)), canonical: rec.canonical, display: rec.display, recovery_hash: rec.hash },
-    key_file: { scope: SCOPE, access_id: ACCESS_ID, vault: VAULT, service: core.SERVICE_URL, text: kf.text, filename: kf.filename },
   };
 }
 

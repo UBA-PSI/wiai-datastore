@@ -5,13 +5,15 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { tmpDir } from './helpers.mjs';
-import { startMock } from '../lib/wds-mock.mjs';
+import { startMock, MOCK_JOIN_CODE } from '../lib/wds-mock.mjs';
 import {
   createVault, redeemInvite, answerMigration, unlock, confirmSheet, DriveError,
   viewOf, waitForView, dialog, dialogState, formError, describeDialog, fillWhenReady, briefError,
 } from '../lib/dialog-internals.mjs';
 
 let mock, browser, scope, appUrl;
+// The mock's scopes have a join code (only the sandbox is open): the tool types MOCK_JOIN_CODE.
+const createVaultOpen = (page, o = {}) => createVault(page, { joinCode: MOCK_JOIN_CODE, ...o });
 before(async () => {
   const pw = (await import('playwright')).default;
   mock = await startMock({ bundle: true });
@@ -37,7 +39,7 @@ test('createVault, unlock and confirmSheet drive the library dialogs', { timeout
   const page = await open(context);
   assert.equal(await viewOf(page), null);
   await page.evaluate(() => { window.p = store.unlock(); });
-  const { accessId, passphrase, next } = await createVault(page);
+  const { accessId, passphrase, next } = await createVaultOpen(page);
   assert.equal(next, null);   // the dialog is gone: the app asks nothing more
   assert.match(accessId, /^[0-9A-Z-]{20,}$/);
   assert.ok(passphrase.length >= 20);
@@ -58,7 +60,7 @@ test('createVault, unlock and confirmSheet drive the library dialogs', { timeout
 test('confirm: false leaves the access sheet open for confirmSheet(); waitForView times out with the view it saw', { timeout: 120000 }, async () => {
   const page = await open(await browser.newContext());
   await page.evaluate(() => { window.p = store.unlock(); });
-  const { accessId, next } = await createVault(page, { confirm: false });
+  const { accessId, next } = await createVaultOpen(page, { confirm: false });
   assert.equal(next, 'sheet');
   assert.equal(await viewOf(page), 'sheet');
   assert.equal(await confirmSheet(page), accessId);
@@ -70,7 +72,7 @@ test('confirm: false leaves the access sheet open for confirmSheet(); waitForVie
 
 test('a scope with a join code: createVault needs the code as an option; a missing code is a DriveError, a wrong one is the error of the dialog', { timeout: 120000 }, async () => {
   const code = 'K7M2QX9A-secret';
-  const created = await mock.createScope('joinscope', { enrollment: 'join_code', joinCode: code });
+  const created = await mock.createScope('joinscope', { joinCode: code });
   const open2 = async () => {
     const page = (await (await browser.newContext()).newPage());
     await page.goto(appUrl);
@@ -178,7 +180,7 @@ test('formError of a dialog that closed a moment ago returns "" at once (a locat
 test('redeemInvite: an invite code of the owner opens a vault for a member in another browser; a wrong code is a DriveError', { timeout: 180000 }, async () => {
   const owner = await open(await browser.newContext());
   await owner.evaluate(() => { window.p = store.unlock(); });
-  await createVault(owner);
+  await createVaultOpen(owner);
   await owner.evaluate(() => window.p);
   await owner.evaluate(() => { window.sp = store.openVault(); });
   await waitForView(owner, 'share');
@@ -201,19 +203,19 @@ test('redeemInvite: an invite code of the owner opens a vault for a member in an
 test('confirmSheet: a sheet that cannot be confirmed is a DriveError with the text of the dialog, not a timeout of the disabled button', { timeout: 120000 }, async () => {
   const page = await open(await browser.newContext());
   await page.evaluate(() => { window.p = store.unlock(); });
-  await createVault(page, { confirm: false });
+  await createVaultOpen(page, { confirm: false });
   // the app (or a bug) makes the checkbox impossible to tick
   await page.evaluate(() => { const c = document.querySelector('[data-wds="sheet-confirm"]'); c.disabled = true; });
   await assert.rejects(confirmSheet(page), (e) => e instanceof DriveError && /the access sheet could not be confirmed/.test(e.message) && /the dialog says/.test(e.message));
 });
 
-// An app that calls migrateLocal after the unlock: unlock() and createVault() end on the question (next: 'migrate') instead of waiting for a dialog that is gone.
+// An app that calls migrateLocal after the unlock: unlock() and createVaultOpen() end on the question (next: 'migrate') instead of waiting for a dialog that is gone.
 const startMigration = (page, n) => page.evaluate((n) => { localStorage.setItem('old.key', '{"a":1}'); window.p = store.unlock().then(() => store.migrateLocal({ id: 'drive', localStorage: ['old.key'], map: () => ({ name: 'moved-' + n, value: { t: n } }) })); }, n);
 test('createVault and unlock resolve with next "migrate" when the app calls migrateLocal after the unlock; answerMigration then answers the question', { timeout: 180000 }, async () => {
   const context = await browser.newContext({ acceptDownloads: true });
   const page = await open(context);
   await startMigration(page, 1);
-  const made = await createVault(page);
+  const made = await createVaultOpen(page);
   assert.equal(made.next, 'migrate');
   assert.equal((await answerMigration(page)).backup !== null, true);
   assert.deepEqual(await page.evaluate(() => window.p), { status: 'migrated' });

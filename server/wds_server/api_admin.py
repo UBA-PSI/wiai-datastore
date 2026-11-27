@@ -10,7 +10,7 @@ from .errors import ApiError, bad_request, not_found, read_only, rate_limited, s
 from .roster import apply_roster, parse_keyring, parse_new_slots, parse_roster
 from .routing import authenticate_op, endpoint, svc_of
 from .scopes import create_scope, patch_scope
-from .service import RECOVERY_WAIT_CODE, RECOVERY_WAIT_CONTACT
+from .service import RECOVERY_WAIT
 from .util import b32c_decode, b64u_encode, sha256
 from .validate import valid_vault_id
 from .web import client_ip, expect_keys, json_response, read_json
@@ -20,13 +20,13 @@ PREFIX = "/datastore/api/v1/admin"
 
 
 def _create_scope(svc, body):
-    expect_keys(body, {"slug", "name"}, {"enrollment", "join_code", "hibp", "limits"})
+    expect_keys(body, {"slug", "name"}, {"join_code", "limits"})
     if svc.read_only():
         raise read_only()
     with svc.db.connection() as conn:
         with transaction(conn):
-            row = create_scope(svc, conn, slug=body["slug"], name=body["name"], enrollment=body.get("enrollment", "join_code"),
-                               join_code=body.get("join_code"), hibp=body.get("hibp", True), limits=body.get("limits"))
+            row = create_scope(svc, conn, slug=body["slug"], name=body["name"], join_code=body.get("join_code"),
+                               limits=body.get("limits"))
             svc.audit(conn, "operator", "scope_created", row["scope_id"])
             return scope_doc(svc, row, admin=True)
 
@@ -39,7 +39,7 @@ async def post_scope(request):
 
 
 def _patch_scope(svc, scope_id, body):
-    expect_keys(body, set(), {"status", "enrollment", "join_code", "hibp", "limits", "name"})
+    expect_keys(body, set(), {"status", "join_code", "limits", "name"})
     with svc.db.connection() as conn:
         with transaction(conn):
             row = patch_scope(svc, conn, scope_id, body)
@@ -99,7 +99,7 @@ def _pending(conn, vault_id):
 
 
 def _recovery_doc(r):
-    return {"method": r["method"], "requested": r["requested"], "ready_at": r["ready_at"]} if r else None
+    return {"requested": r["requested"], "ready_at": r["ready_at"]} if r else None
 
 
 def _get_vault(svc, vault_id):
@@ -109,8 +109,7 @@ def _get_vault(svc, vault_id):
             svc.audit(conn, "operator", "vault_status", v["scope_id"], vault_id)
             return {"vault": vault_id, "scope": v["scope_id"], "created": v["created"], "deleted": v["deleted"],
                     "epoch": v["epoch"], "roster_version": v["roster_version"], "bytes": v["bytes"],
-                    "recovery": _recovery_doc(_pending(conn, vault_id)),
-                    "has_recovery_contact": v["recovery_contact"] is not None}
+                    "recovery": _recovery_doc(_pending(conn, vault_id))}
 
 
 async def get_vault(request):
@@ -121,17 +120,11 @@ async def get_vault(request):
 
 
 def _recovery_start(svc, ip, vault_id, body):
-    expect_keys(body, set(), {"recovery_code", "contact"})
-    if ("recovery_code" in body) == ("contact" in body):
-        raise bad_request("Send either recovery_code or contact.")
-    code_bytes = None
-    if "recovery_code" in body:
-        try:
-            code_bytes = b32c_decode(body["recovery_code"], 17)
-        except ValueError:
-            raise bad_request("Malformed recovery code.") from None
-    elif body["contact"] is not True:
-        raise bad_request("contact must be true.")
+    expect_keys(body, {"recovery_code"})
+    try:
+        code_bytes = b32c_decode(body["recovery_code"], 17)
+    except ValueError:
+        raise bad_request("Malformed recovery code.") from None
     now = svc.now()
     with svc.db.connection() as conn:
         with transaction(conn):
@@ -139,23 +132,19 @@ def _recovery_start(svc, ip, vault_id, body):
             _no_sandbox(svc, v)
             if v["deleted"] is not None:
                 raise ApiError(410, "vault_deleted", "This vault has been deleted.")
-            if code_bytes is not None:
-                retry = svc.limiter.blocked(ip, None, now)
-                if retry:
-                    raise rate_limited(retry)
-                if not hmac.compare_digest(b64u_encode(sha256(code_bytes)).encode(), v["recovery_hash"].encode()):
-                    svc.limiter.failure(ip, None, now)
-                    raise ApiError(403, "recovery_code_invalid", "The recovery code is wrong.")
-            elif v["recovery_contact"] is None:
-                raise ApiError(409, "no_recovery_contact", "This vault has no recovery contact.")
+            retry = svc.limiter.blocked(ip, None, now)
+            if retry:
+                raise rate_limited(retry)
+            if not hmac.compare_digest(b64u_encode(sha256(code_bytes)).encode(), v["recovery_hash"].encode()):
+                svc.limiter.failure(ip, None, now)
+                raise ApiError(403, "recovery_code_invalid", "The emergency code is wrong.")
             if _pending(conn, vault_id):
                 raise ApiError(409, "recovery_pending", "A recovery is already pending.")
-            method = "code" if code_bytes is not None else "contact"
-            ready = now + (RECOVERY_WAIT_CODE if method == "code" else RECOVERY_WAIT_CONTACT)
-            conn.execute("INSERT INTO recoveries (vault_id, method, requested, ready_at, state) VALUES (?,?,?,?,'pending')",
-                         (vault_id, method, now, ready))
-            svc.audit(conn, "operator", "recovery_started", v["scope_id"], vault_id, method)
-            return {"method": method, "requested": now, "ready_at": ready}
+            ready = now + RECOVERY_WAIT
+            conn.execute("INSERT INTO recoveries (vault_id, requested, ready_at, state) VALUES (?,?,?,'pending')",
+                         (vault_id, now, ready))
+            svc.audit(conn, "operator", "recovery_started", v["scope_id"], vault_id)
+            return {"requested": now, "ready_at": ready}
 
 
 async def start_recovery(request):

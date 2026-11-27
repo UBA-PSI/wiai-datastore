@@ -135,7 +135,7 @@ It rejects only with `UsageError` for wrong options (before anything is read); e
 ### Sandbox
 
 When the scope is a sandbox (open enrollment, small limits, all data deleted every night) the library says so: dialog titles start with "Sandbox:" / "Testumgebung:", the create button reads "Create sandbox vault", every dialog shows a banner
-(`data-wds="sandbox-banner"`) and a small badge in the bottom-left corner (`data-wds="sandbox-badge"`, `pointer-events: none`) stays on the page; both use inline `!important` styles. There is no recovery code in the sandbox.
+(`data-wds="sandbox-banner"`) and a small badge in the bottom-left corner (`data-wds="sandbox-badge"`, `pointer-events: none`) stays on the page; both use inline `!important` styles. There is no emergency code in the sandbox.
 A remembered access ID older than the last wipe is forgotten, and a session whose vault vanished after the wipe time reloads the page, whose unlock dialog says that the sandbox was emptied.
 
 ### Theming

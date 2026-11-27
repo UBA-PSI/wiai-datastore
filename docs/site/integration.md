@@ -19,7 +19,7 @@ The rules that matter are in llms.txt; they are not repeated here. What this gui
 
 ## 1. Register a scope
 
-Staff of the University of Bamberg open the dashboard at {{base}}/, sign in with login.psi and choose "Create a new app" (a name, a contact e-mail address, optionally a description). The dashboard then shows the **scope ID** (the "app ID": a short name plus six random characters, like `notenrechner-k7m2a9`), the **text for Claude** (the scope's settings and the section for the app's CLAUDE.md and AGENTS.md) and the **join code**.
+Staff of the University of Bamberg open the dashboard at {{base}}/, sign in with login.psi and choose "Create a new app" (a name, a contact e-mail address, optionally a description). The dashboard then shows the **scope ID** (the "app ID": a short name plus six random characters, like `notenrechner-k7m2a9`), the **text for Claude** (it is also the section for the app's CLAUDE.md and AGENTS.md) and the **join code**.
 The scope ID is public and is written into the app. The join code is not: hand it to the users, never put it into the app. Staff see number, size and dates of the vaults, never contents.
 
 ## 2. The script tag
@@ -43,7 +43,7 @@ One fixed policy. Put it into the head, right after `<meta charset>`, before any
 <meta http-equiv="Content-Security-Policy" content="{{csp}}">
 ```
 
-Nothing loads except the library from {{base}}/client/; the page may talk only to the API ({{base}}/api/) and to the Pwned Passwords range service (the breach check of the passphrase dialogs, section 11). `'wasm-unsafe-eval'` is needed by the Argon2id key derivation, `'unsafe-inline'` by inline scripts and styles; `'self'` is left out because it means something else on file:// in each browser.
+Nothing loads except the library from {{base}}/client/; the page may talk only to the API ({{base}}/api/); that includes the breach check of the passphrase dialogs, which the server answers (section 11). `'wasm-unsafe-eval'` is needed by the Argon2id key derivation, `'unsafe-inline'` by inline scripts and styles; `'self'` is left out because it means something else on file:// in each browser.
 
 - You may add inert sources only: `font-src data:`, `media-src blob: data:`, `img-src https://…`. Never add hosts to `script-src` or `connect-src`, never `default-src *` or `'unsafe-eval'`. An app that talks to other services needs a different design: ask the developer.
 - `form-action 'none'` blocks a real form submission only. A form whose submit handler calls `event.preventDefault()` works as usual.
@@ -60,7 +60,7 @@ Every call that touches data unlocks first (the library's dialog: create a vault
 |---|---|
 | `await store.unlock()` | Opens the dialog if needed; resolves `status()`. |
 | `store.status()` | `{ unlocked, role, sandbox }`; `role` is `owner`, `write` or `read`. Never show or log the access ID. |
-| `await store.get(name)` | The JSON value, or a `Blob` (stored MIME type kept) for bytes; `undefined` when missing. Asks the server every time. The version it returns is what the next save of that record builds on: render lists from `items()`, and do not `get` a record that a form shows from `onChange`. An autosave editor with unsaved text keeps its base: its next save meets the other version in the dialog. |
+| `await store.get(name)` | The JSON value, or a `Blob` (stored MIME type kept) for bytes; `undefined` when missing. Asks the server every time. The version it returns is what the next save of that record builds on: render lists from `items()`, and do not `get` a record that a form shows from `onChange` (the one exception is the reload of an open item named with `remote: true` when nothing was typed, section 12). An autosave editor with unsaved text keeps its base: its next save meets the other version in the dialog. |
 | `await store.set(name, value, { mime })` | Saves a JSON value, `Blob`, `File`, `ArrayBuffer` or `Uint8Array` (bytes). Resolves `{ name, version, size, resolution, value? }`; `resolution` is `saved`, `mine`, `theirs` or `merged` (section 7), `value` is what is stored now for `theirs`/`merged`. `set` on an existing record this page has not read is a conflict (dialog or `onConflict`): read the record, show it, then save; replacing blind is the exception. |
 | `await store.remove(name)` | `{ name, deleted, resolution, value? }`; the deletion stays in the history. |
 | `store.collection(prefix, { meta })` | A list of records with an index (section 6); `add` and `set` take `{ meta, mime }`, an explicit `meta` replaces the `meta` function. |
@@ -174,7 +174,7 @@ A handler may be async; one that throws also hands over to the dialog. `set` and
 ## 8. Members and the vault dialog
 
 Every user has their own vault. `store.openVault()` opens the vault dialog, **for every role**: the owner sees the members and creates invites (role `write` or `read`, with a label) or revokes access (the vault is re-encrypted under new keys, with a progress bar that resumes after an interruption); everyone sees their own access, can change the passphrase, show the access sheet again, "Export everything (ZIP, unencrypted)" and "Lock now". Offer one "Vault" button in every app; it is also the way out if the app is retired (anybody can export with {{base}}/export/ using the access ID and passphrase; the ZIP is not an import format). A new member's access takes effect for the app after its next load.
-Members see the other members' changes through `onChange`. There is one owner per vault; if the founder loses passphrase and recovery code, the faculty can add a new owner (users.en.md, "Recovery").
+Members see the other members' changes through `onChange`. There is one owner per vault; if the founder forgets the passphrase, the faculty can add a new owner with the founder's emergency code (users.en.md, "Recovery"); without that code the data is lost.
 
 ## 9. Errors
 
@@ -219,24 +219,22 @@ The report ends with "Not tested": a second device, a conflict, a read-only memb
 
 ## 11. What to tell users
 
-Put this into the app's README or start page, adapted. English first, German below (German uses "Sie"). **The first sentence of each language is the official wording of the faculty**: keep it word for word, in the language of the text (any other language uses the English one), and never claim more ("only you can read your data") or less. The second sentence is the breach-check sentence: keep it when the scope has the breach check on (the default; the dashboard prompt and wds-verify say which), delete it when off. The rest may be shortened.
+Put this into the app's README or start page, adapted. English first, German below (German uses "Sie"). **The first sentence of each language is the official wording of the faculty**: keep it word for word, in the language of the text (any other language uses the English one), and never claim more ("only you can read your data") or less. The rest may be shortened. The breach check of the passphrase dialogs is explained on the service's privacy pages and in users.en.md; the app's text does not have to repeat it.
 
 ```text
 Data is end-to-end encrypted; the faculty holds a recovery key for emergencies.
-When you choose a passphrase, your browser checks it against known data breaches with the Pwned Passwords service (USA); the service receives your IP address and the first five characters of a checksum of the passphrase, never the passphrase itself.
 Your data is stored on a faculty server. You need:
 1. The join code from the person who runs this app (only for creating a vault).
 2. A passphrase of your own, at least 12 characters. It cannot be reset: the server does not know it.
-3. Your access sheet (access ID and recovery code). Print it or save it somewhere apart from this device.
-With your recovery code the faculty can restore access after a documented procedure. Details: {{base}}/docs/users.en
+3. Your access sheet (access ID and emergency code). Print it or save it somewhere apart from this device.
+With your emergency code the faculty can restore access after a documented procedure. Details: {{base}}/docs/users.en
 
 Die Daten sind Ende-zu-Ende-verschlüsselt; die Fakultät verwahrt für Notfälle einen Wiederherstellungsschlüssel.
-Wenn Sie eine Passphrase wählen, prüft Ihr Browser sie beim Dienst Pwned Passwords (USA) auf bekannte Datenlecks; der Dienst erhält Ihre IP-Adresse und die ersten fünf Zeichen einer Prüfsumme der Passphrase, nie die Passphrase selbst.
 Ihre Daten liegen auf einem Server der Fakultät. Sie brauchen:
 1. Den Beitrittscode von der Person, die diese App betreibt (nur zum Anlegen Ihres Tresors).
 2. Eine eigene Passphrase mit mindestens 12 Zeichen. Sie lässt sich nicht zurücksetzen: Der Server kennt sie nicht.
-3. Ihr Zugangsblatt (Zugangskennung und Wiederherstellungscode). Drucken oder speichern Sie es getrennt von diesem Gerät.
-Mit Ihrem Wiederherstellungscode kann die Fakultät nach einem dokumentierten Verfahren den Zugang wiederherstellen. Details: {{base}}/docs/users.de
+3. Ihr Zugangsblatt (Zugangskennung und Notfallcode). Drucken oder speichern Sie es getrennt von diesem Gerät.
+Mit Ihrem Notfallcode kann die Fakultät nach einem dokumentierten Verfahren den Zugang wiederherstellen. Details: {{base}}/docs/users.de
 ```
 
 Next to a download button (a CSV, an attachment) say that the file is **not encrypted**. A text such as "saved locally" or "stays on this device" is wrong now: replace it.

@@ -13,15 +13,14 @@ dependencies; the only library code is `../client/src/wds-core.js`. Playwright i
 ## wds-recover
 
 ```sh
-node tools/wds-recover.mjs start    <vault-id>                      # asks for the recovery code; starts the 72 hour waiting period
+node tools/wds-recover.mjs start    <vault-id>                      # asks for the emergency code (the tool calls it the recovery code); starts the 72 hour waiting period
 node tools/wds-recover.mjs start    <vault-id> -                    # the code from stdin: echo CODE | node tools/wds-recover.mjs start <vault-id> -
-node tools/wds-recover.mjs start    <vault-id> --contact            # recovery contact: 7 days (the operator checks the contact by mail first)
 node tools/wds-recover.mjs status   <vault-id>
 node tools/wds-recover.mjs cancel   <vault-id>
 node tools/wds-recover.mjs complete <vault-id> --escrow-key ~/wiai-datastore-escrow/wds-escrow-current-private.json
 ```
 
-The recovery code is a credential that starts a recovery, so it is not taken from the argument list (shell history, `ps`): the tool asks for it, or reads stdin.
+The emergency code is a credential that starts a recovery, so it is not taken from the argument list (shell history, `ps`): the tool asks for it, or reads stdin.
 A code given as an argument still works and triggers a warning. The tool refuses to send the operator token to a `--base` that is not https (localhost, 127.0.0.1 and [::1] excepted).
 
 Common options: `--base <url>` (default `https://wiai.uni-bamberg.de/datastore`), `--token-file <file>` (default
@@ -36,7 +35,7 @@ into memory only. The tool writes no file, and it never prints the token or the 
 the waiting period is not over.
 
 Which escrow key file? The roster of the vault names the key set of its escrow slot; `complete` says so when the file does not
-match. Vault IDs are on the key file of the user (`"vault"`), and in the dashboard.
+match. Vault IDs are in the dashboard; operator.md section 3 shows how to find one from an access ID.
 
 ## wds-verify
 
@@ -49,7 +48,7 @@ node tools/wds-verify.mjs path/to/app.html [--config wds-verify.json]
 The report (Markdown) goes to stdout: paste it into the app's README. Exit codes: 0 passed, 1 a check failed, 2 the tool could not run (no Playwright, bad arguments), 3 the sandbox is unavailable (rate limited, full, switched off: not an app finding; wait, at most an hour).
 The app opens in Chromium from a `file://` page against the public sandbox scope of the real service (open enrollment, small quotas, everything deleted every night). The tool replaces the scope ID in a copy of the page, so the app file keeps its own. Three families of checks:
 
-1. **Static checks** (only Node): one script tag `https://wiai.uni-bamberg.de/datastore/client/wds-<version>.js` with `crossorigin="anonymous"`, the `integrity` hash of that published version and the `onerror` fallback of integration.md, section 2 (a message in the app's language is an info); a CSP meta tag that is not broader than the recommended one, placed before the first script (additions of `font-src data:`, `media-src blob: data:` and `img-src https://host` are accepted; `'self'` in `script-src` or a missing `base-uri` / `form-action` fail); no other scripts; no `fetch`, `XMLHttpRequest`, `WebSocket` or `sendBeacon` to the datastore host; the sandbox scope ID anywhere in the app fails; CSS that sets `display`, `visibility` or `opacity` on `.wds-` classes or `[data-wds…]` elements fails; `indexedDB` or localStorage access that `store.migrateLocal` would do (a hand-made migration) and `localStorage.clear()` warn; no `<html lang>` warns; an info says when neither the page nor the README next to it holds the official privacy sentence. The scope check fetches the public document of the app's scope ID: an unknown scope fails; the report prints enrollment, breach check and limits; with the breach check on and neither the page nor the README carrying the breach-check sentence, an info prints it.
+1. **Static checks** (only Node): one script tag `https://wiai.uni-bamberg.de/datastore/client/wds-<version>.js` with `crossorigin="anonymous"`, the `integrity` hash of that published version and the `onerror` fallback of integration.md, section 2 (a message in the app's language is an info); a CSP meta tag that is not broader than the recommended one, placed before the first script (additions of `font-src data:`, `media-src blob: data:` and `img-src https://host` are accepted; `'self'` in `script-src` or a missing `base-uri` / `form-action` fail); no other scripts; no `fetch`, `XMLHttpRequest`, `WebSocket` or `sendBeacon` to the datastore host; the sandbox scope ID anywhere in the app fails; CSS that sets `display`, `visibility` or `opacity` on `.wds-` classes or `[data-wds…]` elements fails; `indexedDB` or localStorage access that `store.migrateLocal` would do (a hand-made migration) and `localStorage.clear()` warn; no `<html lang>` warns; an info says when neither the page nor the README next to it holds the official privacy sentence. The scope check fetches the public document of the app's scope ID: an unknown scope fails; the report prints the limits.
 2. **The canary leak search.** The tool creates a vault through the library's dialogs, types unique canary strings into the fields (text fields get text; date, time, number, select and file inputs get valid generated values; a plain form is submitted with `button[type=submit]` or Enter when no save word matches), presses the buttons whose text is a save word (save, speichern, add, hinzufügen, anlegen, create, buchen, book, reservieren, senden, submit, ok, and a `data-wds-verify="save"` mark) but never a delete word, runs the steps of `wds-verify.json`, and searches the canaries and the vault passphrase in every request (URL, header, body), page URL, WebSocket frame, localStorage, sessionStorage, IndexedDB, Cache Storage, cookie, console line and download (raw, URL-encoded, base64, hex, UTF-16). It warns about a record written three or more times within a second without a button press (use autosave) and about one record that holds the data of several items. It fails when nothing was stored, because then it proved nothing. Downloads that a `download` step asks for are information.
 3. **Data after reload.** `store.lock()` must reload the page and the page must show no vault data until the person unlocks; then the tool reloads, unlocks with the passphrase and checks that the typed values are visible again (the page text and the field values right after the unlock and after every `afterReload` step, taken together). Pass: at least one typed value of every round is back. Fail: records were written, nothing is visible and there are no `afterReload` steps. Values that the app neither showed nor wrote to the store (input it rejected) are not expected back; the detail names them.
 

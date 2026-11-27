@@ -131,8 +131,7 @@ class DashCase(unittest.TestCase):
         return b
 
     def make_scope(self, b, name="My App", **over):
-        form = {"name": name, "contact_email": "dev@uni-bamberg.de", "enrollment": "join_code", "hibp": "1",
-                "description": "A test app"}
+        form = {"name": name, "contact_email": "dev@uni-bamberg.de", "description": "A test app"}
         form.update(over)
         r = b.post("/scopes", form)
         self.assertEqual(r.status, 303, r.text[:500])

@@ -122,7 +122,7 @@ async function newCtx(browser, { webdriver } = {}) {
     ctx = await browser.browserType().launchPersistentContext(dir, { ...(test.info().project.use.launchOptions || {}), ...options });
     persistent.push({ ctx, dir });
   } else ctx = await browser.newContext(options);
-  await ctx.route('https://api.pwnedpasswords.com/range/*', (route) => route.fulfill({ status: 200, contentType: 'text/plain', headers: { 'access-control-allow-origin': '*' }, body: '0018A45C4D1DEF81644B54AB7F969B88D65:0\r\n' }));
+  await ctx.route('**/api/v1/pwned/*', (route) => route.fulfill({ status: 200, contentType: 'text/plain', headers: { 'access-control-allow-origin': '*' }, body: '0018A45C4D1DEF81644B54AB7F969B88D65:0\r\n' }));
   if (webdriver === false) await ctx.addInitScript(() => { Object.defineProperty(Navigator.prototype, 'webdriver', { get: () => false, configurable: true }); });
   return ctx;
 }

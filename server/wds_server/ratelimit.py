@@ -51,7 +51,7 @@ class RateLimiter:
         if now - self._last_gc < 60 and len(self._events) < 10000:
             return
         self._last_gc = now
-        horizon = max(self.cfg.rate_ip_window, self.cfg.rate_id_window, self.cfg.rate_create_window)
+        horizon = max(self.cfg.rate_ip_window, self.cfg.rate_id_window, self.cfg.rate_create_window, self.cfg.rate_pwned_window)
         if self.cfg.sandbox is not None:
             horizon = max(horizon, self.cfg.sandbox.create_window, self.cfg.sandbox.create_global_window)
         for key in [k for k, q in self._events.items() if not q or q[-1] <= now - horizon]:
@@ -86,6 +86,19 @@ class RateLimiter:
             q = self._prune(("create", ip), now, self.cfg.rate_create_window)
             if len(q) >= self.cfg.rate_create:
                 return max(1, math.ceil(q[len(q) - self.cfg.rate_create] + self.cfg.rate_create_window - now))
+            q.append(now)
+            return 0
+
+    # -- breach check ----------------------------------------------------------------------------------------------
+
+    def pwned(self, ip: str, now: float) -> int:
+        """Count one breach-check request (cache hits too); returns Retry-After seconds when over the limit, else 0."""
+        ip = bucket(ip)
+        with self._lock:
+            self._gc(now)
+            q = self._prune(("pwned", ip), now, self.cfg.rate_pwned_window)
+            if len(q) >= self.cfg.rate_pwned:
+                return max(1, math.ceil(q[len(q) - self.cfg.rate_pwned] + self.cfg.rate_pwned_window - now))
             q.append(now)
             return 0
 

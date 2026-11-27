@@ -23,7 +23,6 @@
 
   var UI_VERSION = '1.0.0';
   var Err = Core.errors;
-  var HIBP_URL = 'https://api.pwnedpasswords.com/range/';
   var INTERNAL_PREFIX = '.wds/';          // record names reserved for the library (member labels)
   var LABELS_RECORD = INTERNAL_PREFIX + 'labels';
 
@@ -108,21 +107,16 @@
       'common.loading': 'Connecting to the storage service…', 'common.notifications': 'Notifications', 'common.thisEntry': 'this entry', 'common.back': 'Back',
 
       'unlock.title': 'Unlock your data', 'unlock.app': 'App: {name}', 'unlock.intro': 'Enter your access ID and your passphrase. Your data is encrypted on this device before it is stored.',
-      'unlock.accessId': 'Access ID', 'unlock.accessId.hint': 'Five groups of four characters. You find it on your access sheet or in your key file.', 'unlock.keyfile.choose': 'Choose key file…',
-      'unlock.keyfile.hint': 'Drop your key file anywhere on this window, or choose it. It fills in the access ID.',
-      'unlock.keyfile.loaded': 'Key file loaded.', 'unlock.passphrase': 'Passphrase', 'unlock.submit': 'Unlock',
+      'unlock.accessId': 'Access ID', 'unlock.accessId.hint': 'Five groups of four characters. You find it on your access sheet.', 'unlock.passphrase': 'Passphrase', 'unlock.submit': 'Unlock',
       'unlock.busy': 'Deriving your key. This takes a moment…', 'unlock.toCreate': 'Create a new vault', 'unlock.toRedeem': 'I have an invite code',
-      'unlock.recoveryEntered': 'This looks like a recovery code, not an access ID. Recovery codes are only for the faculty recovery procedure.',
+      'unlock.recoveryEntered': 'This looks like an emergency code, not an access ID. The emergency code is only for the faculty recovery procedure.',
 
       'create.title': 'Create your vault', 'create.intro': 'Your data is encrypted on this device with a key derived from your passphrase. Only you and the people you invite can open it.',
       'create.joinCode': 'Join code', 'create.joinCode.hint': 'You get the join code from the person who runs this app.', 'create.passphrase': 'Passphrase', 'create.repeat': 'Repeat passphrase',
       'create.passphrase.hint': 'At least 12 characters. Four or more unrelated words work well. The server cannot reset a forgotten passphrase.',
-      'create.contact': 'Recovery contact (optional)', 'create.contact.label': 'E-mail address',
-      'create.contact.hint': 'If you lose the passphrase and the recovery code, the faculty can only help if an address is stored here. It is stored on the server unencrypted, and recovery then takes 7 days.',
-      'create.escrow.title': 'Who can read your data?',
-      'create.escrow.text': 'The server stores only encrypted data. One exception exists by design: the faculty keeps a recovery key. If you lose your passphrase, the faculty can restore access after a documented procedure and a waiting period of 72 hours, and the holder of that key could technically decrypt every vault.',
+      'escrow.title': 'Who can read your data?',
+      'escrow.text': 'Data is end-to-end encrypted; the faculty holds a recovery key for emergencies. Whoever holds that key could technically decrypt every vault; the faculty uses it only in a documented procedure with a waiting period of 72 hours.',
       'create.privacy': 'Privacy information', 'create.submit': 'Create vault', 'create.busy': 'Creating your vault. This takes a moment…',
-      'create.closed': 'New vaults cannot be created for this app at the moment.',
       'create.suspended': 'This app is paused by the faculty. New vaults cannot be created.', 'create.back': 'I already have a vault',
 
       'pw.show': 'Show passphrase', 'pw.tooShort': 'At least 12 characters are required ({n} so far).',
@@ -131,20 +125,18 @@
       'pw.weak.noBreachCheck': 'This passphrase is not strong enough: the check against known data breaches is not available, so a stronger passphrase is needed. Use more, longer and unrelated words.',
       'pw.pwned': 'This passphrase appears {count} times in known data breaches. Choose another one.',
       'pw.hibp.unavailable': 'The breach check could not be reached, so this passphrase was not checked against known breaches.', 'pw.hibp.checking': 'Checking against known data breaches…',
-      'pw.hibp.note': 'The breach check sends only the first 5 characters of a checksum of your passphrase to api.pwnedpasswords.com, a US service. The passphrase itself never leaves this device.',
+      'pw.hibp.note': 'The breach check sends the first five characters of a checksum of your passphrase to the faculty server, which asks Pwned Passwords (USA) on your behalf. The service sees neither your passphrase nor your IP address.',
       'pw.strength': 'Strength: {label}', 'pw.label.0': 'very weak', 'pw.label.1': 'weak', 'pw.label.2': 'fair', 'pw.label.3': 'good', 'pw.label.4': 'strong', 'pw.empty': 'Enter a passphrase.',
 
       'sheet.title': 'Save your access sheet',
-      'sheet.intro.owner': 'You need the access ID and your passphrase to open your data on another device. The recovery code is the only way back if you forget your passphrase.',
+      'sheet.intro.owner': 'You need the access ID and your passphrase to open your data on another device. The emergency code is the only way back if you forget your passphrase.',
       'sheet.intro.member': 'You need the access ID and your passphrase to open the data on another device.',
-      'sheet.app': 'App', 'sheet.accessId': 'Access ID', 'sheet.recovery': 'Recovery code', 'sheet.created': 'Created',
-      'sheet.service': 'Service', 'sheet.access': 'Access', 'sheet.keyfile': 'Download key file', 'sheet.print': 'Print access sheet', 'sheet.download': 'Download access sheet (HTML)',
-      'sheet.keyfile.hint': 'The key file holds no secret, only the app and your access ID. Drop it into the app on a new device instead of typing the ID.',
+      'sheet.app': 'App', 'sheet.accessId': 'Access ID', 'sheet.recovery': 'Emergency code', 'sheet.created': 'Created',
+      'sheet.service': 'Service', 'sheet.access': 'Access', 'sheet.print': 'Print access sheet', 'sheet.download': 'Download access sheet (HTML)',
       'sheet.passphrase.note': 'Your passphrase is not on this sheet. Remember it, or keep it in a password manager.',
-      'sheet.recovery.note': 'Keep the sheet apart from this computer. Whoever holds the recovery code can start a recovery request; you are told about such a request when you unlock and can cancel it during the 72-hour waiting period.',
-      'sheet.confirm.owner': 'I have saved the access sheet and the recovery code.', 'sheet.confirm.member': 'I have saved my access ID.',
-      'sheet.hibp.skipped': 'Note: the breach check was not available, so your passphrase was not checked against known breaches.', 'sheet.escrow.title': 'Faculty recovery key',
-      'sheet.escrow.text': 'The server stores only encrypted data. By design, the faculty keeps a recovery key: after a documented procedure and a waiting period it can restore access for whoever holds the recovery code, and the holder of the key could technically decrypt every vault.',
+      'sheet.recovery.note': 'Keep the sheet apart from this computer. Whoever holds the emergency code can start a recovery request; you are told about such a request when you unlock and can cancel it during the 72-hour waiting period.',
+      'sheet.confirm.owner': 'I have saved the access sheet and the emergency code.', 'sheet.confirm.member': 'I have saved my access ID.',
+      'sheet.hibp.skipped': 'Note: the breach check was not available, so your passphrase was not checked against known breaches.',
       'sheet.page.title': 'Access sheet', 'sheet.page.print': 'Print this page',
 
       'redeem.title': 'Join with an invite code', 'redeem.intro': 'Enter the invite code you received and choose your own passphrase. An invite code works only once.',
@@ -162,13 +154,13 @@
       'err.offline': 'The storage service cannot be reached. Check your internet connection and try again.',
       'err.integrity': 'A security check failed: the data from the server does not match what this device expects ({code}). Do not enter new data and contact the person who runs this app.',
       'err.rollback': 'The server showed older data than this device has seen before. This can be a fault or an attack. Do not continue and contact the person who runs this app.',
-      'err.generic': 'Something went wrong: {message}', 'err.keyfile.invalid': 'This is not a valid key file.', 'err.keyfile.other': 'This key file belongs to a different app or service.',
+      'err.generic': 'Something went wrong: {message}',
       'err.invite.invalid': 'This invite code is not valid. It has 48 characters; check it for typing errors.',
       'err.joinCode': 'The join code is not correct.', 'err.joinCode.missing': 'Enter the join code.',
       'err.vaultLimit': 'This app cannot take new users at the moment. Contact the person who runs it.',
       'err.noPins': 'This build of the storage library is missing the faculty key. Contact the author of the app.',
       'err.accessId.missing': 'Enter your access ID.', 'err.passphrase.missing': 'Enter your passphrase.',
-      'err.contact.invalid': 'This is not a valid e-mail address.', 'err.scope': 'This app is not registered with the storage service.',
+      'err.scope': 'This app is not registered with the storage service.',
 
       'note.advisory': 'This app uses an outdated version of the storage library. Please ask its author for an update.', 'note.newDevice': 'This device is new to your vault. That is normal.',
       'note.stateInvalid': 'The safety record kept on this device was damaged or changed and has been reset.',
@@ -192,9 +184,9 @@
       'conflict.intro': 'Another device or person changed {name} after you last loaded it. Choose which version to keep. Nothing is lost: the version you do not keep stays in the history.',
       'conflict.theirs': 'Their version', 'conflict.mine': 'Your version (not saved yet)', 'conflict.saved': 'saved {time}',
       'conflict.theirsDeleted': 'This entry was deleted by someone else.', 'conflict.mineDeleted': 'You wanted to delete this entry.', 'conflict.noTheirs': 'There is no saved version.',
-      'conflict.keepTheirs': 'Keep theirs', 'conflict.keepMine': 'Keep mine', 'conflict.downloadBoth': 'Download both', 'conflict.file': 'File ({mime}), {size}', 'conflict.truncated': '(shortened)',
+      'conflict.keepTheirs': 'Keep theirs', 'conflict.keepMine': 'Keep mine', 'conflict.file': 'File ({mime}), {size}', 'conflict.truncated': '(shortened)',
       'conflict.delete.title': 'This entry was changed in the meantime',
-      'conflict.delete.intro': 'Another device or person changed {name} after you last loaded it, and you wanted to delete it. Delete it anyway, or keep the newer version?',
+      'conflict.delete.intro': 'Another device or person changed {name} after you last loaded it, and you wanted to delete it. Delete it anyway, or keep the newer version? A deleted entry stays in the history.',
       'conflict.delete.keepMine': 'Delete anyway', 'conflict.delete.keepTheirs': 'Keep the entry',
 
       'history.title': 'History of {name}', 'history.intro': 'The service keeps the most recent versions. Restoring saves an old version again as the newest one.',
@@ -202,8 +194,7 @@
       'history.preview': 'Preview', 'history.restore': 'Restore', 'history.empty': 'There are no versions yet.', 'history.unavailable': 'This version is no longer available.',
 
       'share.title': 'Vault', 'share.people': 'People with access', 'share.you': 'You', 'share.member': 'Member',
-      'share.escrow': 'Faculty recovery key', 'share.escrow.badge': 'Faculty, recovery only',
-      'share.escrow.hint': 'Part of every vault and cannot be removed. It lets the faculty restore access after a documented recovery procedure.',
+      'share.escrow': 'Faculty key', 'share.escrow.badge': 'Faculty, recovery only',
       'share.status.active': 'Active', 'share.status.invited': 'Invite not used yet, valid until {time}', 'share.status.expired': 'Invite expired',
       'share.status.redeemed': 'Joined {time}', 'share.status.renewal': 'New keys waiting for approval', 'share.addedByFaculty': 'Added by the faculty during a recovery',
       'share.revoke': 'Revoke', 'share.cancelInvite': 'Cancel invite', 'share.role': 'Access of {label}', 'share.status.opened': 'Invite opened with its code, not redeemed yet, valid until {time}',
@@ -222,16 +213,14 @@
       'share.revoke.progress': 'Re-encrypting: {done} of {total}', 'share.revoke.starting': 'Preparing the new key…', 'share.revoke.done': 'Access revoked. All data is re-encrypted.',
       'share.revoke.partial': 'Access revoked. The re-encryption continues the next time you unlock.',
       'share.rekey.pending': 'Re-encryption of older data is not finished.', 'share.rekey.continue': 'Continue now', 'share.recovered.title': 'The faculty added an owner access',
-      'share.recovered.text': 'After a recovery request, the faculty added a new owner access to this vault. If you did not expect this, contact the faculty. Your own access stays valid, and you can revoke the added owner access in the sharing dialog. You have to confirm before you can change who has access.',
+      'share.recovered.text': 'After a recovery request, the faculty added a new owner access to this vault. If you did not expect this, contact the faculty. Your own access stays valid, and you can revoke the added owner access in the vault dialog (Vault). You have to confirm before you can change who has access.',
       'share.recovered.ack': 'I know about this', 'share.recovery.title': 'A recovery of this vault was requested',
       'share.recovery.text': 'Requested {time}. After {ready} the faculty can restore access for the requester. If nobody asked on your behalf, cancel the request now.',
       'share.recovery.cancel': 'Cancel the request', 'share.recovery.keep': 'Leave it as it is', 'share.recovery.cancelled': 'The recovery request was cancelled.', 'share.me.title': 'My access',
       'share.me.role': 'You have access as: {role}.', 'share.me.onlyOwner': 'Only the owner can invite people or change who has access.',
       'share.me.passphrase': 'Change passphrase', 'share.me.passphrase.new': 'New passphrase', 'share.me.passphrase.submit': 'Change passphrase',
-      'share.me.passphrase.done': 'Passphrase changed. Use the new one from now on.', 'share.me.renew': 'Renew my keys',
-      'share.me.renew.hint': 'Replaces the keys of this access with fresh ones. Do this if you suspect that somebody else saw your invite code.',
-      'share.me.renew.done': 'Keys renewed.', 'share.me.keyfile': 'Download key file', 'share.me.lock': 'Lock now',
-      'share.me.keyfile.hint': 'For a new device: the file holds no secret, only the app and your access ID. Your passphrase is still needed.',
+      'share.me.passphrase.done': 'Passphrase changed. Use the new one from now on.',
+      'share.me.lock': 'Lock now',
       'share.me.lock.hint': 'Removes all data from the memory of this page. Unlocking needs your passphrase.', 'share.me.sheet': 'Show access sheet',
       'share.me.sheet.hint': 'Shows your access ID again, to print or save.', 'share.me.export': 'Export everything (ZIP, unencrypted)',
       'share.me.export.hint': 'All records of this vault in one ZIP file. The file is not encrypted: keep it safe.',
@@ -260,23 +249,19 @@
 
       'unlock.title': 'Daten entsperren', 'unlock.app': 'App: {name}',
       'unlock.intro': 'Geben Sie Ihre Zugangskennung und Ihre Passphrase ein. Ihre Daten werden auf diesem Gerät verschlüsselt, bevor sie gespeichert werden.', 'unlock.accessId': 'Zugangskennung',
-      'unlock.accessId.hint': 'Fünf Gruppen mit je vier Zeichen. Sie steht auf Ihrem Zugangsblatt und in Ihrer Schlüsseldatei.', 'unlock.keyfile.choose': 'Schlüsseldatei wählen …',
-      'unlock.keyfile.hint': 'Ziehen Sie Ihre Schlüsseldatei auf dieses Fenster oder wählen Sie sie aus. Die Zugangskennung wird dann eingetragen.',
-      'unlock.keyfile.loaded': 'Schlüsseldatei geladen.', 'unlock.passphrase': 'Passphrase', 'unlock.submit': 'Entsperren',
+      'unlock.accessId.hint': 'Fünf Gruppen mit je vier Zeichen. Sie steht auf Ihrem Zugangsblatt.', 'unlock.passphrase': 'Passphrase', 'unlock.submit': 'Entsperren',
       'unlock.busy': 'Ihr Schlüssel wird berechnet. Das dauert einen Moment …', 'unlock.toCreate': 'Neuen Tresor anlegen', 'unlock.toRedeem': 'Ich habe einen Einladungscode',
-      'unlock.recoveryEntered': 'Das sieht nach einem Wiederherstellungscode aus, nicht nach einer Zugangskennung. Wiederherstellungscodes werden nur für das Wiederherstellungsverfahren der Fakultät gebraucht.',
+      'unlock.recoveryEntered': 'Das sieht nach einem Notfallcode aus, nicht nach einer Zugangskennung. Der Notfallcode wird nur für das Wiederherstellungsverfahren der Fakultät gebraucht.',
 
       'create.title': 'Tresor anlegen',
       'create.intro': 'Ihre Daten werden auf diesem Gerät mit einem Schlüssel verschlüsselt, der aus Ihrer Passphrase abgeleitet wird. Nur Sie und die Personen, die Sie einladen, können sie öffnen.',
       'create.joinCode': 'Beitrittscode', 'create.joinCode.hint': 'Den Beitrittscode erhalten Sie von der Person, die diese App betreibt.',
       'create.passphrase': 'Passphrase', 'create.repeat': 'Passphrase wiederholen',
       'create.passphrase.hint': 'Mindestens 12 Zeichen. Vier oder mehr unzusammenhängende Wörter eignen sich gut. Der Server kann eine vergessene Passphrase nicht zurücksetzen.',
-      'create.contact': 'Kontakt zur Wiederherstellung (optional)', 'create.contact.label': 'E-Mail-Adresse',
-      'create.contact.hint': 'Wenn Sie Passphrase und Wiederherstellungscode verlieren, kann die Fakultät nur helfen, wenn hier eine Adresse hinterlegt ist. Sie wird unverschlüsselt auf dem Server gespeichert; die Wiederherstellung dauert dann 7 Tage.',
-      'create.escrow.title': 'Wer kann Ihre Daten lesen?',
-      'create.escrow.text': 'Der Server speichert nur verschlüsselte Daten. Eine Ausnahme besteht absichtlich: Die Fakultät verwahrt einen Wiederherstellungsschlüssel. Wenn Sie Ihre Passphrase verlieren, kann die Fakultät nach einem dokumentierten Verfahren und einer Wartezeit von 72 Stunden den Zugang wiederherstellen, und wer diesen Schlüssel besitzt, könnte technisch jeden Tresor entschlüsseln.',
+      'escrow.title': 'Wer kann Ihre Daten lesen?',
+      'escrow.text': 'Die Daten sind Ende-zu-Ende-verschlüsselt; die Fakultät verwahrt für Notfälle einen Wiederherstellungsschlüssel. Wer diesen Schlüssel besitzt, könnte technisch jeden Tresor entschlüsseln; die Fakultät nutzt ihn nur in einem dokumentierten Verfahren mit einer Wartezeit von 72 Stunden.',
       'create.privacy': 'Datenschutzinformationen', 'create.submit': 'Tresor anlegen', 'create.busy': 'Ihr Tresor wird angelegt. Das dauert einen Moment …',
-      'create.closed': 'Für diese App können derzeit keine neuen Tresore angelegt werden.', 'create.suspended': 'Diese App ist von der Fakultät pausiert. Neue Tresore können nicht angelegt werden.',
+      'create.suspended': 'Diese App ist von der Fakultät pausiert. Neue Tresore können nicht angelegt werden.',
       'create.back': 'Ich habe schon einen Tresor',
 
       'pw.show': 'Passphrase anzeigen', 'pw.tooShort': 'Mindestens 12 Zeichen sind nötig (bisher {n}).', 'pw.mismatch': 'Die beiden Passphrasen sind verschieden.',
@@ -286,23 +271,20 @@
       'pw.pwned': 'Diese Passphrase kommt {count}-mal in bekannten Datenlecks vor. Wählen Sie eine andere.',
       'pw.hibp.unavailable': 'Die Prüfung auf Datenlecks war nicht erreichbar, daher wurde diese Passphrase nicht gegen bekannte Datenlecks geprüft.',
       'pw.hibp.checking': 'Prüfung auf bekannte Datenlecks …',
-      'pw.hibp.note': 'Die Prüfung auf Datenlecks sendet nur die ersten 5 Zeichen einer Prüfsumme Ihrer Passphrase an api.pwnedpasswords.com, einen US-Dienst. Die Passphrase selbst verlässt dieses Gerät nie.',
+      'pw.hibp.note': 'Die Prüfung auf Datenlecks sendet die ersten fünf Zeichen einer Prüfsumme Ihrer Passphrase an den Server der Fakultät, der in Ihrem Namen bei Pwned Passwords (USA) nachfragt. Der Dienst erfährt weder Ihre Passphrase noch Ihre IP-Adresse.',
       'pw.strength': 'Stärke: {label}', 'pw.label.0': 'sehr schwach', 'pw.label.1': 'schwach', 'pw.label.2': 'mittel', 'pw.label.3': 'gut', 'pw.label.4': 'stark',
       'pw.empty': 'Geben Sie eine Passphrase ein.',
 
       'sheet.title': 'Zugangsblatt sichern',
-      'sheet.intro.owner': 'Zugangskennung und Passphrase brauchen Sie, um Ihre Daten auf einem anderen Gerät zu öffnen. Der Wiederherstellungscode ist der einzige Weg zurück, wenn Sie die Passphrase vergessen.',
+      'sheet.intro.owner': 'Zugangskennung und Passphrase brauchen Sie, um Ihre Daten auf einem anderen Gerät zu öffnen. Der Notfallcode ist der einzige Weg zurück, wenn Sie die Passphrase vergessen.',
       'sheet.intro.member': 'Zugangskennung und Passphrase brauchen Sie, um die Daten auf einem anderen Gerät zu öffnen.',
-      'sheet.app': 'App', 'sheet.accessId': 'Zugangskennung', 'sheet.recovery': 'Wiederherstellungscode', 'sheet.created': 'Angelegt',
-      'sheet.service': 'Dienst', 'sheet.access': 'Zugriff', 'sheet.keyfile': 'Schlüsseldatei herunterladen', 'sheet.print': 'Zugangsblatt drucken',
+      'sheet.app': 'App', 'sheet.accessId': 'Zugangskennung', 'sheet.recovery': 'Notfallcode', 'sheet.created': 'Angelegt',
+      'sheet.service': 'Dienst', 'sheet.access': 'Zugriff', 'sheet.print': 'Zugangsblatt drucken',
       'sheet.download': 'Zugangsblatt herunterladen (HTML)',
-      'sheet.keyfile.hint': 'Die Schlüsseldatei enthält kein Geheimnis, nur die App und Ihre Zugangskennung. Ziehen Sie sie auf einem neuen Gerät in die App, statt die Kennung abzutippen.',
       'sheet.passphrase.note': 'Ihre Passphrase steht nicht auf diesem Blatt. Merken Sie sie sich oder verwahren Sie sie in einem Passwortmanager.',
-      'sheet.recovery.note': 'Bewahren Sie das Blatt getrennt von diesem Rechner auf. Wer den Wiederherstellungscode hat, kann eine Wiederherstellung beantragen; Sie erfahren davon beim Entsperren und können sie während der Wartezeit von 72 Stunden abbrechen.',
-      'sheet.confirm.owner': 'Ich habe das Zugangsblatt und den Wiederherstellungscode gesichert.', 'sheet.confirm.member': 'Ich habe meine Zugangskennung gesichert.',
+      'sheet.recovery.note': 'Bewahren Sie das Blatt getrennt von diesem Rechner auf. Wer den Notfallcode hat, kann eine Wiederherstellung beantragen; Sie erfahren davon beim Entsperren und können sie während der Wartezeit von 72 Stunden abbrechen.',
+      'sheet.confirm.owner': 'Ich habe das Zugangsblatt und den Notfallcode gesichert.', 'sheet.confirm.member': 'Ich habe meine Zugangskennung gesichert.',
       'sheet.hibp.skipped': 'Hinweis: Die Prüfung auf Datenlecks war nicht erreichbar, daher wurde Ihre Passphrase nicht gegen bekannte Datenlecks geprüft.',
-      'sheet.escrow.title': 'Wiederherstellungsschlüssel der Fakultät',
-      'sheet.escrow.text': 'Der Server speichert nur verschlüsselte Daten. Absichtlich verwahrt die Fakultät einen Wiederherstellungsschlüssel: Nach einem dokumentierten Verfahren und einer Wartezeit kann sie den Zugang für den Inhaber des Wiederherstellungscodes wiederherstellen, und wer den Schlüssel besitzt, könnte technisch jeden Tresor entschlüsseln.',
       'sheet.page.title': 'Zugangsblatt', 'sheet.page.print': 'Diese Seite drucken',
 
       'redeem.title': 'Mit Einladungscode beitreten', 'redeem.intro': 'Geben Sie den erhaltenen Einladungscode ein und wählen Sie Ihre eigene Passphrase. Ein Einladungscode funktioniert nur einmal.',
@@ -321,14 +303,13 @@
       'err.offline': 'Der Speicherdienst ist nicht erreichbar. Prüfen Sie Ihre Internetverbindung und versuchen Sie es erneut.',
       'err.integrity': 'Eine Sicherheitsprüfung ist fehlgeschlagen: Die Daten des Servers passen nicht zu dem, was dieses Gerät erwartet ({code}). Geben Sie keine neuen Daten ein und wenden Sie sich an die Person, die diese App betreibt.',
       'err.rollback': 'Der Server hat ältere Daten gezeigt, als dieses Gerät schon gesehen hat. Das kann ein Fehler oder ein Angriff sein. Machen Sie nicht weiter und wenden Sie sich an die Person, die diese App betreibt.',
-      'err.generic': 'Etwas ist schiefgegangen: {message}', 'err.keyfile.invalid': 'Das ist keine gültige Schlüsseldatei.',
-      'err.keyfile.other': 'Diese Schlüsseldatei gehört zu einer anderen App oder einem anderen Dienst.',
+      'err.generic': 'Etwas ist schiefgegangen: {message}',
       'err.invite.invalid': 'Dieser Einladungscode ist ungültig. Er hat 48 Zeichen; prüfen Sie ihn auf Tippfehler.',
       'err.joinCode': 'Der Beitrittscode ist nicht korrekt.', 'err.joinCode.missing': 'Geben Sie den Beitrittscode ein.',
       'err.vaultLimit': 'Diese App kann derzeit keine neuen Nutzenden aufnehmen. Wenden Sie sich an die Person, die sie betreibt.',
       'err.noPins': 'In diesem Build der Speicherbibliothek fehlt der Schlüssel der Fakultät. Wenden Sie sich an die Autorin oder den Autor der App.',
       'err.accessId.missing': 'Geben Sie Ihre Zugangskennung ein.', 'err.passphrase.missing': 'Geben Sie Ihre Passphrase ein.',
-      'err.contact.invalid': 'Das ist keine gültige E-Mail-Adresse.', 'err.scope': 'Diese App ist beim Speicherdienst nicht registriert.',
+      'err.scope': 'Diese App ist beim Speicherdienst nicht registriert.',
 
       'note.advisory': 'Diese App nutzt eine veraltete Version der Speicherbibliothek. Bitten Sie die Autorin oder den Autor um eine Aktualisierung.',
       'note.newDevice': 'Dieses Gerät ist neu für Ihren Tresor. Das ist normal.',
@@ -354,9 +335,9 @@
       'conflict.intro': 'Ein anderes Gerät oder eine andere Person hat {name} geändert, nachdem Sie es zuletzt geladen haben. Wählen Sie, welche Version bleibt. Nichts geht verloren: Die Version, die Sie nicht behalten, bleibt im Verlauf.',
       'conflict.theirs': 'Die andere Version', 'conflict.mine': 'Ihre Version (noch nicht gespeichert)', 'conflict.saved': 'gespeichert {time}',
       'conflict.theirsDeleted': 'Dieser Eintrag wurde von jemand anderem gelöscht.', 'conflict.mineDeleted': 'Sie wollten diesen Eintrag löschen.',
-      'conflict.noTheirs': 'Es gibt keine gespeicherte Version.', 'conflict.keepTheirs': 'Andere behalten', 'conflict.keepMine': 'Meine behalten', 'conflict.downloadBoth': 'Beide herunterladen',
+      'conflict.noTheirs': 'Es gibt keine gespeicherte Version.', 'conflict.keepTheirs': 'Andere behalten', 'conflict.keepMine': 'Meine behalten',
       'conflict.file': 'Datei ({mime}), {size}', 'conflict.truncated': '(gekürzt)', 'conflict.delete.title': 'Dieser Eintrag wurde zwischenzeitlich geändert',
-      'conflict.delete.intro': 'Ein anderes Gerät oder eine andere Person hat {name} geändert, nachdem Sie es zuletzt geladen haben, und Sie wollten es löschen. Trotzdem löschen oder die neuere Version behalten?',
+      'conflict.delete.intro': 'Ein anderes Gerät oder eine andere Person hat {name} geändert, nachdem Sie es zuletzt geladen haben, und Sie wollten es löschen. Trotzdem löschen oder die neuere Version behalten? Ein gelöschter Eintrag bleibt im Verlauf.',
       'conflict.delete.keepMine': 'Trotzdem löschen', 'conflict.delete.keepTheirs': 'Eintrag behalten',
 
       'history.title': 'Verlauf von {name}', 'history.intro': 'Der Dienst bewahrt die letzten Versionen auf. Beim Wiederherstellen wird eine alte Version erneut als neueste gespeichert.',
@@ -364,8 +345,7 @@
       'history.preview': 'Vorschau', 'history.restore': 'Wiederherstellen', 'history.empty': 'Es gibt noch keine Versionen.', 'history.unavailable': 'Diese Version ist nicht mehr verfügbar.',
 
       'share.title': 'Tresor', 'share.people': 'Personen mit Zugriff', 'share.you': 'Sie', 'share.member': 'Mitglied',
-      'share.escrow': 'Wiederherstellungsschlüssel der Fakultät', 'share.escrow.badge': 'Fakultät, nur zur Wiederherstellung',
-      'share.escrow.hint': 'Gehört zu jedem Tresor und kann nicht entfernt werden. Damit kann die Fakultät nach einem dokumentierten Verfahren den Zugang wiederherstellen.',
+      'share.escrow': 'Schlüssel der Fakultät', 'share.escrow.badge': 'Fakultät, nur zur Wiederherstellung',
       'share.status.active': 'Aktiv', 'share.status.invited': 'Einladung noch nicht benutzt, gültig bis {time}',
       'share.status.expired': 'Einladung abgelaufen', 'share.status.redeemed': 'Beigetreten {time}', 'share.status.renewal': 'Neue Schlüssel warten auf Bestätigung',
       'share.addedByFaculty': 'Von der Fakultät bei einer Wiederherstellung hinzugefügt',
@@ -387,16 +367,13 @@
       'share.revoke.done': 'Zugriff entzogen. Alle Daten sind neu verschlüsselt.', 'share.revoke.partial': 'Zugriff entzogen. Die Neuverschlüsselung läuft beim nächsten Entsperren weiter.',
       'share.rekey.pending': 'Die Neuverschlüsselung älterer Daten ist nicht abgeschlossen.', 'share.rekey.continue': 'Jetzt fortsetzen',
       'share.recovered.title': 'Die Fakultät hat einen Eigentümer-Zugang hinzugefügt',
-      'share.recovered.text': 'Nach einem Wiederherstellungsantrag hat die Fakultät diesem Tresor einen neuen Eigentümer-Zugang hinzugefügt. Falls Sie damit nicht gerechnet haben, wenden Sie sich an die Fakultät. Ihr eigener Zugang bleibt gültig, und Sie können den hinzugefügten Eigentümer-Zugang im Teilen-Dialog entziehen. Sie müssen das bestätigen, bevor Sie ändern können, wer Zugriff hat.',
+      'share.recovered.text': 'Nach einem Wiederherstellungsantrag hat die Fakultät diesem Tresor einen neuen Eigentümer-Zugang hinzugefügt. Falls Sie damit nicht gerechnet haben, wenden Sie sich an die Fakultät. Ihr eigener Zugang bleibt gültig, und Sie können den hinzugefügten Eigentümer-Zugang im Tresor-Dialog (Tresor) entziehen. Sie müssen das bestätigen, bevor Sie ändern können, wer Zugriff hat.',
       'share.recovered.ack': 'Ich weiß Bescheid', 'share.recovery.title': 'Für diesen Tresor wurde eine Wiederherstellung beantragt',
       'share.recovery.text': 'Beantragt {time}. Ab {ready} kann die Fakultät den Zugang für die antragstellende Person wiederherstellen. Falls niemand in Ihrem Auftrag gefragt hat, brechen Sie den Antrag jetzt ab.',
       'share.recovery.cancel': 'Antrag abbrechen', 'share.recovery.keep': 'So belassen', 'share.recovery.cancelled': 'Der Wiederherstellungsantrag wurde abgebrochen.', 'share.me.title': 'Mein Zugang',
       'share.me.role': 'Ihr Zugriff: {role}.', 'share.me.onlyOwner': 'Nur die Eigentümerin oder der Eigentümer kann Personen einladen oder den Zugriff ändern.',
       'share.me.passphrase': 'Passphrase ändern', 'share.me.passphrase.new': 'Neue Passphrase', 'share.me.passphrase.submit': 'Passphrase ändern',
-      'share.me.passphrase.done': 'Passphrase geändert. Verwenden Sie ab jetzt die neue.', 'share.me.renew': 'Meine Schlüssel erneuern',
-      'share.me.renew.hint': 'Ersetzt die Schlüssel dieses Zugangs durch frische. Tun Sie das, wenn Sie vermuten, dass jemand anderes Ihren Einladungscode gesehen hat.',
-      'share.me.renew.done': 'Schlüssel erneuert.', 'share.me.keyfile': 'Schlüsseldatei herunterladen', 'share.me.lock': 'Jetzt sperren',
-      'share.me.keyfile.hint': 'Für ein neues Gerät: Die Datei enthält kein Geheimnis, nur die App und Ihre Zugangskennung. Ihre Passphrase brauchen Sie trotzdem.',
+      'share.me.passphrase.done': 'Passphrase geändert. Verwenden Sie ab jetzt die neue.', 'share.me.lock': 'Jetzt sperren',
       'share.me.lock.hint': 'Entfernt alle Daten aus dem Speicher dieser Seite. Zum Entsperren brauchen Sie Ihre Passphrase.',
       'share.me.sheet': 'Zugangsblatt anzeigen', 'share.me.sheet.hint': 'Zeigt Ihre Zugangskennung noch einmal, zum Ausdrucken oder Speichern.',
       'share.me.export': 'Alles exportieren (ZIP, unverschlüsselt)',
@@ -450,11 +427,11 @@
   }
 
   // ------------------------------------------------------------------------------------------------------------
-  // 3. Passphrase rules (PLAN 5.3): length, strength estimate, small common-password list, HIBP range check
+  // 3. Passphrase rules (PLAN 5.3): length, strength estimate, small common-password list, breach check
   // ------------------------------------------------------------------------------------------------------------
   var MIN_PASSPHRASE = 12;
   var BLOCK_BITS = 40;   // estimates below this are refused
-  var STRICT_BITS = 48;  // estimates below this are refused too when no breach check could be done (switched off, or unreachable)
+  var STRICT_BITS = 48;  // estimates below this are refused too when the breach check could not be done (service unreachable)
 
   // Most common passwords (English and German, with typical leet and keyboard patterns). Used for exact matches.
   var COMMON_EXACT = ('password passwort passw0rd p@ssw0rd p@ssword pa55word pa55w0rd kennwort 123456 1234567 12345678 123456789 1234567890 ' +
@@ -587,8 +564,8 @@
     });
     return Object.keys(out);
   }
-  // Synchronous rules: returns {ok, code: null|'empty'|'short'|'common'|'weak', n, estimate}. strict: no breach check is
-  // available (switched off for the app, or unreachable), so the local estimate has to carry more weight.
+  // Synchronous rules: returns {ok, code: null|'empty'|'short'|'common'|'weak', n, estimate}. strict: the breach check is
+  // not available (service unreachable), so the local estimate has to carry more weight.
   function checkLocal(pass, strict) {
     pass = String(pass || '').normalize('NFC');
     var est = estimate(pass);
@@ -600,46 +577,29 @@
     if (strict && est.bits < STRICT_BITS) return { ok: false, code: 'weak', strict: true, estimate: est };
     return { ok: true, code: null, estimate: est };
   }
-  // Pwned Passwords range query with padding. Only the first 5 hex characters of SHA-1 leave the device.
-  async function hibpCheck(pass, o) {
+  // Breach check: the datastore server answers GET <service>api/v1/pwned/<5 uppercase hex> with the Pwned Passwords range (it asks
+  // pwnedpasswords.com itself, so the page only talks to the service). Only the first 5 hex characters of the SHA-1 leave the device.
+  // {status: 'ok' | 'pwned' (count) | 'unavailable'}; o.url is the endpoint with a trailing slash.
+  async function breachCheck(pass, o) {
     o = o || {};
     var f = o.fetch || (typeof fetch === 'function' ? fetch.bind(root) : null);
-    if (!f) return { status: 'unavailable' };
+    if (!f || !o.url) return { status: 'unavailable' };
     var digest = hexUpper(new Uint8Array(await root.crypto.subtle.digest('SHA-1', utf8(String(pass).normalize('NFC')))));
     var prefix = digest.slice(0, 5), suffix = digest.slice(5);
     var ctrl = typeof AbortController === 'function' ? new AbortController() : null;
     var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, o.timeoutMs || 8000) : null;
     try {
-      var res = await f((o.url || HIBP_URL) + prefix, {
-        method: 'GET', headers: { 'Add-Padding': 'true' }, credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'no-store',
-        signal: ctrl ? ctrl.signal : undefined,
-      });
+      var res = await f(o.url + prefix, { method: 'GET', credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'no-store', signal: ctrl ? ctrl.signal : undefined });
       if (!res.ok) return { status: 'unavailable' };
-      var text = await res.text(), lines = text.split(/\r?\n/);
+      var lines = (await res.text()).split(/\r?\n/);
       for (var i = 0; i < lines.length; i++) {
         var m = /^([0-9A-Fa-f]{35}):(\d+)/.exec(lines[i].trim());
-        if (m && m[1].toUpperCase() === suffix) {
-          var count = Number(m[2]);
-          if (count > 0) return { status: 'pwned', count: count };
-        }
+        if (m && m[1].toUpperCase() === suffix && Number(m[2]) > 0) return { status: 'pwned', count: Number(m[2]) };
       }
       return { status: 'ok' };
     } catch (e) {
       return { status: 'unavailable' };
     } finally { if (timer) clearTimeout(timer); }
-  }
-  // Full check used by the dialogs: local rules first, then HIBP when enabled.
-  async function checkPassphrase(pass, o) {
-    o = o || {};
-    var local = checkLocal(pass);
-    if (!local.ok) return local;
-    if (o.hibp === false) {
-      return Object.assign({ hibp: { status: 'skipped' } }, checkLocal(pass, true));
-    }
-    var h = await hibpCheck(pass, o);
-    if (h.status === 'pwned') return { ok: false, code: 'pwned', count: h.count, estimate: local.estimate, hibp: h };
-    if (h.status !== 'ok') { var s2 = checkLocal(pass, true); if (!s2.ok) return Object.assign({ hibp: h }, s2); }
-    return Object.assign({ hibp: h }, local);
   }
 
   // ------------------------------------------------------------------------------------------------------------
@@ -773,7 +733,7 @@
       '<table>' + body + '</table>' +
       '<p>' + esc(t('sheet.passphrase.note')) + '</p>' +
       (o.recoveryCode ? '<p>' + esc(t('sheet.recovery.note')) + '</p>' : '') + (o.sandbox ? '<p>' + esc(t('sandbox.sheet.note')) + '</p>' : '') +
-      '<div class="box"><h2>' + esc(t('sheet.escrow.title')) + '</h2><p style="margin:0">' + esc(t('sheet.escrow.text')) + '</p></div>' +
+      '<div class="box"><h2>' + esc(t('escrow.title')) + '</h2><p style="margin:0">' + esc(t('escrow.text')) + '</p></div>' +
       '<p class="noprint"><button type="button" onclick="window.print()">' + esc(t('sheet.page.print')) + '</button></p>' +
       '</body></html>\n';
   }
@@ -976,11 +936,6 @@
     var pt = isSandbox(S) ? pageTitle() : '';
     return pt && pt !== name ? pt + ' – ' + name : name;
   }
-  // The file name of a key file: in a sandbox it starts with the page title, so that the files of several tested apps can be told apart.
-  function keyFileName(S, kf) {
-    var slug = isSandbox(S) ? pageTitle().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30).replace(/-+$/, '') : '';
-    return slug ? slug + '-' + kf.filename : kf.filename;
-  }
   function sandboxPrefix(S) { return isSandbox(S) ? S.t('sandbox.prefix') : ''; }
   // Opens a library dialog for this store: language, and in a sandbox the title prefix and the banner.
   function dialogFor(S, o) {
@@ -1167,12 +1122,11 @@
     if (e && e.code === 'join_code_invalid') return t('err.joinCode');
     var nightly = S.info && S.info.sandbox ? ' ' + t('sandbox.nightly') : '';
     if (e && e.code === 'sandbox_disabled') return t('err.sandboxDisabled') + nightly;
-    if (e && (e.code === 'vault_limit_reached' || e.code === 'enrollment_closed')) return e.code === 'enrollment_closed' ? t('create.closed') : t('err.vaultLimit') + nightly;
+    if (e && e.code === 'vault_limit_reached') return t('err.vaultLimit') + nightly;
     if (e && e.code === 'scope_suspended') return t('create.suspended');
     if (e && e.status === 404) return where === 'scope' ? t('err.scope') : t('err.notFound');
     if (e && e.status === 400 && where === 'unlock') return t('err.badId');
     if (e && e.code === 'invalid_code') return where === 'redeem' ? t('err.invite.invalid') : t('err.badId');
-    if (e && e.code === 'invalid_keyfile') return /different/.test(e.message) ? t('err.keyfile.other') : t('err.keyfile.invalid');
     if (e && /no escrow key IDs are pinned/.test(e.message || '')) return t('err.noPins');
     return t('err.generic', { message: (e && e.message) || String(e) });
   }
@@ -1202,7 +1156,6 @@
     } });
     nodes.push(el('div', { class: 'wds-check' }, [show, el('label', { for: showId, text: t('pw.show') })]));
     var hibpLine = el('p', { class: 'wds-hint', role: 'status', 'aria-live': 'polite' });
-    var hibpOn = function () { return !!(S.info && S.info.hibp !== false); };
     if (isNew) nodes.push(hibpLine);
     function updateStrength() {
       if (!isNew) return;
@@ -1233,21 +1186,17 @@
           f1.setError(t(key, { n: local.n })); pw.focus(); updateStrength(); return null;
         }
         if (rep.value !== v) { f2.setError(t('pw.mismatch')); rep.focus(); return null; }
-        var hibp = { status: 'skipped' };
-        if (hibpOn()) {
-          showBusy(hibpLine, t('pw.hibp.checking'));
-          hibp = await hibpCheck(v);
-          showBusy(hibpLine, '');
-          if (hibp.status === 'pwned') { f1.setError(t('pw.pwned', { count: hibp.count })); pw.focus(); return null; }
-          if (hibp.status === 'unavailable') hibpLine.textContent = t('pw.hibp.unavailable');
-        }
-        // Without a breach check (switched off for the app, or not reachable) a well-known passphrase would pass unseen, so the
-        // local estimate has to be stricter.
+        showBusy(hibpLine, t('pw.hibp.checking'));
+        var hibp = await breachCheck(v, { url: S.client.apiBase + '/pwned/' });
+        showBusy(hibpLine, '');
+        if (hibp.status === 'pwned') { f1.setError(t('pw.pwned', { count: hibp.count })); pw.focus(); return null; }
+        if (hibp.status === 'unavailable') hibpLine.textContent = t('pw.hibp.unavailable');
+        // Without the breach check a well-known passphrase would pass unseen, so the local estimate has to be stricter.
         if (hibp.status !== 'ok' && !checkLocal(v, true).ok) { hibpLine.textContent = ''; f1.setError(t('pw.weak.noBreachCheck')); pw.focus(); updateStrength(); return null; }
         return { passphrase: v, hibp: hibp };
       },
       reset: function () { pw.value = ''; if (rep) rep.value = ''; },
-      note: function () { return hibpOn() ? el('p', { class: 'wds-hint', text: t('pw.hibp.note') }) : null; },
+      note: function () { return el('p', { class: 'wds-hint', text: t('pw.hibp.note') }); },
     };
     return g;
   }
@@ -1286,11 +1235,9 @@
       el('p', { text: owner ? t('sheet.intro.owner') : t('sheet.intro.member') }),
       dl,
       el('div', { class: 'wds-actions' }, [
-        btn(t('sheet.keyfile'), { wds: 'sheet-keyfile', onClick: function () { downloadText(o.keyFile.text, keyFileName(S, o.keyFile), 'application/json'); } }),
         btn(t('sheet.print'), { wds: 'sheet-print', onClick: function () { printHtml(dlg.dialog, buildSheetHtml(data, t, S.lang)); } }),
         btn(t('sheet.download'), { wds: 'sheet-download', onClick: function () { downloadText(buildSheetHtml(data, t, S.lang), S.client.scope + '-access-sheet.html', 'text/html;charset=utf-8'); } }),
       ]),
-      el('p', { class: 'wds-hint', text: t('sheet.keyfile.hint') }),
       el('p', { text: t('sheet.passphrase.note') }),
       owner ? el('p', { text: t('sheet.recovery.note') }) : null,
       sandbox ? el('p', { text: t('sandbox.sheet.note') }) : null,
@@ -1302,7 +1249,7 @@
   }
 
   // The access sheet after a vault exists (created or joined): it must not fail into the form of the step before (that would invite a second
-  // submit although the vault is there). When the full sheet cannot be built, a plain one shows the access ID and the recovery code.
+  // submit although the vault is there). When the full sheet cannot be built, a plain one shows the access ID and the emergency code.
   function safeSheetView(S, dlg, o, onContinue) {
     try { sheetView(S, dlg, o, onContinue); return; }
     catch (e) { if (typeof console !== 'undefined' && console.error) console.error('wds: access sheet: ' + ((e && e.message) || e)); }
@@ -1327,29 +1274,13 @@
     var t = S.t, client = S.client;
     return new Promise(function (resolve, reject) {
       var settled = false, dlg;
-      var st = { accessId: client.rememberedAccessId() || '', vaultId: null, inviteCode: '', notice: null };
+      var st = { accessId: client.rememberedAccessId() || '', inviteCode: '', notice: null };
       function done(result) { if (settled) return; settled = true; dlg.close(); resolve(result); }
       dlg = dialogFor(S, {
         title: t('unlock.title'), view: 'loading', cancelable: !!o.cancelable, closeLabel: t('common.close'),
         onClose: function () { if (!settled) { settled = true; reject(new Err.UsageError('unlock was cancelled', { code: 'cancelled' })); } },
       });
       function appLine() { return el('p', { class: 'wds-sub', text: t('unlock.app', { name: appLabel(S, S.info ? S.info.name : client.scope) }) }); }
-
-      // ---- key file (the button of the unlock form) ----
-      function onUnlockView() { return !dlg.closed && dlg.dialog.getAttribute('data-wds-view') === 'unlock'; }
-      async function loadKeyFile(file, afterLoad) {
-        try {
-          if (file.size > 20000) throw new Err.UsageError('not a key file', { code: 'invalid_keyfile' });
-          var kf = await Core.parseKeyFile(await file.text(), { scope: client.scope, service: client.service });
-          if (!onUnlockView()) return;   // the view changed while the file was read
-          st.accessId = kf.accessId; st.vaultId = kf.vaultId; st.notice = { kind: 'ok', text: t('unlock.keyfile.loaded') };
-          viewUnlock();
-        } catch (e) {
-          if (!onUnlockView()) return;
-          if (afterLoad) afterLoad(explainError(S, e, 'unlock'));
-          else { st.notice = { kind: 'error', text: explainError(S, e, 'unlock') }; viewUnlock(); }
-        }
-      }
 
       var loadGen = 0;   // every view switch bumps it: the answer of an earlier scope request must not replace the view that is shown now
       function frame(view, title, children) {
@@ -1365,7 +1296,7 @@
       function sandboxEmptied() {
         var sb = S.info && S.info.sandbox, mem = client.rememberedAccess();
         if (!(sb && mem && sb.last_wipe && mem.t < sb.last_wipe * 1000)) return false;
-        client.forgetAccessId(); st.accessId = ''; st.vaultId = null;
+        client.forgetAccessId(); st.accessId = '';
         st.notice = { kind: 'warn', text: t('sandbox.emptied', { date: formatDate(sb.last_wipe, S.lang) }) };
         viewCreate();
         return true;
@@ -1399,14 +1330,12 @@
       function viewUnlockBody() {
         var idInput = inp({ mono: true, autocomplete: 'username', autocapitalize: 'characters', value: st.accessId ? Core.displayCode(st.accessId) : '', name: 'username', wds: 'access-id-input' });
         var fId = field({ label: t('unlock.accessId'), input: idInput, hint: t('unlock.accessId.hint') });
-        var fileInput = el('input', { type: 'file', class: 'wds-vh', accept: '.json,application/json', 'data-wds': 'keyfile', onchange: function () { if (fileInput.files[0]) loadKeyFile(fileInput.files[0], function (m) { fId.setError(m); }); } });
         var pw = passphraseGroup(S, { mode: 'current', label: t('unlock.passphrase') });
         var formErr = el('div', { 'aria-live': 'polite', 'data-wds': 'form-error' });
         var busy = busyLine();
         var fs = el('fieldset', { class: 'wds-fs' }, [
           el('p', { text: t('unlock.intro') }), appLine(),
           fId.wrap,
-          el('div', { class: 'wds-field' }, [el('label', { class: 'wds-btn wds-btn-small', 'data-wds': 'keyfile-button' }, [t('unlock.keyfile.choose'), fileInput]), el('p', { class: 'wds-hint', text: t('unlock.keyfile.hint') })]),
           pw.nodes, formErr,
           el('div', { class: 'wds-actions' }, [btn(t('unlock.submit'), { type: 'submit', primary: true, wds: 'unlock-submit' })]),
           busy,
@@ -1426,7 +1355,7 @@
           fs.disabled = true; dlg.setBusy(true); showBusy(busy, t('unlock.busy'));
           await nextPaint();
           try {
-            await client.unlock({ accessId: accessId, passphrase: checked.passphrase, vaultId: st.vaultId && accessId === st.accessId ? st.vaultId : undefined, maintain: false });
+            await client.unlock({ accessId: accessId, passphrase: checked.passphrase, maintain: false });
             done({ created: false });
           } catch (e) {
             fs.disabled = false; dlg.setBusy(false); showBusy(busy, '');
@@ -1444,20 +1373,18 @@
       // ---- create ----
       function viewCreateBody() {
         var info = S.info || {};
-        if (info.status === 'suspended' || info.enrollment === 'closed') {
-          frame('create', t('create.title'), [msg('warn', info.status === 'suspended' ? t('create.suspended') : t('create.closed')), el('div', { class: 'wds-actions' }, [btn(t('create.back'), { wds: 'back', onClick: viewUnlock })])]);
+        if (info.status === 'suspended') {
+          frame('create', t('create.title'), [msg('warn', t('create.suspended')), el('div', { class: 'wds-actions' }, [btn(t('create.back'), { wds: 'back', onClick: viewUnlock })])]);
           dlg.focusFirst();
           return;
         }
+        var sandbox = isSandbox(S);   // the sandbox is open; every other app asks for its join code
         var joinField = null, joinInput = null;
-        if (info.enrollment === 'join_code') {
+        if (!sandbox) {
           joinInput = inp({ mono: true, autocapitalize: 'characters', wds: 'join-code' });
           joinField = field({ label: t('create.joinCode'), input: joinInput, hint: t('create.joinCode.hint') });
         }
         var pw = passphraseGroup(S, { mode: 'new' });
-        var sandbox = isSandbox(S);   // no recovery in the sandbox: no contact address either
-        var contactInput = sandbox ? null : inp({ type: 'email', autocomplete: 'email', maxlength: 254, wds: 'recovery-contact' });
-        var contactField = sandbox ? null : field({ label: t('create.contact.label'), input: contactInput, hint: t('create.contact.hint') });
         var formErr = el('div', { 'aria-live': 'polite', 'data-wds': 'form-error' });
         var busy = busyLine();
         var privacy = info.privacy_url && /^https?:\/\//i.test(info.privacy_url) ? el('a', { href: info.privacy_url, target: '_blank', rel: 'noopener noreferrer', text: t('create.privacy') }) : null;
@@ -1465,8 +1392,7 @@
           el('p', { text: t('create.intro') }), appLine(),
           joinField ? joinField.wrap : null,
           pw.nodes, pw.note(),
-          sandbox ? null : el('details', { class: 'wds-details' }, [el('summary', { text: t('create.contact'), 'data-wds': 'recovery-contact-toggle' }), contactField.wrap]),
-          el('div', { class: 'wds-box' }, [el('h3', { text: t('create.escrow.title') }), el('p', { text: t(sandbox ? 'sandbox.create.escrow' : 'create.escrow.text') }), privacy ? el('p', null, privacy) : null]),
+          el('div', { class: 'wds-box' }, [el('h3', { text: t('escrow.title') }), el('p', { text: t(sandbox ? 'sandbox.create.escrow' : 'escrow.text') }), privacy ? el('p', null, privacy) : null]),
           formErr,
           el('div', { class: 'wds-actions' }, [btn(t(sandbox ? 'sandbox.create.submit' : 'create.submit'), { type: 'submit', primary: true, wds: 'create-submit' })]),
           busy,
@@ -1475,18 +1401,15 @@
           ev.preventDefault();
           clear(formErr);
           if (joinField) { joinField.clearError(); if (!joinInput.value.trim()) { joinField.setError(t('err.joinCode.missing')); joinInput.focus(); return; } }
-          var contact = sandbox ? '' : contactInput.value.trim();
-          if (contactField) contactField.clearError();
-          if (contact && !/^[^\s@]+@[^\s@]+$/.test(contact)) { contactField.setError(t('err.contact.invalid')); contactInput.closest('details').open = true; contactInput.focus(); return; }
           var checked = await pw.validate();
           if (!checked) return;
           fs.disabled = true; dlg.setBusy(true); showBusy(busy, t('create.busy'));
           await nextPaint();
           try {
-            var res = await client.createVault({ passphrase: checked.passphrase, joinCode: joinField ? joinInput.value.trim() : undefined, recoveryContact: contact || undefined });
+            var res = await client.createVault({ passphrase: checked.passphrase, joinCode: joinField ? joinInput.value.trim() : undefined });
             pw.reset();
             safeSheetView(S, dlg, {
-              appName: appLabel(S, info.name || client.scope), accessId: res.accessIdDisplay, recoveryCode: res.recoveryCode.display, keyFile: res.keyFile,
+              appName: appLabel(S, info.name || client.scope), accessId: res.accessIdDisplay, recoveryCode: res.recoveryCode.display,
               role: 'owner', hibpSkipped: checked.hibp && checked.hibp.status === 'unavailable',
             }, function () { done({ created: true }); });
           } catch (e) {
@@ -1530,7 +1453,7 @@
             pw.reset();
             var accessId = Core.displayCode(res.accessId);
             clear(dlg.body);
-            safeSheetView(S, dlg, { appName: appLabel(S, info.name || client.scope), accessId: accessId, recoveryCode: null, keyFile: res.keyFile, role: res.role, hibpSkipped: checked.hibp && checked.hibp.status === 'unavailable' }, function () { done({ created: false, redeemed: true }); });
+            safeSheetView(S, dlg, { appName: appLabel(S, info.name || client.scope), accessId: accessId, recoveryCode: null, role: res.role, hibpSkipped: checked.hibp && checked.hibp.status === 'unavailable' }, function () { done({ created: false, redeemed: true }); });
             try {
               dlg.setTitle(t('redeem.done'));
               dlg.body.insertBefore(msg('ok', res.role === 'read' ? t('redeem.role.read') : t('redeem.role.write')), dlg.body.firstChild);
@@ -1574,11 +1497,6 @@
     if (kind === 'json') return (/\.json$/i.test(base) ? base.slice(0, base.length - 5) : base) + '.' + marker + '.json';
     return dot > slash + 1 ? base.slice(0, dot) + '.' + marker + base.slice(dot) : base + '.' + marker;
   }
-  function downloadSide(name, marker, side) {
-    if (!side || side.deleted) return;
-    var bytes = recordBytes({ kind: side.kind, value: side.value });
-    downloadBlob(new Blob([bytes], { type: side.kind === 'json' ? 'application/json' : (side.mime || 'application/octet-stream') }), markedName(name, marker, side.kind));
-  }
 
   // c: {name, mine: {value, kind, mime, deleted}, theirs: {version, deleted, kind, mime, time, value}|null}. -> 'mine' | 'theirs'
   function conflictDialog(S, c) {
@@ -1600,7 +1518,6 @@
         el('h3', { id: 'wds-c-mine', text: t('conflict.mine') }),
         previewNode(S, mine),
       ]);
-      var hasDownload = !!((theirs && !theirs.deleted) || (!mine.deleted));
       append(dlg.body, [
         el('div', { 'data-wds': 'form-error', 'aria-live': 'polite' }),
         el('p', { text: t(isDelete ? 'conflict.delete.intro' : 'conflict.intro', { name: S.label(c.name) }) }),
@@ -1608,8 +1525,6 @@
         el('div', { class: 'wds-actions' }, [
           btn(t(isDelete ? 'conflict.delete.keepTheirs' : 'conflict.keepTheirs'), { primary: true, wds: 'conflict-theirs', onClick: function () { choose('theirs'); } }),
           btn(t(isDelete ? 'conflict.delete.keepMine' : 'conflict.keepMine'), { wds: 'conflict-mine', onClick: function () { choose('mine'); } }),
-          el('span', { class: 'wds-spacer' }),
-          hasDownload ? btn(t('conflict.downloadBoth'), { wds: 'conflict-download', onClick: function () { downloadSide(c.name, 'theirs', theirs); downloadSide(c.name, 'mine', mine); } }) : null,
         ]),
       ]);
       dlg.focusFirst();
@@ -1835,7 +1750,7 @@
           if (m.escrow) badges.push(el('span', { class: 'wds-badge', text: t('share.escrow.badge') }));   // not "owner": the faculty does not own the vault
           else if (m.role === 'owner' || m.self) badges.push(el('span', { class: 'wds-badge', text: t('role.' + m.role) }));
           var info = [];
-          if (m.escrow) info.push(t(isSandbox(S) ? 'sandbox.share.escrow' : 'share.escrow.hint'));
+          if (m.escrow) info.push(t(isSandbox(S) ? 'sandbox.share.escrow' : 'escrow.text'));
           else if (m.kind === 'invite' && !m.redeemed) {
             info.push(m.expired ? t('share.status.expired') : t(m.used ? 'share.status.opened' : 'share.status.invited', { time: formatTime(m.expires, S.lang) }));
           }
@@ -1888,17 +1803,6 @@
           btn(t('share.me.sheet'), { wds: 'me-sheet', onClick: showSheet }),
           el('p', { class: 'wds-hint', text: t('share.me.sheet.hint') }),
         ]));
-        parts.push(el('div', { class: 'wds-act' }, [
-          btn(t('share.me.keyfile'), { wds: 'me-keyfile', onClick: function () {
-            var kf = Core.makeKeyFile({ scope: client.scope, accessId: status.accessId, vaultId: status.vaultId, service: client.service });
-            downloadText(kf.text, keyFileName(S, kf), 'application/json');
-          } }),
-          el('p', { class: 'wds-hint', text: t('share.me.keyfile.hint') }),
-        ]));
-        parts.push(el('div', { class: 'wds-act' }, [
-          btn(t('share.me.renew'), { wds: 'me-renew', onClick: function () { guard(async function () { await client.renewKeys(); setFlash('ok', t('share.me.renew.done')); render('close'); }); } }),
-          el('p', { class: 'wds-hint', text: t('share.me.renew.hint') }),
-        ]));
         var exportLine = el('p', { class: 'wds-hint', role: 'status', 'aria-live': 'polite', text: t('share.me.export.hint') });
         parts.push(el('div', { class: 'wds-act' }, [
           btn(t('share.me.export'), { wds: 'me-export', onClick: function (ev) {
@@ -1930,12 +1834,11 @@
         return el('div', { class: 'wds-section' }, parts);
       }
 
-      // The access sheet again (no recovery code: that exists only once, at creation).
+      // The access sheet again (no emergency code: that exists only once, at creation).
       function showSheet() {
         var status = client.status();
-        var kf = Core.makeKeyFile({ scope: client.scope, accessId: status.accessId, vaultId: status.vaultId, service: client.service });
         st.view = 'sheet';
-        sheetView(S, dlg, { appName: appLabel(S, (S.info && S.info.name) || client.scope), accessId: Core.displayCode(status.accessId), recoveryCode: null, keyFile: kf, role: status.role, again: true }, function () { st.view = 'main'; render(); });
+        sheetView(S, dlg, { appName: appLabel(S, (S.info && S.info.name) || client.scope), accessId: Core.displayCode(status.accessId), recoveryCode: null, role: status.role, again: true }, function () { st.view = 'main'; render(); });
       }
 
       // A view that cannot be built (an exception) ends in the "error" view with a retry, never in a half-built dialog.
@@ -3234,7 +3137,7 @@
     errors: Core.errors,
     // pure helpers and texts; used by the unit tests and tools, not part of the app API
     internals: {
-      TEXT: TEXT, makeT: makeT, detectLang: detectLang, estimate: estimate, checkLocal: checkLocal, checkPassphrase: checkPassphrase, hibpCheck: hibpCheck,
+      TEXT: TEXT, makeT: makeT, detectLang: detectLang, estimate: estimate, checkLocal: checkLocal, breachCheck: breachCheck,
       crc32: crc32, makeZip: makeZip, buildArchive: buildArchive, archivePaths: archivePaths, buildSheetHtml: buildSheetHtml, markedName: markedName,
       applyCollectionOps: applyCollectionOps, fileSafe: fileSafe, formatBytes: formatBytes, formatTime: formatTime, MIN_PASSPHRASE: MIN_PASSPHRASE, WORD_COUNT: WORD_COUNT, COMMON_COUNT: COMMON_EXACT.length,
       migrate: { rowId: migrateRowId, keyToken: migrateKeyToken, parse: migrateParse, canonText: canonText, checkJson: migrateCheckJson, MigrateStop: MigrateStop },
